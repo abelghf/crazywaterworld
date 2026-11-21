@@ -2,11 +2,13 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { EventEmitter } from 'node:events';
 import { createDeclaredProtocol } from './fixtures/declared-protocol.mjs';
 import { SHOP_CATALOG, createShopState, readShop, buyShopProduct, refreshDiscountShop } from '../src/shops.mjs';
 import { createUsageLedger } from '../src/usage-ledger.mjs';
 import { actionCounters, budgetPreview, createActionGuard } from '../src/automation-policy.mjs';
-import { defaultSettings } from '../src/automation-settings.mjs';
+import { defaultSettings, exportAutomationSettings, importAutomationSettings, validateSettings } from '../src/automation-settings.mjs';
+import { runDiscountShop } from '../src/discount-shop-automation.mjs';
 import { normalize } from '../src/worlds.mjs';
 
 const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'cw-shops-'));
@@ -536,6 +538,174 @@ test('a game update waits for current purchases to settle before discarding thei
   f.shared.mode = 'ok'; await f.client.mutate('DiscountShopBuyRequest', { id: 901 });
   const settled = await f.read('discount'); assert.equal(settled.gameRefresh.canRefresh, true); assert.equal(f.ledger.snapshot().uncertain, 0);
   assert.equal((await updateGameShop(f)).status, 'completed');
+});
+const autoShop = f => runDiscountShop(f.client, f.config, { ...f.options, report() {} });
+const blueprintRule = { id: '建筑蓝图', maxPercent: 50, maxDiamonds: null };
+test('old shop switches migrate without granting rules or refreshes', async () => {
+  const f = fixture(), old = defaultSettings();
+  old.schedule.shop = true; delete old.discountShop;
+  const upgraded = importAutomationSettings({ ...exportAutomationSettings(defaultSettings()), settings: old, version: 40 });
+  Object.assign(f.settings, upgraded);
+  await autoShop(f);
+  assert.equal(f.calls.length, 0);
+  for (const rule of [{ ...blueprintRule, maxPercent: null }, { ...blueprintRule, maxPercent: 101 }, { ...blueprintRule, maxDiamonds: -1 }]) {
+    f.settings.discountShop.rules = [rule]; assert.throws(() => validateSettings(f.settings), /购买|上限/);
+  }
+});
+test('automatic buying follows reward ids and exact OR thresholds independently of daily progress', async () => {
+  const f = fixture(), first = f.discounts[0];
+  f.shared.refreshCount = 2;
+  f.settings.schedule.shop = true;
+  Object.assign(f.settings.resources, { allowDiamonds: false, diamondDailyLimit: 0, diamondThreshold: 1000 });
+  f.settings.discountShop.rules = [{ ...blueprintRule, maxDiamonds: 25 }];
+  // Same reward across slots, plus an unrelated cheaper item.
+  for (const [id, assetId, price, discount] of [[902, '木材', 1, 1], [903, '建筑蓝图', 50, .51], [904, '建筑蓝图', 100, .501]]) {
+    f.discounts.push({ ...clone(first), id, price, discount, reward: { asset: [{ type: 0, id: assetId, num: 1 }] } });
+  }
+  await autoShop(f); await autoShop(f);
+  assert.deepEqual(sent(f).map(([, body]) => body.id), [903, 901]);
+  assert.equal(f.ledger.confirmedCounters().discountShopDiamonds, 75);
+  assert.equal(f.ledger.snapshot().counters.diamonds ?? 0, 0);
+  assert.equal(f.ledger.snapshot().counters.manualShopDiamonds, undefined);
+  assert.equal(refreshWrites(f).length, 0);
+});
+test('rotation buys from the new shelf after the last free refresh and stops at a paid quote', async () => {
+  const f = fixture(); f.settings.schedule.shop = true;
+  f.settings.resources.allowDiamonds = false;
+  f.settings.discountShop.rules = [blueprintRule];
+  const item = f.discounts[0]; item.reward.asset[0].id = '木材';
+  f.shared.refreshCount = 1;
+  f.hooks.DiscountShopRefreshRequest = () => { item.id = 905; item.reward.asset[0].id = '建筑蓝图'; };
+  await autoShop(f); await autoShop(f);
+  assert.equal(f.shared.refreshCount, 2); assert.equal(refreshWrites(f).length, 1);
+  assert.deepEqual(sent(f).map(([, body]) => body.id), [905]);
+  assert.equal(f.ledger.confirmedCounters().discountShopDiamonds, 51);
+  assert.equal(f.stock.get('RUBY'), 949);
+});
+function fallbackFixture() {
+  const f = fixture();
+  f.settings.schedule.shop = true;
+  Object.assign(f.settings.discountShop, { rules: [blueprintRule], fallbackCheapest: true });
+  Object.assign(f.settings.resources, { allowDiamonds: false, diamondDailyLimit: 0, diamondThreshold: 1000 });
+  const first = f.discounts[0]; first.reward.asset[0].id = '木材';
+  for (const [id, price] of [[903, 10], [902, 10]]) f.discounts.push({ ...clone(first), id, price });
+  return f;
+}
+test('fallback buys one lowest whole-pack price from the last free shelf, breaking ties in shelf order', async () => {
+  const f = fallbackFixture();
+  await autoShop(f);
+  assert.equal(sent(f).length, 0); assert.equal(f.shared.refreshCount, 1);
+  f.hooks.DiscountShopRefreshRequest = () => { f.discounts[0].price = 60; };
+  await autoShop(f); await autoShop(f);
+  assert.equal(refreshWrites(f).length, 2);
+  assert.deepEqual(sent(f).map(([, body]) => body.id), [903]);
+  assert.equal(f.ledger.confirmedCounters().discountShopDiamonds, 6);
+  assert.equal(f.ledger.snapshot().counters.diamonds ?? 0, 0);
+});
+test('a match on any observed shelf suppresses fallback, including after a restart or when the balance is insufficient', async () => {
+  for (const affordable of [true, false]) {
+    const f = fallbackFixture();
+    f.discounts[0].reward.asset[0].id = '建筑蓝图';
+    if (!affordable) f.stock.set('RUBY', 20);
+    await autoShop(f);
+    f.discounts[0].reward.asset[0].id = '木材'; f.shared.refreshCount = 2;
+    f.options.ledger = createUsageLedger('shop-test-' + serial, { file: path.join(temp, 'ledger.json') });
+    await autoShop(f);
+    assert.deepEqual(sent(f).map(([, body]) => body.id), affordable ? [901] : []);
+  }
+});
+test('fallback skips paid and initial shelves, checks the balance and requotes the cheapest item before send', async () => {
+  const f = fallbackFixture(); f.shared.refreshCount = 3;
+  await autoShop(f);
+  f.shared.refreshCount = 0;
+  const tiers = f.config.tables.ShopRefreshCfg.data;
+  tiers[0].cost = ['RUBY', 50]; await autoShop(f);
+  f.shared.refreshCount = 2;
+  f.stock.set('RUBY', 4); await autoShop(f);
+  assert.equal(sent(f).length + refreshWrites(f).length, 0);
+  f.stock.set('RUBY', 50);
+  const before = f.options.guard.before;
+  f.options.guard.before = async step => { const ticket = await before(step); f.discounts[0].price = 2; return ticket; };
+  await autoShop(f); assert.equal(sent(f).length, 0);
+  await autoShop(f); assert.deepEqual(sent(f).map(([, body]) => body.id), [901]);
+});
+test('fallback on an all-free schedule handles rejection and an uncertain purchase without buying another item', async () => {
+  const f = fallbackFixture(); f.shared.refreshCount = 3;
+  f.config.tables.ShopRefreshCfg.data.at(-1).cost = [];
+  f.shared.mode = 'reject'; await autoShop(f);
+  f.shared.mode = 'unknown'; await autoShop(f); await autoShop(f);
+  assert.deepEqual(sent(f).map(([, body]) => body.id), [903, 903]);
+  f.shared.mode = 'ok'; await f.client.mutate('DiscountShopBuyRequest', { id: 903 });
+  await autoShop(f); assert.equal(sent(f).length, 2);
+  assert.equal(f.ledger.snapshot().uncertain, 0);
+});
+test('automatic refresh rejects a paid quote even with legacy authorization or a price change before send', async () => {
+  const f = fixture();
+  f.settings.schedule.shop = true;
+  f.settings.discountShop.rules = [blueprintRule];
+  f.discounts[0].isBuy = true;
+  f.shared.refreshCount = 2;
+  assert.equal((await updateGameShop(f, { scope: 'discountShop', paid: true })).status, 'rejected');
+  f.shared.refreshCount = 1;
+  const before = f.options.guard.before;
+  let requoted = false;
+  f.options.guard.before = async step => {
+    const ticket = await before(step);
+    f.config.tables.ShopRefreshCfg.data[1].cost = ['RUBY', 50];
+    requoted = true;
+    return ticket;
+  };
+  await autoShop(f);
+  assert(requoted);
+  assert.equal(refreshWrites(f).length, 0);
+  assert.equal(f.stock.get('RUBY'), 1000);
+});
+test('discount purchases use the actual balance and reconcile uncertain costs outside the global budget', async () => {
+  const f = fixture(); f.settings.schedule.shop = true;
+  f.settings.discountShop.rules = [blueprintRule];
+  Object.assign(f.settings.resources, { allowDiamonds: false, diamondDailyLimit: 20, diamondThreshold: 1000 });
+  f.ledger.confirm(f.ledger.reserve({ diamonds: 20 }, { diamonds: 20 }));
+  f.stock.set('RUBY', 49);
+  await autoShop(f);
+  assert.equal(sent(f).length + refreshWrites(f).length, 0);
+  f.stock.set('RUBY', 50); f.shared.mode = 'unknown';
+  await autoShop(f); await autoShop(f);
+  assert.equal(sent(f).length, 1); assert.equal(refreshWrites(f).length, 0);
+  assert.equal(f.ledger.pendingCounters().discountShopDiamonds, 50);
+  assert.equal(f.ledger.pendingCounters().diamonds ?? 0, 0);
+  f.shared.mode = 'ok'; await f.client.mutate('DiscountShopBuyRequest', { id: 901 });
+  await f.read('discount');
+  assert.equal(f.stock.get('RUBY'), 0);
+  assert.equal(f.ledger.snapshot().uncertain, 0);
+  assert.equal(f.ledger.confirmedCounters().discountShopDiamonds, 50);
+  assert.equal(f.ledger.confirmedCounters().diamonds, 20);
+});
+test('only discount purchases have independent diamond authorization', async () => {
+  const f = fixture();
+  f.settings.resources.allowDiamonds = false;
+  f.settings.schedule.shop = true;
+  const buy = { scope: 'discountShop', kind: 'shopPurchase', request: 'DiscountShopBuyRequest', costs: [{ id: 'RUBY', num: 50 }] };
+  const refresh = { ...buy, kind: 'shopRefresh', request: 'DiscountShopRefreshRequest' };
+  const other = [{ ...buy, request: 'BuyShopProductRequest' }, { ...buy, scope: 'daily' }, { ...buy, request: 'ClickGoldRequest' }, refresh];
+  assert.deepEqual(budgetPreview([...other, buy], f.stock, f.settings).actions, [buy]);
+  for (const step of other) await assert.rejects(f.options.guard.before(step), /总开关/);
+  f.settings.resources.allowDiamonds = true;
+  await assert.rejects(f.options.guard.before(refresh), /总开关/);
+  f.settings.schedule.shop = false;
+  assert.deepEqual(budgetPreview([buy], f.stock, f.settings).actions, []);
+  await assert.rejects(f.options.guard.before(buy), /总开关/);
+});
+test('normal loop buys from the dedicated shop while daily actions are disabled', async () => {
+  const { runLoop } = await import('../src/loop.mjs');
+  const f = fixture(), client = Object.assign(new EventEmitter(), f.client);
+  client.setMaxListeners(50);
+  f.settings.schedule.shop = true;
+  f.settings.resources.allowDiamonds = false;
+  f.settings.discountShop.rules = [blueprintRule];
+  await runLoop(client, protocol, { config: f.config, player: f.player, allowMutate: true, rounds: 1,
+    getSettings: f.options.getSettings, usageLedger: f.ledger, isEnabled: key => key === 'shop' });
+  assert.deepEqual(sent(f).map(([, body]) => body.id), [901]);
+  assert(!f.calls.some(([name]) => name === 'DailyTaskInfoRequest'));
 });
 try {
   for (const [name, run] of tests) { await run(); console.log('ok - ' + name); }

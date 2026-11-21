@@ -1,5 +1,6 @@
 import { createSettingsHistory } from './settings-history.mjs';
 import { createGameChat } from './chat.mjs';
+import { planDiscountShop } from './discount-shop-automation.mjs';
 import { SHOP_CATALOG, createShopState, readShop, buyShopProduct, refreshDiscountShop } from './shops.mjs';
 import { serveClientAsset } from './ui-assets.mjs';
 import { normalizeConsoleHost, consoleAccessHints, consoleUrl } from './console-address.mjs';
@@ -2472,7 +2473,7 @@ export function createConsole({ host = '127.0.0.1', port = 17321, onLog, recover
         if (!config) throw new Error('缺少游戏配置表，暂时不能预览');
         const settings = validateSettings(payload.settings ?? settingsView(session).settings, { catalog: settingsCatalog(config) });
         const category = payload.category ?? 'base';
-        if (!['base', 'world', 'heroes', 'daily', 'arena', 'league', 'runtime', 'cityWar', 'forge', 'antique', 'equipmentGrowth', 'activity', 'radar', 'pirateHunt', 'fleetDispatch','fleetSpeed','worldBoss','pirateSweep','alliance','guildShip','guildFort','silicon','heroRaid','resourceFields'].includes(category)) throw new Error('不支持的预览分类');
+        if (!['base', 'world', 'heroes', 'daily', 'arena', 'league', 'discountShop', 'runtime', 'cityWar', 'forge', 'antique', 'equipmentGrowth', 'activity', 'radar', 'pirateHunt', 'fleetDispatch','fleetSpeed','worldBoss','pirateSweep','alliance','guildShip','guildFort','silicon','heroRaid','resourceFields'].includes(category)) throw new Error('不支持的预览分类');
 
         if (category === 'runtime') {
           json({ checkedAt: new Date().toISOString(), usage: usageFor(session).snapshot(), actions: [], counts: {}, viewOnly: true, scopeLabel: '运行安排（仅查看，不执行）',
@@ -2489,6 +2490,12 @@ export function createConsole({ host = '127.0.0.1', port = 17321, onLog, recover
             actions: plan.actions.map(step => ({ label: step.label, kind: step.kind, costs: (step.costs ?? []).map(item => ({ name: displayMaterial(config, item.id), num: item.num })) })),
             notes: [...new Set(plan.notes ?? [])],
           });
+          if (category === 'discountShop') {
+            const view = await readShop(client, config, { shop: 'discount', player: session.player, state: createShopState(),
+              ledger: usageFor(session), protocol: protocolFor(client) });
+            const plan = planDiscountShop(view, settings, usage);
+            return output(plan, { products: view.products.length }, '折扣商店');
+          }
           if (category === 'resourceFields') {
             const player = session.player, generation = session.generation;
             const plan = await previewResourceFieldPlan(client, protocolFor(client), config, player, {
@@ -2671,7 +2678,7 @@ export function createConsole({ host = '127.0.0.1', port = 17321, onLog, recover
           }
           if (category === 'daily') {
             const flags = nativeTaskValues(settings, session.loop.tasks);
-            const daily = await surveyDailies(client, protocolFor(client), { config, player: session.player, settings, allowRecruitTickets: false, ledger: usageFor(session) });
+            const daily = await surveyDailies(client, protocolFor(client), { config, player: session.player, settings, includeTask: id => id !== 1007, allowRecruitTickets: false, ledger: usageFor(session) });
             const tasks = selectTaskSettings(await surveyTasks(client, protocolFor(client), { config, player: session.player }), settings);
             const actions = [...tasks.plan];
             const trialNotes = [];

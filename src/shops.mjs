@@ -313,15 +313,22 @@ async function gameRefreshQuote(client, config, { raw, identity, state, player, 
     assertProtocol(protocol, ['DiscountShopRefreshRequest', 'DiscountShopResponse']);
     if (!whole(count) || !whole(raw.refreshTime ?? 0)) throw new Error('无法确认游戏商店刷新次数或周期');
     const { cfg, limit } = await discountRefreshLimit(client, config, player, enabled, protocol);
-    const cost = (cfg.find(row => row.times >= count + 1) ?? cfg.at(-1)).cost;
-    if (!Array.isArray(cost) || (cost.length && (cost.length !== 2 || cost[0] !== 'RUBY' || !whole(cost[1])))) throw new Error('无法确认游戏商店刷新费用');
+    const priceAt = times => {
+      const cost = (cfg.find(row => row.times >= times) ?? cfg.at(-1)).cost;
+      if (!Array.isArray(cost) || (cost.length && (cost.length !== 2 || cost[0] !== 'RUBY' || !whole(cost[1])))) throw new Error('无法确认游戏商店刷新费用');
+      return cost.length ? cost[1] : 0;
+    };
+    quote.price.num = priceAt(count + 1);
     quote.limit = limit;
     quote.remaining = Math.max(0, limit - count);
-    quote.price.num = cost.length ? cost[1] : 0;
     if (pending) quote.blockedReason ||= '上一次刷新折扣商店结果待确认，请重新进入商店核对，勿重复刷新';
     if (count >= limit) quote.blockedReason ||= '今日刷新次数已耗尽';
     if ((inventory.get('RUBY') ?? 0) < quote.price.num) quote.blockedReason ||= '钻石余额不足';
     if (raw.refreshTime > 0 && clock(client) >= raw.refreshTime) quote.blockedReason ||= '商店重置时间已到，请重新进入商店';
+    if (!pending && !gateReason && (!raw.refreshTime || raw.refreshTime > clock(client)) && count > 0 && count <= limit
+      && (count === limit || quote.price.num > 0) && priceAt(count) === 0) {
+      Object.defineProperty(quote, 'lastFreeShelf', { value: true, writable: true });
+    }
     if (!quote.blockedReason) {
       quote.canRefresh = true;
       quote.token = crypto.randomUUID();
@@ -402,7 +409,7 @@ async function readShopSnapshot(client, config, options) {
       const signature = JSON.stringify([cycle, fingerprint(shop, { ...raw, isBuy }, Math.floor(raw.discount * 100), null, asset)]);
       const image = iconUrl(icon, 'RUBY');
       result.push(productResult({ state: runtime, identity, shop, id: raw.id, name: asset?.name || '未知商品', asset: asset || { id: '', name: '未知商品', num: 0 },
-        price: { id: 'RUBY', name: materialName(config, 'RUBY'), num: priceNum, ...(image ? { icon: image } : {}) }, discount: Math.floor(raw.discount * 100),
+        price: { id: 'RUBY', name: materialName(config, 'RUBY'), num: priceNum, ...(image ? { icon: image } : {}) }, discount: Number((raw.discount * 100).toPrecision(15)),
         buyTimes: isBuy ? 1 : 0, limitBuyTimes: 1, maxQuantity: priceNum > 0 ? Math.floor(available / priceNum) : 1,
         blockedReason: blocked, signature, unknown, rewardAssets }));
       continue;
@@ -457,6 +464,7 @@ async function readShopSnapshot(client, config, options) {
     const pendingPurchase = Object.entries(ledger?.keyRecords?.() ?? {}).some(([key, record]) => key.startsWith(purchasePrefix) && !record.confirmed
       && !pastShopCycle(record.details?.cycle, cycle));
     if (pendingPurchase) {
+      if (gameRefresh.lastFreeShelf) gameRefresh.lastFreeShelf = false;
       runtime.tokens.delete(gameRefresh.token);
       gameRefresh.token = '';
       gameRefresh.canRefresh = false;
@@ -472,6 +480,10 @@ async function readShopSnapshot(client, config, options) {
     hint: shop.kind === 'ad' ? '无免广告权益时购买前需等待广告时长；一次仅领取一个商品。' : '' };
   Object.defineProperty(view, 'stock', { value: inventory.map, enumerable: false });
   Object.defineProperty(view, 'cycle', { value: cycle, enumerable: false });
+  if (gameRefresh) {
+    const roleHash = crypto.createHash('sha256').update(identity.key).digest('hex').slice(0, 24);
+    Object.defineProperty(view, 'discountSatisfiedCounter', { value: 'discountSatisfied_' + roleHash });
+  }
   Object.defineProperty(view, 'priceValidUntil', { value: Math.min(cycleEndsAt(cycle), halfPriceUntil || Infinity) });
   return view;
 }
@@ -519,11 +531,12 @@ export async function refreshDiscountShop(client, config, options) {
     const first = await readCurrent();
     if (!quoteMatches(first)) return await releaseUnsent(new Error(first.gameRefresh?.blockedReason || '游戏商店商品、次数或刷新费用已变化，请重新进入商店后确认'));
     const quote = first.gameRefresh;
+    if (options.scope === 'discountShop' && quote.price.num !== 0) return await releaseUnsent(new Error('折扣商店挂机只使用免费刷新'));
     if (quote.price.num > 0 && paid !== true) return await releaseUnsent(new Error('刷新折扣商店需要单独确认本次钻石费用'));
     costs = quote.price.num > 0 ? [{ id: 'RUBY', num: quote.price.num }] : [];
     const cycle = cycleKey(client, byShopId.get('discount'), first.nextRefreshTime);
     const expectedRefreshCount = quote.refreshCount + 1;
-    step = { kind: 'shopRefresh', scope: 'manual', request: 'DiscountShopRefreshRequest', body: {}, costs, label: '刷新折扣商店',
+    step = { kind: 'shopRefresh', scope: options.scope ?? 'manual', request: 'DiscountShopRefreshRequest', body: {}, costs, label: '刷新折扣商店',
       verifyGrowth: async nextClient => {
         if (nextClient?.connected === false || !enabled() || roleIdentity(player).key !== identity.key) return false;
         const after = await request(nextClient, 'DiscountShopRequest', {}, 'DiscountShopResponse');
@@ -676,7 +689,7 @@ export async function buyShopProduct(client, config, options) {
     }
     const businessCycle = first.cycle;
     const body = shop.kind === 'discount' || shop.kind === 'ad' ? { id: productId } : { type: shop.type, id: productId, num: quantity };
-    step = { kind: 'shopPurchase', scope: 'manual', request: requestName, body, costs, label: shop.title + ' · ' + current.name,
+    step = { kind: 'shopPurchase', scope: options.scope ?? 'manual', request: requestName, body, costs, label: shop.title + ' · ' + current.name,
       verifyGrowth: async nextClient => {
         try {
           if (!stillSameRole(nextClient)) return false;
@@ -691,6 +704,9 @@ export async function buyShopProduct(client, config, options) {
     const finalView = await readShopSnapshot(client, config, { shop: shopId, player, clientInfo, settings: getSettings?.() ?? settings,
       ledger, state: runtime, icon, enabled, protocol });
     const final = finalView.products.find(item => item.id === productId), finalToken = final && runtime.tokens.get(final.token);
+    if (options.checkFallback && !options.checkFallback(finalView)) {
+      return await releaseUnsent(new Error('兜底购买条件已变化，将在下轮重新检查货架'));
+    }
     if (!enabled() || !final || !final.canBuy || !finalToken || finalToken.signature !== issued.signature
       || final.buyTimes !== baseline || quantity > final.maxQuantity) {
       return await releaseUnsent(new Error('发送前商店价格、库存、资格或购买次数已变化，请重新进入商店后重试'), !enabled());
@@ -701,7 +717,10 @@ export async function buyShopProduct(client, config, options) {
     const details = { kind: 'shopPurchase', shop: shopId, productId, baselineBuyTimes: baseline, expectedBuyTimes: expectedCount,
       priceId: current.price.id, priceNum: current.price.num, quantity, identity: identity.key, request: requestName, cycle: businessCycle,
       baselineStock: Object.fromEntries(Object.keys(expectedChanges).map(id => [id, finalView.stock.get(id) ?? 0])), expectedChanges, guardTicket: ticket };
-    try { reservation = ledger.reserve({}, {}, {}, { uniqueKey: ledgerKey, details }); }
+    // Reserve the daily fallback together with the purchase. An unknown write keeps
+    // its place across restarts, while a definite rejection releases both.
+    const fallbackCount = options.checkFallback ? { [finalView.discountSatisfiedCounter]: 1 } : {};
+    try { reservation = ledger.reserve(fallbackCount, fallbackCount, {}, { uniqueKey: ledgerKey, details }); }
     catch (error) { return await releaseUnsent(error); }
     if (shop.kind === 'ad') {
       const access = await adAccess(client, config?.tables, { player, clientInfo, settings: getSettings?.() ?? settings });
