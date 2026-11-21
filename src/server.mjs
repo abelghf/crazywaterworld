@@ -4111,7 +4111,7 @@ export function createConsole({ host = '127.0.0.1', port = 17321, onLog, recover
           if (!enabled()) throw new Error('请先连接并同步当前账号，再' + (start ? '手动排产' : '使用加速器'));
           const result = start
             ? await startManualFactoryProduction(client, protocolFor(client), payload, { player, enabled, config: loadConfigSafe(), settings: session.preferences })
-            : await speedUpProduction(client, protocolFor(client), payload, { player, enabled });
+            : await speedUpProduction(client, protocolFor(client), payload, { player, enabled, config: loadConfigSafe(), getSettings: () => session.preferences });
           session.worldRead = null;
           emit(session, result.confirmed ? 'info' : 'warn', result.label, { worldUpdated: true });
           return result;
