@@ -1,0 +1,138 @@
+@layer page {
+  .page {
+    display: grid;
+    gap: 20px;
+    min-width: 0;
+  }
+  .heading,
+  .toolbar,
+  .productHeading,
+  .purchaseRow {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+  }
+  .heading h2 {
+    margin-bottom: 4px;
+  }
+  .tabs,
+  .balances,
+  .actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    min-width: 0;
+  }
+  .actions {
+    justify-content: flex-end;
+  }
+  .content {
+    display: grid;
+    gap: 16px;
+    min-width: 0;
+  }
+  .toolbar {
+    flex-wrap: wrap;
+    align-items: flex-start;
+  }
+  .grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(min(100%, 280px), 1fr));
+    gap: 16px;
+  }
+  .grid > article {
+    min-width: 0;
+  }
+  .product {
+    height: 100%;
+    gap: 16px;
+  }
+  .productHeading {
+    justify-content: flex-start;
+    align-items: flex-start;
+  }
+  .productHeading > div {
+    display: grid;
+    gap: 6px;
+    min-width: 0;
+    overflow-wrap: anywhere;
+  }
+  .icon {
+    display: grid;
+    place-items: center;
+    flex: none;
+    width: 44px;
+    height: 44px;
+  }
+  .icon img {
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
+  }
+  .productContent {
+    display: grid;
+    gap: 14px;
+    flex: 1;
+    align-content: space-between;
+  }
+  .facts {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr);
+    align-items: start;
+    gap: 8px 12px;
+    margin: 0;
+  }
+  .facts dt {
+    color: var(--muted-foreground);
+    font-size: 13px;
+  }
+  .facts dd {
+    margin: 0;
+    text-align: right;
+    overflow-wrap: anywhere;
+    font-variant-numeric: tabular-nums;
+  }
+  .purchaseRow {
+    flex-wrap: wrap;
+    align-items: flex-end;
+  }
+  .quantity {
+    display: grid;
+    gap: 6px;
+    min-width: 0;
+    font-size: 13px;
+  }
+  .quantity input {
+    width: 7rem;
+    max-width: 100%;
+  }
+  .result,
+  .gameRefresh {
+    display: grid;
+    gap: 6px;
+    overflow-wrap: anywhere;
+  }
+  .conditions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+  .notice {
+    overflow-wrap: anywhere;
+  }
+  @media (max-width: 480px) {
+    .page {
+      gap: 16px;
+    }
+    .grid {
+      gap: 12px;
+    }
+    .actions {
+      width: 100%;
+    }
+    .actions > button {
+      flex: 1;
+    }
+  }
+}

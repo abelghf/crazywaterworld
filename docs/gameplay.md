@@ -793,3 +793,28 @@ node tools/selftest-describe.mjs    # 字段布局还原自检
 - 套装：`AntiqueSuitLevelUpRequest {id}`。普通套装激活需集齐本套装全部藏品，红色套装（`colorIndex >= 4`）至少激活 2 件；激活本身不消耗资源。升级消耗 `AntiqueSuitLvCfg` 中 `maxLevel >= 目标等级` 的首行，上限还要受 `AntiqueMasterLvCfg[masterLv].maxSuitLv` 限制。
 - 大师：`AntiqueMasterLevelUpRequest`（无参数）返回 `AntiqueMasterLevelUpResponse.masterLv`；目标等级要求 `AntiqueMasterLvCfg.totalStarNum` 不大于当前已激活藏品星级总和，消耗 `costArr`（通常为“藏品大师经验”）。
 - 当前协议没有激活、升星、套装升级的专属响应，成功时通过 `SCAntiqueUpdate` / `SCAntiqueSuitUpdate` 推送并回读 `AllAntiqueResponse` 确认。
+
+## 17. 商店手动购买（v76）
+
+统一入口为杂项 → 商店。只读列表使用已经连接的明确账号，不因打开页面自动登录；购买与现有挂机写操作共用账号队列。
+
+| 商店 | 查询 | 购买／领取 |
+| --- | --- | --- |
+| VIP | `ShopInfoRequest{type:3}` | `BuyShopProductRequest{type:3,id,num}` |
+| 竞技场 | `ShopInfoRequest{type:1}` | `BuyShopProductRequest{type:1,id,num}` |
+| 联盟 | `ShopInfoRequest{type:2}` | `BuyShopProductRequest{type:2,id,num}` |
+| 水姆 | `ShopInfoRequest{type:13}` | `BuyShopProductRequest{type:13,id,num}` |
+| 积分赛 | `ShopInfoRequest{type:4}` | `BuyShopProductRequest{type:4,id,num}` |
+| 折扣 | `DiscountShopRequest{}` | `DiscountShopBuyRequest{id}` |
+| 广告 | `AdvShopInfoRequest{}` | `WatchAdvRequest{type:2,id}` 后 `GotAdvRewardRequest{id}` |
+
+- `ShopSortCfg` 是界面页签编号，不是协议类型。水姆对应 `GUILD_SHIP_SHOP=13`，芯片商店 `CHIP_SHOP=7` 不在此次入口中。
+- 通用商品的 `price.num` 为当前单价；VIP 配置的折扣标签不再次乘价。水姆在 `halfEndTime` 大于服务端当前秒时按 50% 向下取整，否则使用原单价。折扣商店独立按 `floor(price * discount)` 计算。
+- 商品、价格、VIP 限制、限购和积分赛段位门槛来自服务器；积分赛资格核对 `LeagueInfoResponse.dan`，不用 `roomDan` 或预测段位。排序表主要提供商品编号和排序，不据此猜测费用或限购。`limitBuyTimes=0` 按客户端支持单次一件，不提供无限批量；optional 次数字段省略时按协议零值处理。
+- 折扣与 VIP 商店要求已建成商店，竞技场商店要求已建成竞技场（建筑等级大于 0）；联盟入口核对联盟开放等级和成员身份，不臆造联盟商店建筑。水姆与积分赛按角色区服赛季、开服时间和 `GameplayOpenCfg.openDays` 取开放日，积分赛另核对模块等级。
+- `BuyShopProductRequest` 没有同名响应，购买后回读对应商品购买次数并核对库存及货币。折扣购买存在 `DiscountShopBuyResponse{shopItem,reward}`；广告按 `gotTimes` 增长核对。不能仅以请求发送成功或没有报错作为购买完成。
+- 列表提供绑定账号、角色、商品和报价的短时购买凭据；发送前重新读取价格和状态，报价变化需刷新并重新确认。未知结果保留持久防重记录，不盲目重试或只凭净余额变化判定成功。手动商店钻石购买须单独确认，不受自动钻石总开关和每日预算限制，但仍核对余额、钻石保留量及限购；消费独立记入 `manualShopDiamonds`，不占自动预算。自动日常仍受原总开关与预算约束，材料消费沿用已有预留。
+- “重新获取商店商品”只走 `GET /api/shops` 和只读协议；“更新游戏商店”使用独立 `POST /api/shops/game-refresh`，仅发送 `DiscountShopRefreshRequest{}`，响应用 `DiscountShopResponse{shopItem,refreshTime,refreshCount}`，不存在 `DiscountShopRefreshResponse`。两项操作分别命名、分别接线，读取不能触发游戏更新。
+- 折扣更新费用按 `ShopRefreshCfg` 原序首个 `times >= refreshCount + 1` 的 `cost`，超出末档沿用末档；基础次数上限为最后一行 `times`，再加当前 VIP 与有效月卡的“折扣商店刷新次数”效果。当前配置前两次免费，其后每次 50 钻；不在代码中固定次数或费用。永久月卡 `endTime=-1`，其他月卡需 `endTime` 大于服务端当前秒。
+- 更新凭据独立绑定角色、报价和计数，不能当作购买凭据。发送前复查、按账号排队，回读同周期更新计数和付费扣款后确认；未知结果持久防重并由只读获取核销，不按超时重发。更新次数也参与折扣购买的报价及确认周期，游戏更新后即使抽到相同商品也不能使用旧购买报价。手动付费更新同样独立计入 `manualShopDiamonds`，不占自动预算。
+- 本地回归优先覆盖 VIP 和竞技场的“建筑蓝图”，以隔离假服务器验证实际协议请求、扣款、奖励、限购、重复提交与未知结果恢复；新增更新流程验证免费、付费、上限、报价变化和只读获取不产生写入，不使用真实账号自动回归。

@@ -170,10 +170,22 @@ function actionCosts(step) {
   return costs;
 }
 
+const manualShopRequests = new Map([['BuyShopProductRequest', 'shopPurchase'], ['DiscountShopBuyRequest', 'shopPurchase'],
+  ['DiscountShopRefreshRequest', 'shopRefresh']]);
+// Only confirmed manual shop purchases/refreshes set this matching scope/kind;
+// automatic dailies and other manual actions keep the existing diamond policy.
+const isManualShopSpend = step => step?.scope === 'manual' && manualShopRequests.get(step.request) === step.kind
+  && typeof step.kind === 'string';
+
 export function actionCounters(step) {
   const result = { ...step.counters };
   const diamonds = actionCosts(step).get('RUBY') ?? 0;
-  if (diamonds) result.diamonds = diamonds;
+  if (diamonds) {
+    if (isManualShopSpend(step)) {
+      delete result.diamonds;
+      result.manualShopDiamonds = diamonds;
+    } else result.diamonds = diamonds;
+  }
   return result;
 }
 
@@ -269,7 +281,7 @@ export function createActionGuard(client, getSettings, ledger, { enabled = () =>
           const actual = balances.get(id);
           const balance = Math.min(actual, remaining.get(id) ?? actual);
           if (!Number.isSafeInteger(balance) || balance < 0 || balance - cost < resourceReserve(settings, id)) throw new AutomationSkip(`${({ GOLD: '金币', RUBY: '钻石', EXP: '经验' })[id] ?? id}不足或会低于保留数量`);
-          if (id === 'RUBY' && settings && !settings.resources.allowDiamonds) throw new AutomationSkip('钻石消耗总开关已关闭');
+          if (id === 'RUBY' && settings && !settings.resources.allowDiamonds && !isManualShopSpend(step)) throw new AutomationSkip('钻石消耗总开关已关闭');
           balances.set(id, balance);
         }
         if (!enabled()) throw new AutomationSkip('操作已暂停');
@@ -440,7 +452,7 @@ export function budgetPreview(actions, stock, settings, usage = {}) {
     const counters = actionCounters(step);
     let reason;
     for (const [id, cost] of costs) {
-      if (id === 'RUBY' && !settings.resources.allowDiamonds) reason = '钻石消耗总开关已关闭';
+      if (id === 'RUBY' && !settings.resources.allowDiamonds && !isManualShopSpend(step)) reason = '钻石消耗总开关已关闭';
       else if ((balances.get(id) ?? 0) - cost < resourceReserve(settings, id)) reason = `${id}不足或会低于保留数量`;
     }
     for (const [key, amount] of Object.entries(counters)) if (limits[key] != null && Math.max(used[key] ?? 0, step.counterMinimums?.[key] ?? 0) + amount > limits[key]) reason = '会超过今日使用上限';
