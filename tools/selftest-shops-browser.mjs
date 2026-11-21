@@ -38,7 +38,7 @@ const posts = () =>
     (row) => row.path === "/api/shops/purchase" && row.method === "POST",
   );
 const panel = () => page.locator("#tab-shops");
-const product = (id) => panel().locator(`article[data-product-id='${id}']`);
+const product = (id) => panel().locator(`tr[data-product-id='${id}']`);
 const purchase = (id) =>
   product(id).getByRole("button", { name: `购买${BLUEPRINT}`, exact: true });
 const quantity = (id) =>
@@ -79,7 +79,7 @@ async function choose(shop) {
     await button.click();
     assert.equal((await response).status(), 200);
   }
-  await panel().locator("article[data-product-id]").first().waitFor();
+  await panel().locator("tr[data-product-id]").first().waitFor();
 }
 async function reloadShop(shop = "vip", account = "a") {
   const response = page.waitForResponse((row) =>
@@ -394,12 +394,31 @@ try {
     await page.setViewportSize({ width: 1280, height: 1000 });
   });
 
+  await test("过期购买报价明确显示未购买，并允许重新读取报价", async () => {
+    await purchase(VIP_PRODUCT).click();
+    await confirmation().waitFor();
+    for (const record of h.app.sessions.get("a").shops.tokens.values())
+      record.expiresAt = Date.now() - 1;
+    await confirmation()
+      .getByRole("button", { name: "确认购买", exact: true })
+      .click();
+    await receipt("rejected").waitFor();
+    assert.match(
+      await receipt("rejected").textContent(),
+      /未购买[\s\S]*重新获取/,
+    );
+    assert.equal(a.state.writes.length, 0);
+    await ready(VIP_PRODUCT);
+  });
   await test("UI购买VIP蓝图2份后展示结果并更新钻石、到账与限购", async () => {
     const result = await confirmPurchase(VIP_PRODUCT, 2);
     assert.equal(result.status, "completed");
     assert.match(await receipt("completed").textContent(), /50\s*钻石/);
     assert.match(await receipt("completed").textContent(), /4\s*建筑蓝图/);
-    assert.match(await product(VIP_PRODUCT).textContent(), /950\s*钻石/);
+    assert.match(
+      await panel().getByRole("group", { name: "当前货币" }).textContent(),
+      /950\s*钻石/,
+    );
     assert.match(await product(VIP_PRODUCT).textContent(), /6 份/);
     assert.equal(a.state.balances.RUBY, 950);
     assert.equal(a.state.items[BLUEPRINT], 4);
@@ -467,7 +486,10 @@ try {
       assert.equal(payload.confirm, true);
       await select("b");
       await ready();
-      assert.match(await product(VIP_PRODUCT).textContent(), /2,000\s*钻石/);
+      assert.match(
+        await panel().getByRole("group", { name: "当前货币" }).textContent(),
+        /2,000\s*钻石/,
+      );
       assert.equal(
         await receipt("completed").count(),
         0,
@@ -509,12 +531,18 @@ try {
       await started.promise;
       await select("b");
       await ready();
-      assert.match(await product(VIP_PRODUCT).textContent(), /2,000\s*钻石/);
+      assert.match(
+        await panel().getByRole("group", { name: "当前货币" }).textContent(),
+        /2,000\s*钻石/,
+      );
     } finally {
       release.resolve();
     }
     await finished.promise;
-    assert.match(await product(VIP_PRODUCT).textContent(), /2,000\s*钻石/);
+    assert.match(
+      await panel().getByRole("group", { name: "当前货币" }).textContent(),
+      /2,000\s*钻石/,
+    );
     await select("a");
     await ready();
   });

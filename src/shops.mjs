@@ -1,5 +1,6 @@
 import crypto from 'node:crypto';
 import { RESOURCE } from './config.mjs';
+import { resourceReserve } from './automation-policy.mjs';
 import { normalize } from './worlds.mjs';
 import { uidText } from './hero-equipment.mjs';
 import { adAccess, channelUnavailable, prepareAd } from './ad-shop.mjs';
@@ -170,17 +171,38 @@ function stockChangesMatch(details, balances) {
     const before = details.baselineStock[id], after = balances.get(id) ?? 0;
     if (!whole(before) || !whole(after)) return false;
     const delta = after - before;
-    if (expected < 0 ? delta > expected : delta < expected) return false;
+    if (expected < 0 ? delta !== expected : delta < expected) return false;
   }
   return Object.keys(details.expectedChanges).length > 0;
 }
 const cycleKey = (client, shop, refresh = 0) => shop.kind === 'ad' || !whole(refresh) || refresh === 0
   ? 'day:' + Math.floor((clock(client) + 28800) / 86400) : 'refresh:' + refresh;
+function cycleEndsAt(cycle) {
+  const [kind, period] = cycle.split(':');
+  return kind === 'day' ? (Number(period) + 1) * 86400 - 28800 : Number(period);
+}
+// Only a demonstrably newer server cycle can retire the block. Keep the old
+// ticket for audit, and keep blocking when a response lacks comparable data.
+function pastShopCycle(previous, current) {
+  const format = /^(day|refresh):(\d+)(?::count:(\d+))?$/;
+  const old = format.exec(previous), next = format.exec(current);
+  if (!old || !next || old[1] !== next[1]) return false;
+  if (old[2] !== next[2]) return Number(old[2]) < Number(next[2]);
+  return Number(old[3]) < Number(next[3]);
+}
+function checkSpendAtSend(options, stock, costs) {
+  const settings = options.getSettings?.() ?? options.settings;
+  for (const { id, num } of costs) {
+    if ((stock.get(id) ?? 0) - num < resourceReserve(settings, id)) {
+      throw Object.assign(new Error('当前余额不足或会低于保留数量，请重新获取商店商品'), { notSent: true });
+    }
+  }
+}
 function settleUnknowns(ledger, prefix, observed, balances, cycle) {
   if (!ledger?.keyRecords) return false;
   let pending = false;
   for (const [key, record] of Object.entries(ledger.keyRecords())) {
-    if (!key.startsWith(prefix) || record.confirmed) continue;
+    if (!key.startsWith(prefix) || record.confirmed || pastShopCycle(record.details?.cycle, cycle)) continue;
     const expected = record.details?.expectedBuyTimes;
     if (record.details?.cycle === cycle && whole(expected) && observed >= expected && stockChangesMatch(record.details, balances)) {
       if (record.details.guardTicket) ledger.confirm(record.details.guardTicket);
@@ -231,7 +253,7 @@ function refreshEvidence(details, observed, balances) {
 function settleRefreshUnknowns(ledger, identity, observed, balances) {
   let pending = false;
   for (const [key, record] of Object.entries(ledger?.keyRecords?.() ?? {})) {
-    if (!key.startsWith(refreshPrefix(identity)) || record.confirmed) continue;
+    if (!key.startsWith(refreshPrefix(identity)) || record.confirmed || pastShopCycle(record.details?.cycle, observed.cycle)) continue;
     if (refreshEvidence(record.details, observed, balances)) {
       if (record.details.guardTicket?.id) ledger.confirm(record.details.guardTicket);
       ledger.resolveKey(key, true, { ...record.details, reconciled: true });
@@ -304,7 +326,7 @@ async function gameRefreshQuote(client, config, { raw, identity, state, player, 
       quote.canRefresh = true;
       quote.token = crypto.randomUUID();
       state.runtime.tokens.set(quote.token, { action: 'game-refresh', identity: identity.key, shop: 'discount', expiresAt: Date.now() + TOKEN_TTL_MS,
-        signature: JSON.stringify([cycle, count, limit, quote.price.num, raw.shopItem]), resetAt: raw.refreshTime ?? 0 });
+        signature: JSON.stringify([cycle, count, limit, quote.price.num, raw.shopItem]), resetAt: cycleEndsAt(cycle) });
       ensureState(state.runtime);
     }
   } catch (error) { quote.blockedReason ||= error.message; }
@@ -325,7 +347,7 @@ async function readShopSnapshot(client, config, options) {
   const gate = await shopGate(client, config, shop, { player, clientInfo, enabled });
   checkEnabled(enabled);
   const inventory = await readBalances(client, config, enabled, icon);
-  let products, nextRefreshTime = 0, halfPrice = false, discountRaw;
+  let products, nextRefreshTime = 0, halfPriceUntil = 0, discountRaw;
   if (shop.kind === 'discount') {
     const view = await request(client, 'DiscountShopRequest', {}, 'DiscountShopResponse');
     checkEnabled(enabled);
@@ -344,7 +366,7 @@ async function readShopSnapshot(client, config, options) {
     if (!Array.isArray(view?.product)) throw new Error('商店商品列表格式异常');
     products = view.product;
     nextRefreshTime = whole(view.nextRefreshTime) ? view.nextRefreshTime : 0;
-    halfPrice = shop.kind === 'shuimu' && whole(view.halfEndTime) && view.halfEndTime > clock(client);
+    if (shop.kind === 'shuimu' && whole(view.halfEndTime) && view.halfEndTime > clock(client)) halfPriceUntil = view.halfEndTime;
   }
   if (new Set(products.map(row => row?.id)).size !== products.length) throw new Error('商店商品编号重复');
   let leagueDan = null;
@@ -404,7 +426,7 @@ async function readShopSnapshot(client, config, options) {
     const vipValue = raw.vipLevel ?? 0, danValue = raw.dan ?? 0;
     const vipLevel = whole(vipValue) ? vipValue : 0, dan = whole(danValue) ? danValue : 0;
     const asset = displayAsset(config, raw.asset, icon);
-    const factor = halfPrice ? 50 : 100;
+    const factor = halfPriceUntil ? 50 : 100;
     const priced = priceInfo(config, raw.price, factor, icon);
     let blocked = gate.reason || (!asset ? '商品奖励无法确认' : priced.error);
     if (!whole(vipValue) || !whole(danValue)) blocked ||= '商品VIP或段位门槛异常';
@@ -433,7 +455,7 @@ async function readShopSnapshot(client, config, options) {
     // An update must not discard evidence for a purchase still verifiable in
     // this generation. Older reset cycles retain their own locks and ledger.
     const pendingPurchase = Object.entries(ledger?.keyRecords?.() ?? {}).some(([key, record]) => key.startsWith(purchasePrefix) && !record.confirmed
-      && (!record.details?.cycle || record.details.cycle === cycle || record.details.cycle === cycleKey(client, shop, nextRefreshTime)));
+      && !pastShopCycle(record.details?.cycle, cycle));
     if (pendingPurchase) {
       runtime.tokens.delete(gameRefresh.token);
       gameRefresh.token = '';
@@ -450,6 +472,7 @@ async function readShopSnapshot(client, config, options) {
     hint: shop.kind === 'ad' ? '无免广告权益时购买前需等待广告时长；一次仅领取一个商品。' : '' };
   Object.defineProperty(view, 'stock', { value: inventory.map, enumerable: false });
   Object.defineProperty(view, 'cycle', { value: cycle, enumerable: false });
+  Object.defineProperty(view, 'priceValidUntil', { value: Math.min(cycleEndsAt(cycle), halfPriceUntil || Infinity) });
   return view;
 }
 export async function readShop(client, config, options) { return readShopSnapshot(client, config, options); }
@@ -464,7 +487,9 @@ export async function refreshDiscountShop(client, config, options) {
   checkEnabled(enabled);
   const runtime = ensureState(state), identity = roleIdentity(player), issued = runtime.tokens.get(token);
   if (issued?.action !== 'game-refresh' || issued.identity !== identity.key || issued.shop !== shopId
-    || issued.expiresAt < Date.now() || runtime.inFlight.has(token)) throw new Error('更新凭据无效、已使用或已过期，请重新获取商店商品');
+    || issued.expiresAt <= Date.now() || runtime.inFlight.has(token)) {
+    return { action: 'game-refresh', status: 'rejected', message: '更新报价已失效，请重新获取商店商品后确认', shopId, costs: [] };
+  }
   runtime.inFlight.add(token);
   let reservation, ticket, step, prepared = false, settled = false, sent = false, ledgerKey;
   let costs = [];
@@ -518,9 +543,10 @@ export async function refreshDiscountShop(client, config, options) {
     reservation = ledger.reserve({}, {}, {}, { uniqueKey: ledgerKey, details });
     const beforeSend = () => {
       if (!enabled() || client?.connected === false || roleIdentity(player).key !== identity.key
-        || (issued.resetAt > 0 && clock(client) >= issued.resetAt)) {
-        throw Object.assign(new Error('账号、托管状态或商店周期已变化，游戏商店未更新'), { notSent: true });
+        || issued.expiresAt <= Date.now() || clock(client) >= issued.resetAt) {
+        throw Object.assign(new Error('账号或报价已变化，请重新获取商店商品后确认'), { notSent: true });
       }
+      checkSpendAtSend(options, final.stock, costs);
     };
     try {
       sent = true;
@@ -600,7 +626,9 @@ export async function buyShopProduct(client, config, options) {
   checkEnabled(enabled);
   const runtime = ensureState(state), identity = roleIdentity(player), issued = runtime.tokens.get(token);
   if (!issued || issued.shop !== shopId || issued.productId !== productId || issued.identity !== identity.key
-    || issued.expiresAt < Date.now() || runtime.inFlight.has(token)) throw new Error('购买凭证无效、已使用或已过期，请重新获取商店商品');
+    || issued.expiresAt <= Date.now() || runtime.inFlight.has(token)) {
+    return result('rejected', '购买报价已失效，请重新获取商店商品后确认', shopId, productId, quantity);
+  }
   runtime.inFlight.add(token);
   const requestName = shop.kind === 'discount' ? 'DiscountShopBuyRequest' : shop.kind === 'ad' ? 'GotAdvRewardRequest' : 'BuyShopProductRequest';
   const ledgerKey = tokenPrefix(identity, shopId, productId) + token;
@@ -642,7 +670,8 @@ export async function buyShopProduct(client, config, options) {
     if (shop.kind !== 'ad' && current.price.num > 0) costs = [{ id: current.price.id, num: current.price.num * quantity }];
     if (costs.some(row => !row.id || !Number.isSafeInteger(row.num) || row.num < 1)) return await releaseUnsent(new Error('无法确认本次购买货币'));
     const prefix = tokenPrefix(identity, shopId, productId);
-    if (ledger.keyRecords && Object.entries(ledger.keyRecords()).some(([key, record]) => key.startsWith(prefix) && !record.confirmed)) {
+    if (ledger.keyRecords && Object.entries(ledger.keyRecords()).some(([key, record]) => key.startsWith(prefix) && !record.confirmed
+      && !pastShopCycle(record.details?.cycle, first.cycle))) {
       return await releaseUnsent(new Error('上一笔购买结果尚未确认，已阻止重复购买'));
     }
     const businessCycle = first.cycle;
@@ -692,6 +721,10 @@ export async function buyShopProduct(client, config, options) {
     }
     const beforeSend = () => {
       if (!enabled() || !stillSameRole(client)) throw Object.assign(new Error('操作已暂停或账号已切换'), { notSent: true });
+      if (Date.now() >= issued.expiresAt || clock(client) >= finalView.priceValidUntil) {
+        throw Object.assign(new Error('购买报价已过期，请重新获取商店商品后确认'), { notSent: true });
+      }
+      checkSpendAtSend(options, finalView.stock, costs);
     };
     let discountReply;
     try {

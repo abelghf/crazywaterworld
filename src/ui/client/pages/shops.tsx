@@ -4,7 +4,13 @@ import { createRoot } from "react-dom/client";
 import { useStore } from "zustand";
 import { Badge } from "../../badge";
 import { Button } from "../../button";
-import { Card, CardContent, CardHeader, CardTitle } from "../../card";
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "../../card";
 import {
   DialogDescription,
   DialogFooter,
@@ -12,6 +18,14 @@ import {
   DialogTitle,
 } from "../../dialog";
 import { Input } from "../../input";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "../../table";
 import {
   parseShopGameRefresh,
   parseShopPurchase,
@@ -203,15 +217,13 @@ function ProductIcon({ src }: { src: string }) {
   );
 }
 
-function ProductCard({
+function ProductRow({
   product,
-  balance,
   ad,
   busy,
   choose,
 }: {
   product: ShopProduct;
-  balance: ShopAmount | undefined;
   ad: boolean;
   busy: boolean;
   choose: (product: ShopProduct, quantity: number) => void;
@@ -221,117 +233,93 @@ function ProductCard({
   const valid = validQuantity(product, value, ad);
   const available = product.canBuy && Boolean(product.token);
   const name = product.name || product.asset.name || "未命名商品";
-  const quantityId = `shop-quantity-${product.id}`;
-  const errorId = `${quantityId}-error`;
+  const errorId = `shop-quantity-${product.id}-error`;
   return (
-    <article data-product-id={product.id} aria-label={name}>
-      <Card className={styles.product}>
-        <CardHeader>
-          <div className={styles.productHeading}>
-            <ProductIcon src={product.asset.icon} />
-            <div>
-              <CardTitle>
-                <h3>{name}</h3>
-              </CardTitle>
-              <p className="text-sm text-muted-foreground">
-                每份 {amountText(product.asset)}
-              </p>
-              {product.discount > 0 && product.discount < 100 && (
-                <Badge variant="secondary">{product.discount / 10} 折</Badge>
-              )}
-            </div>
-          </div>
-        </CardHeader>
-        <CardContent className={styles.productContent}>
-          <dl className={styles.facts}>
-            <dt>单份价格</dt>
-            <dd>
-              {product.price.num === 0 ? "免费" : amountText(product.price)}
-            </dd>
-            {product.price.num > 0 && (
-              <>
-                <dt>当前持有</dt>
-                <dd>{balance ? amountText(balance) : "余额未提供"}</dd>
-              </>
-            )}
-            <dt>剩余限购</dt>
-            <dd>
-              {product.remaining === null
-                ? "不限购"
-                : `${product.remaining} 份`}
-            </dd>
-            <dt>已购买</dt>
-            <dd>
-              {product.buyTimes}
-              {product.limitBuyTimes > 0 ? ` / ${product.limitBuyTimes}` : ""}{" "}
-              份
-            </dd>
-          </dl>
-          {(product.vipLevel > 0 || product.dan > 0) && (
-            <fieldset className={styles.conditions} aria-label="购买条件">
-              {product.vipLevel > 0 && (
-                <Badge variant="outline">需 VIP {product.vipLevel}</Badge>
-              )}
-              {product.dan > 0 && (
-                <Badge variant="outline">需段位 {product.dan}</Badge>
-              )}
-            </fieldset>
-          )}
+    <TableRow data-product-id={product.id} aria-label={name}>
+      <TableCell>
+        <div className={styles.productHeading}>
+          <ProductIcon src={product.asset.icon} />
           <div>
-            {product.blockedReason && (
-              <p className="mb-3 text-sm text-muted-foreground">
-                {product.blockedReason}
-              </p>
-            )}
-            {!available && !product.blockedReason && (
-              <p className="mb-3 text-sm text-muted-foreground">
-                当前商品不可购买
-              </p>
-            )}
-            <div className={styles.purchaseRow}>
-              <label className={styles.quantity} htmlFor={quantityId}>
-                <span>购买份数</span>
-                <Input
-                  id={quantityId}
-                  type="number"
-                  inputMode="numeric"
-                  min={1}
-                  max={Math.max(1, maximum(product, ad))}
-                  step={1}
-                  value={quantity}
-                  disabled={busy || !available}
-                  readOnly={ad}
-                  aria-label={`${name}购买份数`}
-                  aria-invalid={available && !valid}
-                  aria-describedby={available && !valid ? errorId : undefined}
-                  onChange={(event) => setQuantity(event.target.value)}
-                />
-              </label>
-              <Button
-                type="button"
-                size="sm"
-                disabled={busy || !available || !valid}
-                aria-label={`${ad ? "领取" : "购买"}${name}`}
-                aria-haspopup="dialog"
-                onClick={() => choose(product, value)}
-              >
-                {ad ? "领取" : "购买"}
-              </Button>
-            </div>
-            {available && (
-              <p className="mt-2 text-xs text-muted-foreground">
-                {ad ? "每次领取 1 份" : `本次最多 ${maximum(product, ad)} 份`}
-              </p>
-            )}
-            {available && !valid && (
-              <p id={errorId} className="mt-2 text-sm text-destructive">
-                请输入 1 至 {maximum(product, ad)} 的整数份数
-              </p>
-            )}
+            <strong className="font-medium">{name}</strong>
+            <p className="text-xs text-muted-foreground">
+              每份 {amountText(product.asset)}
+            </p>
           </div>
-        </CardContent>
-      </Card>
-    </article>
+        </div>
+      </TableCell>
+      <TableCell data-label="单份价格">
+        <div>
+          <span className="tabular-nums">
+            {product.price.num === 0 ? "免费" : amountText(product.price)}
+          </span>
+          {product.discount > 0 && product.discount < 100 && (
+            <Badge className="ml-1" variant="secondary">
+              {product.discount / 10} 折
+            </Badge>
+          )}
+        </div>
+      </TableCell>
+      <TableCell data-label="剩余限购">
+        <div>
+          <span className="tabular-nums">
+            {product.remaining === null ? "不限购" : `${product.remaining} 份`}
+          </span>
+          {product.buyTimes > 0 && (
+            <p className="text-xs text-muted-foreground">
+              已{ad ? "领取" : "购买"} {product.buyTimes} 份
+            </p>
+          )}
+          {product.blockedReason ? (
+            <p className="text-xs text-muted-foreground">
+              {product.blockedReason}
+            </p>
+          ) : (
+            (product.vipLevel > 0 || product.dan > 0) && (
+              <p className="text-xs text-muted-foreground">
+                {product.vipLevel > 0 && `需 VIP ${product.vipLevel}`}
+                {product.dan > 0 && ` 需段位 ${product.dan}`}
+              </p>
+            )
+          )}
+        </div>
+      </TableCell>
+      <TableCell data-label="操作">
+        <div>
+          <div className={styles.purchaseRow}>
+            <Input
+              type="number"
+              inputMode="numeric"
+              min={1}
+              max={maximum(product, ad)}
+              step={1}
+              value={quantity}
+              disabled={busy || !available}
+              readOnly={ad}
+              aria-label={`${name}购买份数`}
+              aria-invalid={available && !valid}
+              aria-describedby={available && !valid ? errorId : undefined}
+              onChange={(event) => setQuantity(event.target.value)}
+            />
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              disabled={busy || !available || !valid}
+              aria-label={`${ad ? "领取" : "购买"}${name}`}
+              aria-haspopup="dialog"
+              onClick={() => choose(product, value)}
+            >
+              {ad ? "领取" : "购买"}
+            </Button>
+          </div>
+          {available && !valid && (
+            <p id={errorId} className="mt-1 text-xs text-destructive">
+              请输入 1 至 {maximum(product, ad)} 的整数份数
+            </p>
+          )}
+        </div>
+      </TableCell>
+    </TableRow>
   );
 }
 
@@ -784,9 +772,6 @@ function ShopPanel({
           )}
         </div>
       </div>
-      <p className="text-sm text-muted-foreground">
-        重新获取商店商品只读取最新商品、余额和次数，不消耗资源，也不更换游戏商品。
-      </p>
       {shop === "discount" && (
         <section
           id="shop-game-refresh-info"
@@ -794,7 +779,7 @@ function ShopPanel({
           aria-label="游戏商店更新信息"
         >
           <p className="text-sm text-muted-foreground">
-            更新游戏商店会按确认的费用和次数更换游戏内的折扣商品。
+            更新将更换当前商品，并使用一次更新次数。
           </p>
           {gameRefresh && (
             <p className="text-sm">
@@ -824,8 +809,10 @@ function ShopPanel({
               : "正在读取商品与余额…")}
         </p>
       )}
-      {result && <PurchaseResult result={result} />}
-      {refreshResult && <GameRefreshResult result={refreshResult} />}
+      {result?.shopId === shop && <PurchaseResult result={result} />}
+      {refreshResult && shop === "discount" && (
+        <GameRefreshResult result={refreshResult} />
+      )}
       {error && (
         <p className={`${styles.notice} text-destructive`} role="alert">
           {error}
@@ -838,7 +825,7 @@ function ShopPanel({
         <fieldset className={styles.balances} aria-label="当前货币">
           {view.balances.map((balance) => (
             <Badge key={balance.id} variant="secondary">
-              {amountText(balance)}
+              持有 {amountText(balance)}
             </Badge>
           ))}
         </fieldset>
@@ -846,20 +833,29 @@ function ShopPanel({
       {view?.products.length === 0 && (
         <p className="text-muted-foreground">当前商店暂无商品</p>
       )}
-      {view && (
-        <div className={styles.grid}>
-          {view.products.map((product) => (
-            <ProductCard
-              key={`${product.id}:${product.token}`}
-              product={product}
-              balance={view.balances.find(
-                (entry) => entry.id === product.price.id,
-              )}
-              ad={ad}
-              busy={busy}
-              choose={choose}
-            />
-          ))}
+      {view && view.products.length > 0 && (
+        <div className="table-stack">
+          <Table aria-label={`${title}商品`}>
+            <TableHeader>
+              <TableRow>
+                <TableHead scope="col">商品</TableHead>
+                <TableHead scope="col">单份价格</TableHead>
+                <TableHead scope="col">剩余限购</TableHead>
+                <TableHead scope="col">份数与操作</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {view.products.map((product) => (
+                <ProductRow
+                  key={`${product.id}:${product.token}`}
+                  product={product}
+                  ad={ad}
+                  busy={busy}
+                  choose={choose}
+                />
+              ))}
+            </TableBody>
+          </Table>
         </div>
       )}
       {refreshConfirmation && (
@@ -899,42 +895,39 @@ function ShopsPage() {
   }, []);
   if (!active || !visible) return null;
   return (
-    <div className={styles.page} data-account={account ?? ""}>
-      <div className={styles.heading}>
-        <div>
+    <Card data-account={account ?? ""}>
+      <CardHeader>
+        <CardTitle>
           <h2>商店</h2>
-          <p className="text-sm text-muted-foreground">
-            选择商品与份数，确认后购买。价格、余额和限购以最新读取为准。
-          </p>
-        </div>
-      </div>
-      <fieldset className={styles.tabs} aria-label="商店分类">
-        {catalog.map((entry) => (
-          <Button
-            key={entry.id}
-            type="button"
-            variant={shop === entry.id ? "secondary" : "outline"}
-            size="sm"
-            aria-pressed={shop === entry.id}
-            onClick={() => setShop(entry.id)}
-          >
-            {entry.title}
-          </Button>
-        ))}
-      </fieldset>
-      {hint || !account ? (
-        <p role="status" className="text-muted-foreground">
-          {hint}
-        </p>
-      ) : (
-        <ShopPanel
-          key={`${account}:${shop}`}
-          account={account}
-          shop={shop}
-          onCatalog={setCatalog}
-        />
-      )}
-    </div>
+        </CardTitle>
+        <CardDescription>
+          {hint ||
+            "手动购买和更新需要确认。手动花钻单独记账，仍受钻石保留量限制。"}
+        </CardDescription>
+      </CardHeader>
+      <CardContent className={styles.content}>
+        <fieldset className="config-subtabs" aria-label="商店分类">
+          {catalog.map((entry) => (
+            <button
+              key={entry.id}
+              type="button"
+              aria-pressed={shop === entry.id}
+              onClick={() => setShop(entry.id)}
+            >
+              {entry.title}
+            </button>
+          ))}
+        </fieldset>
+        {account && !hint && (
+          <ShopPanel
+            key={`${account}:${shop}`}
+            account={account}
+            shop={shop}
+            onCatalog={setCatalog}
+          />
+        )}
+      </CardContent>
+    </Card>
   );
 }
 

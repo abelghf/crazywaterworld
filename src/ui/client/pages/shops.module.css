@@ -1,85 +1,51 @@
 @layer page {
-  .page {
+  .content {
     display: grid;
-    gap: 20px;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 12px;
     min-width: 0;
   }
-  .heading,
+  .content > fieldset {
+    min-inline-size: 0;
+  }
   .toolbar,
-  .productHeading,
-  .purchaseRow {
+  .actions,
+  .balances,
+  .purchaseRow,
+  .productHeading {
     display: flex;
     align-items: center;
-    justify-content: space-between;
-    gap: 12px;
-  }
-  .heading h2 {
-    margin-bottom: 4px;
-  }
-  .tabs,
-  .balances,
-  .actions {
-    display: flex;
     flex-wrap: wrap;
     gap: 8px;
     min-width: 0;
   }
-  .actions {
-    justify-content: flex-end;
-  }
-  .content {
-    display: grid;
-    gap: 16px;
-    min-width: 0;
-  }
   .toolbar {
-    flex-wrap: wrap;
-    align-items: flex-start;
-  }
-  .grid {
-    display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(min(100%, 280px), 1fr));
-    gap: 16px;
-  }
-  .grid > article {
-    min-width: 0;
-  }
-  .product {
-    height: 100%;
-    gap: 16px;
+    justify-content: space-between;
   }
   .productHeading {
-    justify-content: flex-start;
-    align-items: flex-start;
-  }
-  .productHeading > div {
-    display: grid;
-    gap: 6px;
-    min-width: 0;
+    flex-wrap: nowrap;
     overflow-wrap: anywhere;
+  }
+  .purchaseRow input {
+    width: 4.5rem;
+    min-width: 0;
+    height: 2rem;
   }
   .icon {
     display: grid;
-    place-items: center;
     flex: none;
-    width: 44px;
-    height: 44px;
+    place-items: center;
+    width: 32px;
+    height: 32px;
   }
   .icon img {
     width: 100%;
     height: 100%;
     object-fit: contain;
   }
-  .productContent {
-    display: grid;
-    gap: 14px;
-    flex: 1;
-    align-content: space-between;
-  }
   .facts {
     display: grid;
     grid-template-columns: auto minmax(0, 1fr);
-    align-items: start;
     gap: 8px 12px;
     margin: 0;
   }
@@ -93,46 +59,24 @@
     overflow-wrap: anywhere;
     font-variant-numeric: tabular-nums;
   }
-  .purchaseRow {
-    flex-wrap: wrap;
-    align-items: flex-end;
-  }
-  .quantity {
-    display: grid;
-    gap: 6px;
-    min-width: 0;
-    font-size: 13px;
-  }
-  .quantity input {
-    width: 7rem;
-    max-width: 100%;
-  }
   .result,
   .gameRefresh {
     display: grid;
-    gap: 6px;
+    gap: 4px;
+    padding: 10px 12px;
+    border-radius: var(--radius);
+    background: var(--muted);
     overflow-wrap: anywhere;
-  }
-  .conditions {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 6px;
   }
   .notice {
     overflow-wrap: anywhere;
   }
-  @media (max-width: 480px) {
-    .page {
-      gap: 16px;
-    }
-    .grid {
-      gap: 12px;
-    }
+  @media (max-width: 640px) {
     .actions {
       width: 100%;
     }
-    .actions > button {
-      flex: 1;
+    .purchaseRow {
+      justify-content: flex-end;
     }
   }
 }

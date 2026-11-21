@@ -143,7 +143,7 @@ test('VIP blueprint RUBY purchase uses current server unit price', async () => {
   assert.deepEqual(outcome.costs.map(({ id, num }) => ({ id, num })), [{ id: 'RUBY', num: 200 }]);
   assert.equal(f.ledger.pendingCounters().manualShopDiamonds ?? 0, 0); assert.equal(f.ledger.confirmedCounters().manualShopDiamonds, 200);
   assert.equal(f.ledger.snapshot().counters.diamonds ?? 0, 0); assert.equal(f.ledger.confirmedCounters().diamonds ?? 0, 0);
-  await assert.rejects(buyShopProduct(f.client, f.config, { ...f.options, shop: 'vip', id: item.id, quantity: 2, token: item.token, paid: true }), /凭证/);
+  assert.equal((await buyShopProduct(f.client, f.config, { ...f.options, shop: 'vip', id: item.id, quantity: 2, token: item.token, paid: true })).status, 'rejected');
   assert.equal(sent(f).length, 1);
 });
 test('manual VIP and discount purchases ignore automatic diamond switch and daily budget', async () => {
@@ -285,7 +285,7 @@ test('price changes, expiry and same-token concurrent calls never send twice', a
   const opts = { ...f.options, shop: 'vip', id: item.id, token: item.token, quantity: 1, paid: true };
   assert.equal((await buyShopProduct(f.client, f.config, opts)).status, 'rejected'); assert.equal(sent(f).length, 0);
   const v = await f.read('vip'), token = v.products[0].token; f.state.tokens.get(token).expiresAt = Date.now() - 1;
-  await assert.rejects(buyShopProduct(f.client, f.config, { ...opts, token }), /凭证/);
+  assert.equal((await buyShopProduct(f.client, f.config, { ...opts, token })).status, 'rejected');
   const current = (await f.read('vip')).products[0], results = await Promise.allSettled([buyShopProduct(f.client, f.config, { ...opts, token: current.token }), buyShopProduct(f.client, f.config, { ...opts, token: current.token })]);
   assert.equal(results.filter(row => row.status === 'fulfilled' && row.value.status === 'completed').length, 1); assert.equal(sent(f).length, 1);
 });
@@ -336,14 +336,14 @@ test('unknown evidence from a different refresh cycle never confirms an old writ
   f.shared.mode = 'ok'; await f.client.mutate('BuyShopProductRequest', { type: 3, id: 301, num: 1 });
   const original = f.client.request.bind(f.client);
   f.client.request = async (...args) => { const value = await original(...args); if (args[0] === 'ShopInfoRequest') value.nextRefreshTime++; return value; };
-  assert.equal((await f.read('vip')).products[0].canBuy, false); assert.equal(f.ledger.pendingCounters().manualShopDiamonds, 100);
+  assert.equal((await f.buy('vip')).status, 'completed'); assert.equal(f.ledger.pendingCounters().manualShopDiamonds, 100);
 });
 test('quote crossing ad Beijing midnight is rejected and old unknown stays pending', async () => {
   const f = fixture(), item = (await f.read('ad')).products[0]; f.client.serverClockOffsetMs = 86400_000;
   assert.equal((await buyShopProduct(f.client, f.config, { ...f.options, shop: 'ad', id: item.id, quantity: 1, token: item.token, paid: false })).status, 'rejected');
   f.client.serverClockOffsetMs = 0; f.shared.mode = 'unknown'; assert.equal((await f.buy('ad')).status, 'unknown');
   f.shared.mode = 'ok'; await f.client.mutate('GotAdvRewardRequest', { id: item.id }); f.client.serverClockOffsetMs = 86400_000;
-  assert.equal((await f.read('ad')).products[0].canBuy, false); assert.equal(f.ledger.snapshot().uncertain, 1);
+  assert.equal((await f.buy('ad')).status, 'completed'); assert.equal(f.ledger.snapshot().uncertain, 1);
 });
 test('unknown response costs have names and confirmed absent reward uses verified quote', async () => {
   const f = fixture(); f.shared.mode = 'unknown'; const unknown = await f.buy('vip'); assert.equal(unknown.costs[0].name, 'RUBY');
@@ -369,6 +369,56 @@ const updateGameShop = async (f, extra = {}) => {
   const quote = (await f.read('discount')).gameRefresh;
   return refreshDiscountShop(f.client, f.config, { ...f.options, shop: 'discount', token: quote.token, paid: quote.price.num > 0, ...extra });
 };
+test('purchase and paid refresh recheck the diamond reserve against the final inventory and current settings', async () => {
+  for (const shop of ['vip', 'refresh']) for (const changed of ['inventory', 'settings']) {
+    const f = fixture(), cost = shop === 'vip' ? 100 : 50;
+    f.shared.refreshCount = 2;
+    f.settings.resources.diamondThreshold = 1000 - cost;
+    const before = f.options.guard.before.bind(f.options.guard);
+    f.options.guard.before = async step => {
+      const ticket = await before(step);
+      if (changed === 'inventory') f.stock.set('RUBY', 999);
+      else f.settings.resources.diamondThreshold++;
+      return ticket;
+    };
+    const outcome = shop === 'vip' ? await f.buy(shop) : await updateGameShop(f);
+    assert.equal(outcome.status, 'rejected');
+    assert.match(outcome.message, /保留/);
+    assert.equal(sent(f).length + refreshWrites(f).length, 0);
+    assert.equal(f.ledger.snapshot().uncertain, 0);
+  }
+});
+test('half price ending at the send boundary cancels the purchase', async () => {
+  const f = fixture();
+  f.shared.halfEndTime = Math.floor(Date.now() / 1000) + 10;
+  const send = f.client.sendWatch.bind(f.client);
+  f.client.sendWatch = (...args) => {
+    f.client.serverClockOffsetMs = 10_000;
+    return send(...args);
+  };
+  const outcome = await f.buy('shuimu');
+  assert.equal(outcome.status, 'rejected');
+  assert.equal(sent(f).length, 0);
+  assert.equal(f.stock.get('水姆币'), 1000);
+  assert.equal(f.ledger.snapshot().uncertain, 0);
+});
+test('a debit larger than the confirmed price stays unknown after a reread', async () => {
+  for (const shop of ['vip', 'refresh']) {
+    const f = fixture();
+    f.shared.refreshCount = 2;
+    const mutate = f.client.mutate.bind(f.client);
+    f.client.mutate = async (...args) => {
+      const value = await mutate(...args);
+      f.stock.set('RUBY', f.stock.get('RUBY') - 1);
+      return value;
+    };
+    const outcome = shop === 'vip' ? await f.buy(shop) : await updateGameShop(f);
+    assert.equal(outcome.status, 'unknown');
+    const view = await f.read(shop === 'vip' ? 'vip' : 'discount');
+    assert.equal(view.products[0].canBuy, false);
+    assert.equal(f.ledger.confirmedCounters().manualShopDiamonds ?? 0, 0);
+  }
+});
 test('rereading shop goods is read-only and never consumes a game refresh', async () => {
   const f = fixture();
   for (let i = 0; i < 3; i++) {
@@ -411,8 +461,8 @@ test('new game refresh invalidates old purchase and refresh quotes even for iden
   const original = f.client.request.bind(f.client);
   f.client.request = async (...args) => { const out = await original(...args); if (args[0] === 'DiscountShopRefreshRequest') f.discounts[0].price--; return out; };
   assert.equal((await refreshDiscountShop(f.client, f.config, { ...f.options, shop: 'discount', token: before.gameRefresh.token, paid: false })).status, 'completed');
-  await assert.rejects(buyShopProduct(f.client, f.config, { ...f.options, shop: 'discount', id: before.products[0].id, quantity: 1, token: before.products[0].token, paid: true }), /凭证/);
-  await assert.rejects(refreshDiscountShop(f.client, f.config, { ...f.options, shop: 'discount', token: before.gameRefresh.token, paid: false }), /凭据/);
+  assert.equal((await buyShopProduct(f.client, f.config, { ...f.options, shop: 'discount', id: before.products[0].id, quantity: 1, token: before.products[0].token, paid: true })).status, 'rejected');
+  assert.equal((await refreshDiscountShop(f.client, f.config, { ...f.options, shop: 'discount', token: before.gameRefresh.token, paid: false })).status, 'rejected');
   assert.equal(refreshWrites(f).length, 1); assert.equal(sent(f).length, 0);
 });
 test('game refresh quote changes, pause, reserve and balance prevent writes', async () => {
@@ -447,7 +497,8 @@ test('game refresh with lagging currency remains unknown until a read confirms t
 test('a new reset cycle never confirms an old uncertain game refresh', async () => {
   const f = fixture(); f.shared.mode = 'unknown'; assert.equal((await updateGameShop(f)).status, 'unknown');
   f.shared.mode = 'ok'; await f.client.mutate('DiscountShopRefreshRequest', {}); f.shared.refreshTime++;
-  const view = await f.read('discount'); assert.equal(view.gameRefresh.canRefresh, false); assert.match(view.gameRefresh.blockedReason, /待确认/);
+  const view = await f.read('discount'); assert.equal(view.gameRefresh.canRefresh, true); assert.equal(view.products[0].canBuy, true);
+  assert.equal((await updateGameShop(f)).status, 'completed');
   assert.equal(f.ledger.snapshot().uncertain, 1);
 });
 test('explicit refresh rejection and unsent writes release only their reservations', async () => {
