@@ -254,6 +254,7 @@ try {
     assert.equal(current.status, 200);
     current.data.settings.resources.allowDiamonds = false;
     current.data.settings.resources.diamondDailyLimit = 0;
+    current.data.settings.resources.diamondThreshold = 10000;
     const saved = await h.api(
       "settings",
       {

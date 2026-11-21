@@ -386,11 +386,6 @@ function PurchaseDialog({
               })}
         </dd>
       </dl>
-      {product.price.id === "RUBY" && product.price.num > 0 && (
-        <p className="text-sm text-muted-foreground">
-          手动商店购买不受自动钻石总开关和每日预算限制；仍检查余额与钻石保留量。
-        </p>
-      )}
       {ad && (
         <p className="text-sm text-muted-foreground">
           广告商品每次领取一份，按账号的广告权益处理，可能需要等待。
@@ -465,11 +460,6 @@ function GameRefreshDialog({
       <p className="text-sm text-muted-foreground">
         仅查看当前商品，请使用“重新获取商店商品”，只读获取不消耗资源或更新次数。
       </p>
-      {quote.price.id === "RUBY" && quote.price.num > 0 && (
-        <p className="text-sm text-muted-foreground">
-          手动更新游戏商店不受自动钻石总开关和每日预算限制；仍检查余额与钻石保留量。
-        </p>
-      )}
       <DialogFooter>
         <Button type="button" onClick={confirm}>
           确认更新游戏商店
@@ -900,10 +890,7 @@ function ShopsPage() {
         <CardTitle>
           <h2>商店</h2>
         </CardTitle>
-        <CardDescription>
-          {hint ||
-            "手动购买和更新需要确认。手动花钻单独记账，仍受钻石保留量限制。"}
-        </CardDescription>
+        {hint && <CardDescription>{hint}</CardDescription>}
       </CardHeader>
       <CardContent className={styles.content}>
         <fieldset className="config-subtabs" aria-label="商店分类">

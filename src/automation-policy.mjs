@@ -103,12 +103,12 @@ export function nativePreferenceEnabled(settings, key) {
   return worldPreferenceEnabled(settings, key);
 }
 
-export function resourceReserve(settings, id) {
+export function resourceReserve(settings, id, step = null) {
   if (!settings) return 0;
   if (id === '建筑蓝图') return settings.building.keepBlueprints;
   if (id === '加速器') return settings.resources.keepAccelerators;
   if (id === '英雄经验') return settings.heroes.keepExp;
-  if (id === 'RUBY') return settings.resources.diamondThreshold;
+  if (id === 'RUBY') return isManualShopSpend(step) ? 0 : settings.resources.diamondThreshold;
   return 0;
 }
 
@@ -280,7 +280,7 @@ export function createActionGuard(client, getSettings, ledger, { enabled = () =>
         for (const [id, cost] of costs) {
           const actual = balances.get(id);
           const balance = Math.min(actual, remaining.get(id) ?? actual);
-          if (!Number.isSafeInteger(balance) || balance < 0 || balance - cost < resourceReserve(settings, id)) throw new AutomationSkip(`${({ GOLD: '金币', RUBY: '钻石', EXP: '经验' })[id] ?? id}不足或会低于保留数量`);
+          if (!Number.isSafeInteger(balance) || balance < 0 || balance - cost < resourceReserve(settings, id, step)) throw new AutomationSkip(`${({ GOLD: '金币', RUBY: '钻石', EXP: '经验' })[id] ?? id}不足或会低于保留数量`);
           if (id === 'RUBY' && settings && !settings.resources.allowDiamonds && !isManualShopSpend(step)) throw new AutomationSkip('钻石消耗总开关已关闭');
           balances.set(id, balance);
         }
@@ -453,7 +453,7 @@ export function budgetPreview(actions, stock, settings, usage = {}) {
     let reason;
     for (const [id, cost] of costs) {
       if (id === 'RUBY' && !settings.resources.allowDiamonds && !isManualShopSpend(step)) reason = '钻石消耗总开关已关闭';
-      else if ((balances.get(id) ?? 0) - cost < resourceReserve(settings, id)) reason = `${id}不足或会低于保留数量`;
+      else if ((balances.get(id) ?? 0) - cost < resourceReserve(settings, id, step)) reason = `${id}不足或会低于保留数量`;
     }
     for (const [key, amount] of Object.entries(counters)) if (limits[key] != null && Math.max(used[key] ?? 0, step.counterMinimums?.[key] ?? 0) + amount > limits[key]) reason = '会超过今日使用上限';
     if (reason) {

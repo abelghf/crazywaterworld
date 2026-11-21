@@ -280,7 +280,7 @@ try {
     assert.equal(b.state.balances.RUBY, 2000);
   });
 
-  await test("手动VIP和折扣购买豁免自动钻石开关与零预算、耗尽预算，不占自动用量", async () => {
+  await test("手动VIP和折扣购买可使用挂机保留的钻石，独立记录用量", async () => {
     const ledger = createUsageLedger("a");
     for (const policy of [
       { allowDiamonds: false, diamondDailyLimit: 10000, spent: 0 },
@@ -288,7 +288,7 @@ try {
       { allowDiamonds: true, diamondDailyLimit: 25, spent: 25 },
     ]) {
       const { spent, ...settings } = policy;
-      await resources({ ...settings, diamondThreshold: 0 });
+      await resources({ ...settings, diamondThreshold: a.state.balances.RUBY });
       if (spent)
         ledger.confirm(
           ledger.reserve({ diamonds: spent }, { diamonds: spent }),
@@ -320,7 +320,7 @@ try {
     }
   });
 
-  await test("自动钻石策略豁免不放宽保留量与明确确认，HTTP不发送拒绝请求", async () => {
+  await test("手动钻石购买必须明确确认", async () => {
     const before = a.state.writes.length,
       ledger = createUsageLedger("a"),
       manual = ledger.confirmedCounters().manualShopDiamonds;
@@ -329,11 +329,6 @@ try {
       diamondDailyLimit: 0,
       diamondThreshold: a.state.balances.RUBY,
     });
-    const reserved = denied(
-      await buy(body("vip", find(await read(), VIP_PRODUCT))),
-    );
-    assert.match(reserved.message ?? reserved.error, /不足|保留/);
-    await resources({ diamondThreshold: 0 });
     for (const extra of [
       { confirm: false },
       { confirm: undefined },
@@ -586,7 +581,7 @@ try {
     assert.equal(a.state.writes.length, before);
   });
 
-  await test("免费与付费游戏商店更新分别核验，钻石保留和限次生效", async () => {
+  await test("手动付费更新可使用挂机保留的钻石，按游戏次数上限执行", async () => {
     let view = await read("discount");
     const oldProduct = view.products[0];
     const beforeWrites = a.state.writes.length;
@@ -634,16 +629,7 @@ try {
       notConfirmed.status >= 400 || notConfirmed.data.status === "rejected",
     );
     assert.equal(a.state.writes.length, paidWrites, "付费更新必须显式确认");
-    await resources({ diamondThreshold: a.state.balances.RUBY - 49 });
-    view = await read("discount");
-    const reserveDenied = await updateGameShop(
-      refreshPayload(view.gameRefresh, true),
-    );
-    assert(
-      reserveDenied.status >= 400 || reserveDenied.data.status === "rejected",
-    );
-    assert.equal(a.state.writes.length, paidWrites, "保留量不足不得发送");
-    await resources({ diamondThreshold: 0 });
+    await resources({ diamondThreshold: a.state.balances.RUBY });
     view = await read("discount");
     const ruby = a.state.balances.RUBY;
     const paid = ok(

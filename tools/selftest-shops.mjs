@@ -175,20 +175,20 @@ test('manual shop exemption still requires strict paid confirmation', async () =
     assert.equal(f.ledger.snapshot().counters.diamonds ?? 0, 0);
   }
 });
-test('manual shop exemption preserves diamond reserve and current balance checks', async () => {
-  for (const shop of ['vip', 'discount']) for (const reason of ['reserve', 'balance']) {
+test('manual purchases may spend the whole balance even when all diamonds are reserved for automation', async () => {
+  for (const shop of ['vip', 'discount']) {
     const f = fixture(), cost = shop === 'vip' ? 100 : 50;
-    Object.assign(f.settings.resources, { allowDiamonds: false, diamondDailyLimit: 0, diamondThreshold: 0 });
-    const item = (await f.read(shop)).products[0]; assert.equal(item.canBuy, true);
-    if (reason === 'reserve') f.settings.resources.diamondThreshold = 1001 - cost;
-    else f.stock.set('RUBY', cost - 1);
-    const outcome = await buyShopProduct(f.client, f.config, { ...f.options, shop, id: item.id, quantity: 1, token: item.token, paid: true });
-    assert.equal(outcome.status, 'rejected', JSON.stringify({ shop, reason, outcome }));
-    if (reason === 'reserve') assert.match(outcome.message, /不足|保留/);
-    else assert.equal((await f.read(shop)).products[0].maxQuantity, 0, 'current balance must reduce the purchase cap to zero');
+    Object.assign(f.settings.resources, { allowDiamonds: false, diamondDailyLimit: 0, diamondThreshold: 1000 });
+    f.stock.set('RUBY', cost);
+    const item = (await f.read(shop)).products[0];
+    const options = { ...f.options, shop, id: item.id, quantity: 1, token: item.token, paid: true };
+    f.stock.set('RUBY', cost - 1);
+    assert.equal((await buyShopProduct(f.client, f.config, options)).status, 'rejected');
     assert.equal(sent(f).length, 0);
-    assert.equal(f.ledger.pendingCounters().manualShopDiamonds ?? 0, 0);
-    assert.equal(f.ledger.snapshot().counters.diamonds ?? 0, 0);
+    f.stock.set('RUBY', cost);
+    assert.equal((await f.buy(shop)).status, 'completed');
+    assert.equal(f.stock.get('RUBY'), 0);
+    assert.equal(f.ledger.confirmedCounters().manualShopDiamonds, cost);
   }
 });
 test('automatic dailies and forged manual shop markers retain the automatic diamond policy', async () => {
@@ -224,7 +224,7 @@ test('automatic dailies and forged manual shop markers retain the automatic diam
     assert.equal(f.ledger.pendingCounters().manualShopDiamonds ?? 0, 0);
   }
 });
-test('manual shop budget preview preserves reserve and leaves automatic budget available', async () => {
+test('manual shop budget preview ignores the automation reserve and leaves automatic budget available', async () => {
   for (const request of ['BuyShopProductRequest', 'DiscountShopBuyRequest']) {
     const f = fixture(), manual = { kind: 'shopPurchase', scope: 'manual', request, label: 'manual shop', costs: [{ id: 'RUBY', num: 100 }], counters: { diamonds: 100 } };
     for (const policy of [
@@ -240,11 +240,12 @@ test('manual shop budget preview preserves reserve and leaves automatic budget a
     const daily = { ...manual, kind: 'daily', scope: 'daily', label: 'automatic daily' };
     const preview = budgetPreview([manual, daily], f.stock, f.settings);
     assert.deepEqual(preview.actions, [manual, daily]); assert.deepEqual(preview.notes, []);
-    for (const [stock, diamondThreshold] of [[1000, 901], [99, 0]]) {
-      f.settings.resources.diamondThreshold = diamondThreshold;
-      const blocked = budgetPreview([manual], new Map([['RUBY', stock]]), f.settings);
-      assert.equal(blocked.actions.length, 0); assert.match(blocked.notes.join(' '), /不足|保留/);
-    }
+    f.settings.resources.diamondThreshold = 1000;
+    const belowReserve = budgetPreview([manual, daily], f.stock, f.settings);
+    assert.deepEqual(belowReserve.actions, [manual]);
+    await assert.rejects(f.options.guard.before(daily), /保留/);
+    const short = budgetPreview([manual], new Map([['RUBY', 99]]), f.settings);
+    assert.equal(short.actions.length, 0);
   }
 });
 test('arena blueprint spends ITEM coins, never challenge tickets', async () => {
@@ -289,11 +290,10 @@ test('price changes, expiry and same-token concurrent calls never send twice', a
   const current = (await f.read('vip')).products[0], results = await Promise.allSettled([buyShopProduct(f.client, f.config, { ...opts, token: current.token }), buyShopProduct(f.client, f.config, { ...opts, token: current.token })]);
   assert.equal(results.filter(row => row.status === 'fulfilled' && row.value.status === 'completed').length, 1); assert.equal(sent(f).length, 1);
 });
-test('pause, role switch and reserve rejection cancel only unsent tickets', async () => {
-  for (const change of ['pause', 'role', 'price', 'reserve']) {
+test('pause, role switch and price changes cancel only unsent tickets', async () => {
+  for (const change of ['pause', 'role', 'price']) {
     const f = fixture(), original = f.options.guard.before;
     f.options.guard.before = async step => { const ticket = await original(step); if (change === 'pause') f.stop(); if (change === 'role') f.player.playerId++; if (change === 'price') f.products.get(3)[0].price.num++; return ticket; };
-    if (change === 'reserve') f.settings.resources.diamondThreshold = 1000;
     assert.notEqual((await f.buy('vip')).status, 'completed'); assert.equal(sent(f).length, 0);
     assert.equal(f.ledger.pendingCounters().manualShopDiamonds ?? 0, 0); assert.equal(f.ledger.snapshot().counters.diamonds ?? 0, 0);
   }
@@ -369,22 +369,21 @@ const updateGameShop = async (f, extra = {}) => {
   const quote = (await f.read('discount')).gameRefresh;
   return refreshDiscountShop(f.client, f.config, { ...f.options, shop: 'discount', token: quote.token, paid: quote.price.num > 0, ...extra });
 };
-test('purchase and paid refresh recheck the diamond reserve against the final inventory and current settings', async () => {
-  for (const shop of ['vip', 'refresh']) for (const changed of ['inventory', 'settings']) {
+test('purchase and paid refresh use the final diamond balance when automation settings change', async () => {
+  for (const shop of ['vip', 'refresh']) for (const affordable of [true, false]) {
     const f = fixture(), cost = shop === 'vip' ? 100 : 50;
     f.shared.refreshCount = 2;
-    f.settings.resources.diamondThreshold = 1000 - cost;
     const before = f.options.guard.before.bind(f.options.guard);
     f.options.guard.before = async step => {
       const ticket = await before(step);
-      if (changed === 'inventory') f.stock.set('RUBY', 999);
-      else f.settings.resources.diamondThreshold++;
+      f.settings.resources.diamondThreshold = 1000;
+      f.stock.set('RUBY', affordable ? cost : cost - 1);
       return ticket;
     };
     const outcome = shop === 'vip' ? await f.buy(shop) : await updateGameShop(f);
-    assert.equal(outcome.status, 'rejected');
-    assert.match(outcome.message, /保留/);
-    assert.equal(sent(f).length + refreshWrites(f).length, 0);
+    assert.equal(outcome.status, affordable ? 'completed' : 'rejected');
+    assert.equal(sent(f).length + refreshWrites(f).length, affordable ? 1 : 0);
+    assert.equal(f.stock.get('RUBY'), affordable ? 0 : cost - 1);
     assert.equal(f.ledger.snapshot().uncertain, 0);
   }
 });
@@ -465,13 +464,12 @@ test('new game refresh invalidates old purchase and refresh quotes even for iden
   assert.equal((await refreshDiscountShop(f.client, f.config, { ...f.options, shop: 'discount', token: before.gameRefresh.token, paid: false })).status, 'rejected');
   assert.equal(refreshWrites(f).length, 1); assert.equal(sent(f).length, 0);
 });
-test('game refresh quote changes, pause, reserve and balance prevent writes', async () => {
-  for (const change of ['price', 'count', 'pause', 'reserve', 'balance']) {
+test('game refresh quote changes, pause and insufficient balance prevent writes', async () => {
+  for (const change of ['price', 'count', 'pause', 'balance']) {
     const f = fixture(); f.shared.refreshCount = 2;
     const quote = (await f.read('discount')).gameRefresh;
     if (change === 'price') f.config.tables.ShopRefreshCfg.data[2].cost[1]++;
     if (change === 'count') f.shared.refreshCount++;
-    if (change === 'reserve') f.settings.resources.diamondThreshold = 1000;
     if (change === 'balance') f.stock.set('RUBY', 0);
     if (change === 'pause') { const before = f.options.guard.before; f.options.guard.before = async step => { const ticket = await before(step); f.stop(); return ticket; }; }
     assert.notEqual((await refreshDiscountShop(f.client, f.config, { ...f.options, shop: 'discount', token: quote.token, paid: true })).status, 'completed');

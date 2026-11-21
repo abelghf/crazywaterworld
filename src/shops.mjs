@@ -190,10 +190,10 @@ function pastShopCycle(previous, current) {
   if (old[2] !== next[2]) return Number(old[2]) < Number(next[2]);
   return Number(old[3]) < Number(next[3]);
 }
-function checkSpendAtSend(options, stock, costs) {
+function checkSpendAtSend(options, stock, step) {
   const settings = options.getSettings?.() ?? options.settings;
-  for (const { id, num } of costs) {
-    if ((stock.get(id) ?? 0) - num < resourceReserve(settings, id)) {
+  for (const { id, num } of step.costs) {
+    if ((stock.get(id) ?? 0) - num < resourceReserve(settings, id, step)) {
       throw Object.assign(new Error('当前余额不足或会低于保留数量，请重新获取商店商品'), { notSent: true });
     }
   }
@@ -546,7 +546,7 @@ export async function refreshDiscountShop(client, config, options) {
         || issued.expiresAt <= Date.now() || clock(client) >= issued.resetAt) {
         throw Object.assign(new Error('账号或报价已变化，请重新获取商店商品后确认'), { notSent: true });
       }
-      checkSpendAtSend(options, final.stock, costs);
+      checkSpendAtSend(options, final.stock, step);
     };
     try {
       sent = true;
@@ -724,7 +724,7 @@ export async function buyShopProduct(client, config, options) {
       if (Date.now() >= issued.expiresAt || clock(client) >= finalView.priceValidUntil) {
         throw Object.assign(new Error('购买报价已过期，请重新获取商店商品后确认'), { notSent: true });
       }
-      checkSpendAtSend(options, finalView.stock, costs);
+      checkSpendAtSend(options, finalView.stock, step);
     };
     let discountReply;
     try {
