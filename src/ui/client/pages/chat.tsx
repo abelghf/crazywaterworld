@@ -8,7 +8,7 @@ import {
   Shield,
   X,
 } from "lucide-react";
-import type { CSSProperties, FormEvent } from "react";
+import type { CSSProperties } from "react";
 import { useEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { useStore } from "zustand";
@@ -19,6 +19,7 @@ import { ApiError, createAccountRequest } from "../lib/api";
 import { getConsoleStore } from "../lib/console-store";
 import { formatGameTime } from "../lib/time";
 import styles from "./chat.module.css";
+import { ChatEmojiPicker } from "./chat-emoji-picker";
 
 const channels = [
   ["world", "世界", Globe2],
@@ -412,7 +413,11 @@ function Feed({
                     <strong>{row.own ? "我" : row.sender}</strong>
                     {stamp}
                   </div>
-                  <MessageBody text={row.text} sticker={row.sticker} />
+                  <MessageBody
+                    key={row.sticker}
+                    text={row.text}
+                    sticker={row.sticker}
+                  />
                 </div>
               </article>
             );
@@ -440,12 +445,11 @@ function Composer({
   const [sendError, setSendError] = useState("");
   const inFlight = useRef(false);
   const unknown = "发送结果尚未确认，请先查看聊天记录。";
-  async function sendMessage(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
+  async function sendMessage(content: { text: string } | { emoji: number }) {
     const store = getConsoleStore().getState();
     if (
       inFlight.current ||
-      !draft.trim() ||
+      ("text" in content && !content.text.trim()) ||
       store.currentAccountId !== account ||
       store.view.page !== "chat"
     )
@@ -462,7 +466,7 @@ function Composer({
           confirm: true,
           channel,
           peer: peer?.id ?? null,
-          text: draft,
+          ...content,
         }),
       });
       if (
@@ -470,9 +474,9 @@ function Composer({
         typeof result === "object" &&
         "status" in result &&
         result.status === "sent"
-      )
-        setDraft("");
-      else setSendError(unknown);
+      ) {
+        if ("text" in content) setDraft("");
+      } else setSendError(unknown);
       window.dispatchEvent(
         new CustomEvent("cw-chat-update", {
           detail: { account, channels: [channel] },
@@ -488,7 +492,10 @@ function Composer({
   return (
     <form
       className={styles.composer}
-      onSubmit={(event) => void sendMessage(event)}
+      onSubmit={(event) => {
+        event.preventDefault();
+        void sendMessage({ text: draft });
+      }}
     >
       <Input
         type="text"
@@ -516,6 +523,11 @@ function Composer({
         aria-label="聊天消息"
         autoComplete="off"
         readOnly={sending}
+      />
+      <ChatEmojiPicker
+        account={account}
+        disabled={sending}
+        send={(emoji) => void sendMessage({ emoji })}
       />
       <Button type="submit" disabled={sending || !draft.trim()}>
         <Send aria-hidden="true" />

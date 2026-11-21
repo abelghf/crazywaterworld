@@ -11,11 +11,18 @@ process.env.CW_RESOURCE_DIR = path.join(directory, 'resources');
 process.env.CW_RESOURCE_AUTO_UPDATE = '0';
 fs.writeFileSync(process.env.CW_CONFIG_PACK, JSON.stringify([
   [0, 'SystemChatMsgCfg', { data: [{ id: '加入公会', notice: '欢迎[color=#fdb405][b]{1}[/b][/color]加入联盟', needCache: '是' }] }],
-  [1, 'EmojiCfg', { data: [{ id: 1001, name: '招手' }] }],
+  [1, 'EmojiCfg', { data: [
+    { id: 1001, name: '招手', groupId: 1, sortId: 2 },
+    { id: 1004, name: '启航', icon: 'emoji_04', groupId: 4, sortId: 2 },
+    { id: 1003, name: '收到', groupId: 4, sortId: 1 },
+    { id: 1005, name: '启航', groupId: 3, sortId: 1 }, // Same name, different wire ID.
+    { id: 1021, name: '新年好', groupId: 1, sortId: 1, actId: '新年好表情包', desc: '获取方式：春节签到' },
+  ] }],
 ]));
 const { saveStore } = await import('../src/accounts.mjs');
 const { createConsole } = await import('../src/server.mjs');
 const { exactAutomationId } = await import('../src/automation-policy.mjs');
+const { iconEntry } = await import('../src/art.mjs');
 const accounts = ['chat-a', 'chat-b'];
 saveStore({ activeId: accounts[0], accounts: accounts.map(id => ({ id, label: id, url: 'ws://fixture.invalid',
   login: {}, automation: { enabled: false, autoStart: false } })) });
@@ -36,6 +43,7 @@ const sendApi = async (account, body) => {
   return { status: response.status, value: await response.json() };
 };
 const peer = { playerId: '9007199254740993', nickname: '南风' };
+const catalog = account => fetch(base + '/api/chat/emojis?account=' + account).then(r => r.json());
 const newcomers = [1280, 320].map((width, index) => ({ playerId: (9007199254740996n + BigInt(index)).toString(), nickname: '海星' + width }));
 const contacts = [peer, ...newcomers];
 const record = { timestamp: 1730000000, side: 0, type: 1, message: '一起去太阳岛吗？' };
@@ -61,21 +69,30 @@ try {
           calls.push([id, name, body]);
           assert.equal(reply, 'OkResponse');
           const text = body.content?.text ?? body.message;
+          const emoji = body.content?.attachment?.emoji ?? body.emoji;
+          const received = emoji === 1005 ? 1004 : emoji;
           if (text === '拒绝消息') throw Object.assign(Error('server prompt'), { prompt: { prompt: 10 } });
           if (text === '结果未知') throw Error('timeout');
-          if (name === 'SendChatRequest') live(client, body.channel, msg(text, 1790000000, session.player));
+          if (name === 'SendChatRequest') {
+            const message = msg(text, 1790000000, session.player);
+            if (emoji) message.content = { type: 2, attachment: { emoji: received } };
+            if (body.channel === 2) client.emit('message', { name: 'SCBatchChatReceive', body: { messages: [{ channel: 2, message }] } });
+            else live(client, body.channel, message);
+          }
           else {
             const recipient = contacts.find(p => p.playerId === exactAutomationId(body.peerPlayerId));
             assert(recipient);
             const chat = { peer: recipient, record: { side: 1, type: 1, message: text, timestamp: 1790000000 } };
+            if (emoji) Object.assign(chat.record, { type: 2, emoji: received });
             conversations.set(recipient.playerId, chat);
             client.emit('message', { name: 'SCPrivateChatMessage', body: { record: chat } });
           }
-          if (text === '仅回显') throw Error('timeout');
+          if (text === '仅回显' || emoji) throw Error('timeout');
           return {};
         }
         calls.push([id, name]);
         assert.equal(reply, name.replace(/Request$/, 'Response'));
+        if (name === 'AllItemRequest') return { items: id === accounts[0] ? [{ itemId: '新年好表情包', num: 0 }] : [] };
         if (name === 'BlackListRequest') return { list: [{ playerId: 19 }] };
         if (name === 'OtherPlayerInfoRequest') {
           assert.equal(typeof body.playerId, 'string');
@@ -146,21 +163,55 @@ try {
   assert.equal((await sendApi('', { confirm: true, channel: 'world', text: '无账号' })).status, 400);
   assert.equal((await sendApi('chat-a', { channel: 'world', text: '未确认' })).status, 400);
   assert.equal((await sendApi('chat-a', { confirm: true, channel: 'world', text: '🚢'.repeat(76) })).status, 400);
+  const sticker = (channel, emoji, extra) => sendApi('chat-a', { confirm: true, channel, emoji, ...extra });
+  assert.deepEqual((await catalog('chat-a')).items.map(row => row.id), [1003, 1004, 1005, 1001]);
+  const beforeInvalid = calls.length;
+  for (const [channel, emoji, extra] of [['world', 999], ['world', '1004'], ['world', 1001, { text: '混合消息' }],
+    ['system', 1001], ['private', 1001], ['guild', 1001, { peer: peer.playerId }], ['world', 1021]]) {
+    assert.equal((await sticker(channel, emoji, extra)).status, 400);
+  }
+  assert.equal(calls.length, beforeInvalid);
+  for (const [channel, wire] of [['world', 1], ['guild', 2]]) {
+    await api('chat-a', channel);
+    assert.deepEqual((await sticker(channel, 1004)).value, { status: 'sent' });
+    assert.deepEqual(calls.at(-1), ['chat-a', 'SendChatRequest', { channel: wire, content: { type: 2, attachment: { emoji: 1004 } } }]);
+    const row = (await api('chat-a', channel)).rows.at(-1);
+    assert.equal(row.text, '［启航］');
+    assert.equal(row.sticker, iconEntry('emoji_04')?.thumb || '');
+  }
+  assert.deepEqual((await sticker('private', 1004, { peer: peer.playerId })).value, { status: 'sent' });
+  const privateBody = calls.at(-1)[2];
+  assert.equal(exactAutomationId(privateBody.peerPlayerId), peer.playerId);
+  assert.deepEqual({ ...privateBody, peerPlayerId: peer.playerId }, { type: 2, peerPlayerId: peer.playerId, message: '', emoji: 1004 });
+  assert.equal((await api('chat-a', 'private')).rows[0].text, '［启航］');
+  assert.equal((await api('chat-a', 'private', peer.playerId)).rows.at(-1).text, '［启航］');
+  for (const channel of ['world', 'private']) {
+    assert.deepEqual((await sticker(channel, 1005, channel === 'private' ? {peer:peer.playerId} : {})).value, { status:'unknown' });
+  }
+  const updateUnlock = num => client.emit('message', { name: 'SCUpdateItem', body: { items: [{ itemId: '新年好表情包', num }] } });
+  updateUnlock(1);
+  assert.deepEqual((await catalog('chat-a')).items.filter(row => row.special).map(row => row.id), [1021]);
+  assert(!(await catalog('chat-b')).items.some(row => row.special));
+  assert.equal((await sticker('world', 1021)).value.status, 'sent');
   const beforeGuildChange = calls.length;
   let restoreQueue;
   session.queueTail = new Promise(resolve => { restoreQueue = resolve; });
   const oldQueue = session.queueTail;
   const pendingSend = sendApi('chat-a', { confirm: true, channel: 'guild', text: '仅在原联盟发送' });
+  const pendingEmoji = sticker('world', 1021);
   try {
     const deadline = Date.now() + 3000;
     while (session.queueTail === oldQueue && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 5));
     assert.notEqual(session.queueTail, oldQueue, '发送应进入当前账号队列');
     session.player.guildId = 2;
+    updateUnlock(0);
   } finally {
     restoreQueue();
   }
   assert.equal((await pendingSend).status, 400);
+  assert.equal((await pendingEmoji).status, 400);
   assert.equal(calls.length, beforeGuildChange);
+  updateUnlock(1);
   client.emit('message', { name: 'SCBatchChatReceive', body: { messages: [1, 1, 2].map(channel => ({ channel, message: msg('同秒同文', 1730000005) })) } });
   assert.equal((await api('chat-a', 'world')).rows.filter(row => row.text === '同秒同文').length, 2);
   assert(!(await api('chat-b', 'world')).rows.some(row => row.text === '同秒同文'));
@@ -176,7 +227,7 @@ try {
   assert.equal(profile.pet.name, '海豹');
   assert.deepEqual((await api('chat-a', 'private', newcomers[0].playerId)).rows, []);
   assert(!(await api('chat-a', 'private')).rows.some(row => row.peerId === newcomers[0].playerId));
-  console.log('聊天历史、推送、频道发送、拒发、回显确认及账号和联盟隔离验证通过');
+  console.log('聊天记录、三频道文字与表情收发、解锁道具、回显确认和账号隔离通过');
 
   if (process.argv.includes('--browser')) {
     const { chromium } = await import('playwright-core');
@@ -193,6 +244,31 @@ try {
       const pane = page.locator('#chat-root');
       await pane.getByText('chat-a 的历史消息').waitFor();
       const input = pane.getByLabel('聊天消息');
+      const openEmojis = pane.getByRole('button', { name: '选择表情' });
+      await input.fill('未发出的草稿');
+      await openEmojis.click();
+      const picker = pane.getByRole('dialog', { name: '选择表情' });
+      const sendSticker = picker.getByRole('button', { name: '发送表情：启航' });
+      async function pickSticker(button) {
+        const response = page.waitForResponse(r => r.url().includes('/api/chat/send?') && r.request().method() === 'POST');
+        await button.click();
+        assert.deepEqual(await (await response).json(), { status: 'sent' });
+        await picker.waitFor({ state: 'hidden' });
+      }
+      await sendSticker.waitFor();
+      assert.equal(await picker.getByRole('button', { name: '第 4 组' }).getAttribute('aria-pressed'), 'true');
+      if (iconEntry('emoji_04')) await sendSticker.locator('img').evaluate(img => img.decode());
+      await picker.getByRole('button', { name: '第 1 组' }).click();
+      const special = picker.getByRole('button', { name: '发送表情：新年好' });
+      assert(await special.getAttribute('data-unread'));
+      await pickSticker(special);
+      assert.equal(calls.filter(([, what]) => what === 'SendChatRequest').at(-1)[2].content.attachment.emoji, 1021);
+      assert.equal(await input.inputValue(), '未发出的草稿');
+      await openEmojis.click();
+      await sendSticker.waitFor();
+      assert.equal(await picker.getByRole('button', { name: '第 1 组' }).getAttribute('data-unread'), null);
+      await pickSticker(sendSticker);
+      if (iconEntry('emoji_04')) await pane.getByRole('img', { name: '［启航］' }).last().evaluate(img => img.decode());
       const target = newcomers.find(player => player.nickname === '海星' + width);
       await pane.getByRole('button', {name:'查看' + target.nickname + '的资料', exact:true}).click();
       const dialog = pane.getByRole('dialog', {name:target.nickname});
@@ -231,11 +307,17 @@ try {
       assert(await notice.locator('[data-bold]').evaluate(el => getComputedStyle(el).color !== getComputedStyle(el.parentElement).color));
       assert.match(await notice.locator('time').textContent(), /\d\d:\d\d:\d\d/);
       assert.equal(await input.count(), 0);
+      assert.equal(await openEmojis.count(), 0);
       await pane.getByRole('button', { name: '私聊', exact: true }).click();
       await pane.getByRole('button', { name: /^南风/ }).click();
       await pane.getByText(record.message).waitFor();
       await pane.getByText('［招手］').waitFor();
       assert.equal(await input.inputValue(), '');
+      await openEmojis.click();
+      await pickSticker(sendSticker);
+      const lastPrivate = calls.filter(([, what]) => what === 'PrivateChatSendRequest').at(-1)[2];
+      assert.equal(lastPrivate.emoji, 1004);
+      assert.equal(exactAutomationId(lastPrivate.peerPlayerId), peer.playerId);
       const reply = '私聊回复 ' + width;
       await input.fill(reply);
       await input.press('Enter');
@@ -244,6 +326,9 @@ try {
       await pane.getByRole('button', { name: /^南风/ }).waitFor();
       await pane.getByRole('button', { name: '联盟', exact: true }).click();
       await pane.getByText('集合地点在港口').waitFor();
+      await openEmojis.click();
+      await pickSticker(sendSticker);
+      assert.deepEqual(calls.filter(([, what]) => what === 'SendChatRequest').at(-1)[2], { channel: 2, content: { type: 2, attachment: { emoji: 1004 } } });
       const guildText = '联盟回复 ' + width;
       await input.fill(guildText);
       await input.press('Enter');
@@ -266,6 +351,18 @@ try {
       await page.goto(base);
       const pane = page.locator('#chat-root');
       await pane.getByLabel('聊天消息').waitFor();
+      await pane.getByRole('button', {name:'选择表情'}).click();
+      const picker = pane.getByRole('dialog', {name:'选择表情'});
+      const tile = picker.getByRole('button', {name:'发送表情：启航'});
+      await tile.waitFor();
+      const tileBox = await tile.boundingBox();
+      assert(tileBox.width >= 44 && tileBox.height >= 44);
+      if (iconEntry('emoji_04')) {
+        const image = await tile.locator('img').boundingBox();
+        assert(image.width >= 44 && image.height >= 44);
+      }
+      await page.keyboard.press('Escape');
+      await picker.waitFor({state:'hidden'});
       assert.equal(await pane.getByRole('heading', { name:'聊天' }).count(), 0);
       const feed = pane.locator('[data-transcript="true"]');
       const layout = await feed.evaluate(el => {
@@ -288,7 +385,7 @@ try {
       assert(Math.abs(y - mark.y) < 2, '收到推送时阅读位置改变 ' + (y - mark.y));
       await page.close();
     }
-    console.log('聊天公告、手机首屏和阅读位置、头像资料、私聊与发送回归通过');
+    console.log('桌面与手机端表情选择、三频道发送、草稿与红点、聊天公告和阅读位置通过');
   }
   if (process.argv.includes('--preview')) {
     console.log('本地聊天模拟预览：' + base);

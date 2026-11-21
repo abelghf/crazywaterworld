@@ -46,7 +46,7 @@
   }
   .composer {
     display: grid;
-    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-columns: minmax(0, 1fr) auto auto;
     gap: 8px;
     padding: 12px 20px;
     border-top: 1px solid var(--border);
@@ -56,6 +56,62 @@
     margin: 0;
     color: var(--destructive);
     font-size: 12px;
+  }
+  .emojiDialog {
+    width: min(26rem, calc(100vw - 24px));
+    max-height: min(32rem, calc(100dvh - 32px));
+    padding: 12px;
+  }
+  .emojiDialog[open] {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+  .emojiHeader,
+  .emojiGroups {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+  }
+  .emojiHeader {
+    justify-content: space-between;
+  }
+  .emojiGroups {
+    flex-wrap: wrap;
+  }
+  .emojiGroups button {
+    flex: 1;
+    height: 40px;
+  }
+  .emojiGroups img {
+    width: 32px;
+    height: 32px;
+    object-fit: contain;
+  }
+  .emojiGrid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(58px, 1fr));
+    gap: 4px;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    padding: 3px;
+  }
+  .emojiGrid img {
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
+  }
+  .composer [data-unread] {
+    position: relative;
+  }
+  .composer [data-unread]::after {
+    content: "";
+    position: absolute;
+    inset: 3px 3px auto auto;
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: var(--destructive);
   }
   .message {
     display: flex;

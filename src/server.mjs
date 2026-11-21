@@ -1,5 +1,5 @@
 import { createSettingsHistory } from './settings-history.mjs';
-import { createGameChat, sendChatText } from './chat.mjs';
+import { createGameChat } from './chat.mjs';
 import { serveClientAsset } from './ui-assets.mjs';
 import { normalizeConsoleHost, consoleAccessHints, consoleUrl } from './console-address.mjs';
 import { createConsoleVersion, renderVersionedPage, consoleVersionError } from './console-version.mjs';
@@ -3446,7 +3446,7 @@ export function createConsole({ host = '127.0.0.1', port = 17321, onLog, recover
         const result=await progressionJob(session,account,route+':'+(parsed.searchParams.get('key')||'catalog')+':'+(parsed.searchParams.get('page')||1),null,client=>route.endsWith('/view')?readActivityRanking(client,loadConfigSafe(),session.player,parsed.searchParams.get('key'),Number(parsed.searchParams.get('page')||1)):{tabs:activityRankCatalog(client,loadConfigSafe(),session.player).map(({key,label})=>({key,label}))},{read:true});
         json(result);return;
       }
-      if (route === 'GET /api/chat' || route === 'GET /api/chat/profile' || route === 'POST /api/chat/send') {
+      if (['GET /api/chat', 'GET /api/chat/profile', 'GET /api/chat/emojis', 'POST /api/chat/send'].includes(route)) {
         const id = parsed.searchParams.get('account');
         if (!id) throw Error('请选择聊天账号');
         const { session } = scoped_(parsed);
@@ -3457,13 +3457,6 @@ export function createConsole({ host = '127.0.0.1', port = 17321, onLog, recover
             throw Error('请先连接当前账号，再使用聊天');
         };
         current();
-        if (req.method === 'POST') {
-          const payload = jsonBody();
-          needConfirm(payload);
-          json(await sendChatText(client, player, payload,
-            work => enqueue(session, work, '发送聊天消息', { recoverFormation: false }), current));
-          return;
-        }
         client.chat ??= createGameChat(client, { player, config: loadConfigSafe({ allowStale: true }),
           changed(keys) {
             if (session.client !== client) return;
@@ -3471,8 +3464,19 @@ export function createConsole({ host = '127.0.0.1', port = 17321, onLog, recover
             const event = 'event: chat-changed\ndata: ' + JSON.stringify({ account: id, channels }) + '\n\n';
             for (const stream of streams) if (stream.allAccounts || stream.account === id) writeStream(stream, event);
           } });
+        if (req.method === 'POST') {
+          const payload = jsonBody();
+          needConfirm(payload);
+          json(await client.chat.send(payload,
+            work => enqueue(session, work, '发送聊天消息', { recoverFormation: false }), current));
+          return;
+        }
         res.setHeader('cache-control', 'no-store');
         const schedule = work => readJob(session, work, { recoverFormation: false });
+        if (route === 'GET /api/chat/emojis') {
+          json(await client.chat.emojis(schedule, current));
+          return;
+        }
         const peerId = parsed.searchParams.get('peer');
         json(route === 'GET /api/chat/profile' ? await client.chat.profile(peerId, schedule, current)
           : await client.chat.read(parsed.searchParams.get('channel'), peerId, schedule, current));

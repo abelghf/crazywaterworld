@@ -6,6 +6,46 @@ function thumbnail(value: unknown) {
     : "";
 }
 
+export function parseChatEmojis(value: unknown) {
+  if (
+    !isRecord(value) ||
+    typeof value.owner !== "string" ||
+    typeof value.hint !== "string" ||
+    !Array.isArray(value.items) ||
+    !Array.isArray(value.groups)
+  )
+    throw Error("表情列表格式无效");
+  const items = value.items.map((item: unknown) => {
+    if (
+      !isRecord(item) ||
+      typeof item.id !== "number" ||
+      !Number.isSafeInteger(item.id) ||
+      typeof item.group !== "number" ||
+      !Number.isSafeInteger(item.group) ||
+      typeof item.name !== "string" ||
+      typeof item.special !== "boolean"
+    )
+      throw Error("表情格式无效");
+    return {
+      id: item.id,
+      name: item.name,
+      group: item.group,
+      special: item.special,
+      sticker: thumbnail(item.sticker),
+    };
+  });
+  const groups = value.groups.map((group: unknown) => {
+    if (
+      !isRecord(group) ||
+      typeof group.id !== "number" ||
+      !Number.isSafeInteger(group.id)
+    )
+      throw Error("表情分组格式无效");
+    return { id: group.id, icon: thumbnail(group.icon) };
+  });
+  return { items, groups, owner: value.owner, hint: value.hint };
+}
+
 export function parseChat(data: unknown) {
   if (
     !isRecord(data) ||

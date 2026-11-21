@@ -1,5 +1,6 @@
 import { exactAutomationId, automationWireId } from './automation-policy.mjs';
 import { iconEntry } from './art.mjs';
+import { toNumber } from './client.mjs';
 import { createGuildNameResolver } from './guild-name.mjs';
 
 const LIMIT = 100; // 游戏每个频道保留最近 100 条。
@@ -78,6 +79,46 @@ function latest(rows, conversations) {
 export function createGameChat(client, { player, config, changed }) {
   const feeds = new Map();
   const ownId = exactAutomationId(player.playerId);
+  const emojiRows = (config?.tables?.EmojiCfg?.data ?? [])
+    .map(row => ({ ...row, groupId: row.groupId ?? 1, sortId: row.sortId ?? 0 }))
+    .sort((a, b) => b.groupId - a.groupId || a.sortId - b.sortId);
+  const emojiById = new Map(emojiRows.map(row => [row.id, row]));
+  const unlockItems = new Set(emojiRows.map(row => row.actId).filter(Boolean));
+  let ownedItems = null;
+  function updateUnlocks(items, full) {
+    if (!Array.isArray(items) || !unlockItems.size || (!full && !ownedItems)) return;
+    const owned = full ? new Set() : new Set(ownedItems);
+    for (const { itemId, num } of items) {
+      if (!unlockItems.has(itemId)) continue;
+      if (toNumber(num) > 0) owned.add(itemId);
+      else owned.delete(itemId);
+    }
+    const previous = ownedItems;
+    ownedItems = owned;
+    if (previous && (owned.size !== previous.size || [...owned].some(id => !previous.has(id)))) changed(['emojis']);
+  }
+  async function loadUnlocks(current) {
+    current();
+    if (!unlockItems.size || ownedItems) return;
+    const bag = await client.request('AllItemRequest', {}, 'AllItemResponse', 8000, current);
+    current();
+    // GameClient publishes the reply before resolving the request. Preserve any newer push.
+    if (!ownedItems) updateUnlocks(bag?.items, true);
+    if (!ownedItems) throw Error('无法读取活动表情解锁状态');
+  }
+  async function emojis(schedule, current) {
+    let hint = '';
+    if (!emojiRows.length) hint = '暂无表情配置';
+    if (unlockItems.size && !ownedItems) {
+      try { await schedule(() => loadUnlocks(current)); }
+      catch { hint = '活动表情解锁状态读取失败'; }
+    }
+    current();
+    const groups = [...new Set(emojiRows.map(row => row.groupId))].map(id => ({ id, icon: iconEntry('ui_chat/emoji-group-' + id)?.thumb || '' }));
+    return { owner: ownId || '', hint, groups, items: emojiRows.filter(row => !row.actId || ownedItems?.has(row.actId))
+      .map(row => ({ id: row.id, name: row.name, group: row.groupId, special: Boolean(row.actId),
+        sticker: iconEntry(row.icon)?.thumb || '' })) };
+  }
   let guildName = createGuildNameResolver(config, player.scenarioId);
   let blocked, sequence = 0;
   function avatarUrl(avatar) {
@@ -86,8 +127,8 @@ export function createGameChat(client, { player, config, changed }) {
   }
   function media(type, message, emoji) {
     if (type === 2) {
-      const item = config?.tables?.EmojiCfg?.data?.find(row => row.id === emoji);
-      return { text: item ? '［' + item.name + '］' : '［表情］', sticker: iconEntry(item?.icon)?.thumb || '' };
+      const item = emojiById.get(emoji);
+      return { text: item ? '［' + item.name + '］' : '［表情］', emoji };
     }
     return { text: message || (type === 3 ? '［语音］' : '［消息］'), sticker: '' };
   }
@@ -121,6 +162,10 @@ export function createGameChat(client, { player, config, changed }) {
     dirty.add(key);
   }
   client.on('message', ({ name, body }) => {
+    if (name === 'AllItemResponse' || name === 'SCUpdateItem') {
+      updateUnlocks(body.items, name === 'AllItemResponse');
+      return;
+    }
     if (name === 'AllGuildAbstractionResponse') {
       guildName = createGuildNameResolver(config, player.scenarioId, body.guilds);
       return;
@@ -233,60 +278,73 @@ export function createGameChat(client, { player, config, changed }) {
     current();
     if (feeds.get(key) !== feed) throw Error('聊天会话已变化，请重新读取');
     const rows = feed.rows.filter(row => channel === 'private' || !blocked?.has(row.senderId))
-      .map(({ signature, ...row }) => row);
+      .map(({ signature, emoji, ...row }) => emoji == null ? row
+        : { ...row, sticker: iconEntry(emojiById.get(emoji)?.icon)?.thumb || '' });
     return { rows, hint: '' };
   }
-  return { read, profile };
-}
-
-export async function sendChatText(client, player, { channel, peer, text }, schedule, current) {
-  if (channel === 'system') throw Error('系统频道只显示公告');
-  if (!['world', 'guild', 'private'].includes(channel)) throw Error('聊天频道无效');
-  if (typeof text !== 'string' || !text.trim()) throw Error('消息不能为空');
-  if (text.length > 150) throw Error('消息不能超过 150 个字');
-  const privateChat = channel === 'private';
-  if (privateChat ? typeof peer !== 'string' || !exactAutomationId(peer) : peer != null)
-    throw Error('聊天对象与所选频道不匹配');
-  const guildId = exactAutomationId(player.guildId);
-  const ownId = exactAutomationId(player.playerId);
-  const check = () => {
-    current();
-    if (channel === 'guild' && (!guildId || guildId !== exactAutomationId(player.guildId)))
-      throw Error('联盟已变化或尚未加入，请重新打开联盟频道');
-  };
-  check();
-  const wireChannel = channel === 'guild' ? 2 : 1;
-  const name = privateChat ? 'PrivateChatSendRequest' : 'SendChatRequest';
-  const body = privateChat ? { type: 1, peerPlayerId: automationWireId(peer), message: text }
-    : { channel: wireChannel, content: { type: 1, text, attachment: {} } };
-  return schedule(async () => {
-    let attempted = false, echoed = false;
-    const observe = ({ name: event, body: data }) => {
-      if (!attempted) return;
-      if (privateChat && event === 'SCPrivateChatMessage') {
-        const { peer: recipient, record } = data.record ?? {};
-        if (exactAutomationId(recipient?.playerId) === peer && record?.side === 1 && record.type === 1 && record.message === text) echoed = true;
-      } else if (!privateChat && (event === 'SCChatReceive' || event === 'SCBatchChatReceive')) {
-        const messages = event === 'SCChatReceive' ? [data] : data.messages ?? [];
-        if (messages.some(row => row.channel === wireChannel && ownId && exactAutomationId(row.message?.sender?.playerId) === ownId
-          && row.message?.content?.type === 1 && row.message.content.text === text)) echoed = true;
-      }
-    };
-    client.on('message', observe);
-    try {
-      await client.request(name, body, 'OkResponse', 5000, () => { check(); attempted = true; });
-      return { status: 'sent' };
-    } catch (error) {
-      if (!attempted) throw error;
-      if (error.prompt) {
-        const code = error.prompt.prompt, types = client.protocol?.Prompt;
-        if (types && code === types.CHAT_CD) throw Error('发言过于频繁，请稍后再发');
-        if (types && code === types.CONTAINS_FORBIDDEN_WORDS) throw Error('消息含有游戏限制的词语，请修改后再发');
-        throw error;
-      }
-      return { status: echoed ? 'sent' : 'unknown' };
-    } finally {
-      client.off('message', observe);
+  async function send({ channel, peer, text, emoji }, schedule, current) {
+    if (channel === 'system') throw Error('系统频道只显示公告');
+    if (!['world', 'guild', 'private'].includes(channel)) throw Error('聊天频道无效');
+    const isEmoji = emoji !== undefined, type = isEmoji ? 2 : 1;
+    const item = emojiById.get(emoji);
+    if (isEmoji) {
+      if (text !== undefined) throw Error('文字和表情需分开发送');
+      if (!Number.isSafeInteger(emoji) || !item) throw Error('请选择游戏表情');
+    } else {
+      if (typeof text !== 'string' || !text.trim()) throw Error('消息不能为空');
+      if (text.length > 150) throw Error('消息不能超过 150 个字');
     }
-  });
+    const privateChat = channel === 'private';
+    if (privateChat ? typeof peer !== 'string' || !exactAutomationId(peer) : peer != null)
+      throw Error('聊天对象与所选频道不匹配');
+    const guildId = exactAutomationId(player.guildId);
+    const check = () => {
+      current();
+      if (channel === 'guild' && (!guildId || guildId !== exactAutomationId(player.guildId)))
+        throw Error('联盟已变化或尚未加入，请重新打开联盟频道');
+    };
+    check();
+    const wireChannel = channel === 'guild' ? 2 : 1;
+    const name = privateChat ? 'PrivateChatSendRequest' : 'SendChatRequest';
+    const body = privateChat ? { type, peerPlayerId: automationWireId(peer), ...(isEmoji ? { message: '', emoji } : { message: text }) }
+      : { channel: wireChannel, content: isEmoji ? { type, attachment: { emoji } } : { type, text, attachment: {} } };
+    return schedule(async () => {
+      if (item?.actId) await loadUnlocks(current);
+      let attempted = false, echoed = false;
+      const observe = ({ name: event, body: data }) => {
+        if (!attempted) return;
+        if (privateChat && event === 'SCPrivateChatMessage') {
+          const { peer: recipient, record } = data.record ?? {};
+          if (exactAutomationId(recipient?.playerId) === peer && record?.side === 1 && record.type === type
+            && (isEmoji ? record.emoji === emoji : record.message === text)) echoed = true;
+        } else if (!privateChat && (event === 'SCChatReceive' || event === 'SCBatchChatReceive')) {
+          const messages = event === 'SCChatReceive' ? [data] : data.messages ?? [];
+          if (messages.some(row => row.channel === wireChannel && ownId && exactAutomationId(row.message?.sender?.playerId) === ownId
+            && row.message?.content?.type === type
+            && (isEmoji ? row.message.content.attachment?.emoji === emoji : row.message.content.text === text))) echoed = true;
+        }
+      };
+      client.on('message', observe);
+      try {
+        await client.request(name, body, 'OkResponse', 5000, () => {
+          check();
+          if (item?.actId && !ownedItems?.has(item.actId)) throw Error(item.desc || '尚未解锁这个表情');
+          attempted = true;
+        });
+        return { status: 'sent' };
+      } catch (error) {
+        if (!attempted) throw error;
+        if (error.prompt) {
+          const code = error.prompt.prompt, types = client.protocol?.Prompt;
+          if (types && code === types.CHAT_CD) throw Error('发言过于频繁，请稍后再发');
+          if (types && code === types.CONTAINS_FORBIDDEN_WORDS) throw Error('消息含有游戏限制的词语，请修改后再发');
+          throw error;
+        }
+        return { status: echoed ? 'sent' : 'unknown' };
+      } finally {
+        client.off('message', observe);
+      }
+    });
+  }
+  return { read, profile, emojis, send };
 }
