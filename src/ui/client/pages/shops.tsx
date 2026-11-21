@@ -1,4 +1,4 @@
-import { Package, RefreshCw } from "lucide-react";
+import { Package } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { useStore } from "zustand";
@@ -86,6 +86,13 @@ function amountText(item: Pick<ShopAmount, "id" | "name" | "num">) {
   return `${item.num.toLocaleString("zh-CN")} ${item.name || item.id || "资源"}`;
 }
 
+function refreshButtonText(quote: ShopGameRefresh | null | undefined) {
+  if (!quote || quote.limit === 0) return "刷新";
+  if (quote.remaining === 0) return "今日刷新次数已耗尽";
+  const cost = quote.price.num === 0 ? "免费" : amountText(quote.price);
+  return `刷新 · ${cost} · 剩余次数：${quote.remaining}`;
+}
+
 function maximum(product: ShopProduct, ad: boolean) {
   return Math.min(
     product.maxQuantity,
@@ -158,8 +165,7 @@ function submitGameRefresh(account: string, request: ShopGameRefreshRequest) {
         return {
           action: "game-refresh",
           status: "cancelled",
-          message:
-            "账号或页面状态已变化，更新游戏商店尚未发送，请重新获取商店商品",
+          message: "账号或页面状态已变化，请重新进入折扣商店后确认刷新",
           shopId: "discount",
           costs: [],
         };
@@ -180,7 +186,7 @@ function submitGameRefresh(account: string, request: ShopGameRefreshRequest) {
           message:
             failure instanceof Error
               ? failure.message
-              : "更新游戏商店请求结果待确认",
+              : "折扣商店刷新结果待确认",
           shopId: "discount",
           costs: [],
         };
@@ -438,9 +444,9 @@ function GameRefreshDialog({
       onClose={dismiss}
     >
       <DialogHeader>
-        <DialogTitle id="shop-game-refresh-title">更新游戏商店</DialogTitle>
+        <DialogTitle id="shop-game-refresh-title">确认刷新</DialogTitle>
         <DialogDescription id="shop-game-refresh-description">
-          此操作会按下列费用和次数更新游戏内的折扣商店，更换可购买商品。请核对后确认。
+          刷新将更换折扣商店的商品，并使用 1 次刷新次数。
         </DialogDescription>
       </DialogHeader>
       <dl className={styles.facts}>
@@ -450,19 +456,16 @@ function GameRefreshDialog({
         <dd>折扣商店</dd>
         <dt>本次费用</dt>
         <dd>{quote.price.num === 0 ? "免费" : amountText(quote.price)}</dd>
-        <dt>已更新次数</dt>
-        <dd>{quote.refreshCount} 次</dd>
-        <dt>更新上限</dt>
-        <dd>{quote.limit} 次</dd>
+        <dt>今日已刷新</dt>
+        <dd>
+          {quote.refreshCount} / {quote.limit} 次
+        </dd>
         <dt>剩余次数</dt>
-        <dd>{quote.remaining} 次（本次将使用 1 次）</dd>
+        <dd>{quote.remaining} 次</dd>
       </dl>
-      <p className="text-sm text-muted-foreground">
-        仅查看当前商品，请使用“重新获取商店商品”，只读获取不消耗资源或更新次数。
-      </p>
       <DialogFooter>
         <Button type="button" onClick={confirm}>
-          确认更新游戏商店
+          确认刷新
         </Button>
         <Button
           type="button"
@@ -507,9 +510,7 @@ function PurchaseResult({ result }: { result: ShopPurchaseResult }) {
         </p>
       )}
       {result.status === "unknown" && (
-        <p>
-          请核对商品购买次数、余额与到账情况，勿重复购买。可点击“重新获取商店商品”只读核对。
-        </p>
+        <p>可重新进入商店核对购买次数、余额与到账情况，勿重复购买。</p>
       )}
     </div>
   );
@@ -519,7 +520,7 @@ function GameRefreshResult({ result }: { result: ShopGameRefreshResult }) {
   const labels = {
     completed: "已完成",
     unknown: "结果待确认",
-    rejected: "未更新",
+    rejected: "未刷新",
     cancelled: "已取消",
   };
   return (
@@ -528,9 +529,7 @@ function GameRefreshResult({ result }: { result: ShopGameRefreshResult }) {
       role="status"
       data-game-refresh-status={result.status}
     >
-      <p className="font-medium">
-        折扣商店 · 更新游戏商店 · {labels[result.status]}
-      </p>
+      <p className="font-medium">折扣商店 · 刷新 · {labels[result.status]}</p>
       {result.message && <p>{result.message}</p>}
       {result.costs.length > 0 && (
         <p>
@@ -539,9 +538,7 @@ function GameRefreshResult({ result }: { result: ShopGameRefreshResult }) {
         </p>
       )}
       {result.status === "unknown" && (
-        <p>
-          请核对更新次数、商品和余额，勿重复点击“更新游戏商店”。可点击“重新获取商店商品”只读核对。
-        </p>
+        <p>可重新进入折扣商店核对刷新次数、商品与余额，勿重复刷新。</p>
       )}
     </div>
   );
@@ -577,6 +574,11 @@ function ShopPanel({
   const canUpdateGameShop = Boolean(
     gameRefresh?.canRefresh && gameRefresh.token && gameRefresh.remaining > 0,
   );
+  const refreshLabel = refreshButtonText(gameRefresh);
+  const refreshHint =
+    view && shop === "discount" && !canUpdateGameShop
+      ? gameRefresh?.blockedReason || "暂时无法刷新"
+      : "";
   useEffect(() => {
     alive.current = true;
     return () => {
@@ -704,7 +706,7 @@ function ShopPanel({
     setRefreshConfirmation(null);
     setBusy(true);
     setError("");
-    setProgress("正在更新游戏商店，请等待结果…");
+    setProgress("正在刷新折扣商店…");
     const outcome = await submitGameRefresh(account, {
       shop: "discount",
       token: quote.token,
@@ -730,66 +732,33 @@ function ShopPanel({
               {view.nextRefreshTime > 0 && (
                 <>
                   {" "}
-                  · 游戏商店下次自动更新{" "}
-                  {formatGameTime(view.nextRefreshTime * 1000)}
+                  · 下次自动刷新 {formatGameTime(view.nextRefreshTime * 1000)}
                 </>
               )}
             </p>
           )}
         </div>
-        <div className={styles.actions}>
+        {shop === "discount" && (
           <Button
             type="button"
-            variant="outline"
             size="sm"
-            disabled={busy}
-            onClick={reloadProducts}
+            disabled={busy || !canUpdateGameShop}
+            aria-haspopup="dialog"
+            aria-describedby={
+              refreshHint && refreshHint !== refreshLabel
+                ? "shop-refresh-hint"
+                : undefined
+            }
+            onClick={chooseGameRefresh}
           >
-            <RefreshCw aria-hidden="true" />
-            重新获取商店商品
+            {refreshLabel}
           </Button>
-          {shop === "discount" && (
-            <Button
-              type="button"
-              size="sm"
-              disabled={busy || !canUpdateGameShop}
-              aria-haspopup="dialog"
-              aria-describedby="shop-game-refresh-info"
-              onClick={chooseGameRefresh}
-            >
-              更新游戏商店
-            </Button>
-          )}
-        </div>
+        )}
       </div>
-      {shop === "discount" && (
-        <section
-          id="shop-game-refresh-info"
-          className={styles.gameRefresh}
-          aria-label="游戏商店更新信息"
-        >
-          <p className="text-sm text-muted-foreground">
-            更新将更换当前商品，并使用一次更新次数。
-          </p>
-          {gameRefresh && (
-            <p className="text-sm">
-              本次费用：
-              {gameRefresh.price.num === 0
-                ? "免费"
-                : amountText(gameRefresh.price)}
-              ；已更新 {gameRefresh.refreshCount} / {gameRefresh.limit} 次；剩余{" "}
-              {gameRefresh.remaining} 次
-            </p>
-          )}
-          {view && (gameRefresh?.blockedReason || !canUpdateGameShop) && (
-            <p className="text-sm text-muted-foreground">
-              {gameRefresh?.blockedReason ||
-                (gameRefresh?.remaining === 0
-                  ? "已无剩余更新次数"
-                  : "当前无法更新游戏商店，请重新获取商店商品后查看最新状态")}
-            </p>
-          )}
-        </section>
+      {refreshHint && refreshHint !== refreshLabel && (
+        <p id="shop-refresh-hint" className="text-sm text-muted-foreground">
+          {refreshHint}
+        </p>
       )}
       {busy && (
         <p className={styles.notice} role="status">
@@ -804,9 +773,17 @@ function ShopPanel({
         <GameRefreshResult result={refreshResult} />
       )}
       {error && (
-        <p className={`${styles.notice} text-destructive`} role="alert">
-          {error}
-        </p>
+        <div className={styles.notice} role="alert">
+          <p className="text-destructive">{error}</p>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={reloadProducts}
+          >
+            重试读取
+          </Button>
+        </div>
       )}
       {view?.hint && (
         <p className="text-sm text-muted-foreground">{view.hint}</p>

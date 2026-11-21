@@ -438,7 +438,7 @@ test('game refresh performs two free updates then one explicitly confirmed paid 
   const result = await updateGameShop(f); assert.equal(result.action, 'game-refresh'); assert.equal(result.status, 'completed');
   assert.equal(f.stock.get('RUBY'), 950); assert.equal(f.shared.refreshCount, 3);
   assert.equal(f.ledger.confirmedCounters().manualShopDiamonds, 50); assert.equal(f.ledger.snapshot().counters.diamonds ?? 0, 0);
-  const view = await f.read('discount'); assert.equal(view.gameRefresh.canRefresh, false); assert.match(view.gameRefresh.blockedReason, /次数已用完/);
+  const view = await f.read('discount'); assert.equal(view.gameRefresh.canRefresh, false); assert.match(view.gameRefresh.blockedReason, /今日刷新次数已耗尽/);
   assert(refreshWrites(f).every(([, body, response]) => Object.keys(body).length === 0 && response === 'DiscountShopResponse'));
 });
 test('game refresh fees use the first upper interval and VIP extends the real cap', async () => {
@@ -509,7 +509,7 @@ test('explicit refresh rejection and unsent writes release only their reservatio
 test('bad refresh configuration disables only game refresh and does not prevent reading products', async () => {
   const f = fixture(); f.config.tables.ShopRefreshCfg.data[0].cost = ['GOLD', 1];
   const view = await f.read('discount'); assert.equal(view.gameRefresh.canRefresh, false); assert(view.products[0].canBuy);
-  assert.equal(refreshWrites(f).length, 0); assert.match(view.gameRefresh.blockedReason, /更新费用/);
+  assert.equal(refreshWrites(f).length, 0); assert.match(view.gameRefresh.blockedReason, /刷新费用/);
 });
 test('concurrent game refresh quotes reserve the same generation only once', async () => {
   const f = fixture();

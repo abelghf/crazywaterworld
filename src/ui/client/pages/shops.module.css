@@ -9,7 +9,6 @@
     min-inline-size: 0;
   }
   .toolbar,
-  .actions,
   .balances,
   .purchaseRow,
   .productHeading {
@@ -59,8 +58,7 @@
     overflow-wrap: anywhere;
     font-variant-numeric: tabular-nums;
   }
-  .result,
-  .gameRefresh {
+  .result {
     display: grid;
     gap: 4px;
     padding: 10px 12px;
@@ -72,9 +70,6 @@
     overflow-wrap: anywhere;
   }
   @media (max-width: 640px) {
-    .actions {
-      width: 100%;
-    }
     .purchaseRow {
       justify-content: flex-end;
     }

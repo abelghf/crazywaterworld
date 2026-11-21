@@ -195,7 +195,7 @@ function gameRefresh(value: unknown, shop: ShopId): ShopGameRefresh | null {
     typeof value.token !== "string" ||
     (value.canRefresh && (!value.token || value.remaining < 1))
   )
-    throw new Error("更新游戏商店的费用或次数格式无效，请重新获取商店商品");
+    throw new Error("刷新折扣商店的费用或次数格式无效，请重试读取");
   return {
     refreshCount: value.refreshCount,
     limit: value.limit,
@@ -284,7 +284,7 @@ export function parseShopGameRefresh(value: unknown): ShopGameRefreshResult {
     !Array.isArray(value.costs)
   )
     throw new Error(
-      "更新游戏商店的回执无法确认，请核对商品、更新次数与余额，勿重复更新",
+      "刷新折扣商店的回执无法确认，请核对商品、刷新次数与余额，勿重复刷新",
     );
   return {
     action: "game-refresh",

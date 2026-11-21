@@ -3459,7 +3459,7 @@ export function createConsole({ host = '127.0.0.1', port = 17321, onLog, recover
           if (typeof payload.shop !== 'string' || typeof payload.token !== 'string' || !payload.token || payload.token.length > 128
             || typeof payload.paid !== 'boolean') throw Error('商店操作参数无效，请重新获取商品后重试');
           if (gameRefresh) {
-            if (payload.shop !== 'discount') throw Error('更新游戏商店仅支持折扣商店');
+            if (payload.shop !== 'discount') throw Error('仅折扣商店支持刷新');
           } else if (!Number.isSafeInteger(payload.id) || payload.id <= 0
             || !Number.isSafeInteger(payload.quantity) || payload.quantity <= 0 || payload.quantity > 2147483647) {
             throw Error('购买参数无效，请重新获取商品后重试');
@@ -3499,7 +3499,7 @@ export function createConsole({ host = '127.0.0.1', port = 17321, onLog, recover
             shopId: shop, ...(gameRefresh ? { action: 'game-refresh' } : { productId: payload.id, quantity: payload.quantity }), status: result.status,
           });
           return result;
-        }, gameRefresh ? '更新游戏商店' : '商店购买', { recoverFormation: false }));
+        }, gameRefresh ? '刷新折扣商店' : '商店购买', { recoverFormation: false }));
         return;
       }
       if (['GET /api/chat', 'GET /api/chat/profile', 'GET /api/chat/emojis', 'POST /api/chat/send'].includes(route)) {

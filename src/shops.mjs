@@ -194,7 +194,7 @@ function checkSpendAtSend(options, stock, step) {
   const settings = options.getSettings?.() ?? options.settings;
   for (const { id, num } of step.costs) {
     if ((stock.get(id) ?? 0) - num < resourceReserve(settings, id, step)) {
-      throw Object.assign(new Error('当前余额不足或会低于保留数量，请重新获取商店商品'), { notSent: true });
+      throw Object.assign(new Error('当前余额不足或会低于保留数量，请重新进入商店'), { notSent: true });
     }
   }
 }
@@ -263,41 +263,41 @@ function settleRefreshUnknowns(ledger, identity, observed, balances) {
   return pending;
 }
 function refreshBonus(effects) {
-  if (!Array.isArray(effects)) throw new Error('商店更新权益配置缺失');
+  if (!Array.isArray(effects)) throw new Error('商店刷新权益配置缺失');
   const matches = effects.filter(pair => Array.isArray(pair) && pair[0] === '折扣商店刷新次数');
-  if (matches.length > 1 || (matches.length && !whole(matches[0][1]))) throw new Error('商店更新权益配置异常');
+  if (matches.length > 1 || (matches.length && !whole(matches[0][1]))) throw new Error('商店刷新权益配置异常');
   return matches[0]?.[1] ?? 0;
 }
 async function discountRefreshLimit(client, config, player, enabled, protocol) {
   const cfg = rows(config, 'ShopRefreshCfg');
   if (!cfg.length || cfg.some((row, index) => !whole(row.times) || row.times < 1 || (index > 0 && row.times <= cfg[index - 1].times))) {
-    throw new Error('缺少有效的游戏商店更新次数配置');
+    throw new Error('缺少有效的游戏商店刷新次数配置');
   }
   const vipLevel = player?.vip?.vipLevel;
   if (!whole(vipLevel)) throw new Error('无法确认当前VIP等级');
   const vip = rows(config, 'VipLevelCfg').find(row => row.level === vipLevel);
-  if (!vip && vipLevel !== 0) throw new Error('缺少当前VIP商店更新权益配置');
+  if (!vip && vipLevel !== 0) throw new Error('缺少当前VIP商店刷新权益配置');
   let limit = cfg.at(-1).times + (vip ? refreshBonus(vip.effects) : 0);
   const cards = rows(config, 'MonthCardCfg');
-  if (!cards.length) throw new Error('缺少月卡商店更新权益配置');
+  if (!cards.length) throw new Error('缺少月卡商店刷新权益配置');
   const withBonus = cards.filter(row => refreshBonus(row.effectList) > 0);
   if (withBonus.length) {
     assertProtocol(protocol, ['MonthCardRequest', 'MonthCardResponse']);
     checkEnabled(enabled);
     const view = await request(client, 'MonthCardRequest', {}, 'MonthCardResponse');
     checkEnabled(enabled);
-    if (!Array.isArray(view.cardItem) || new Set(view.cardItem.map(row => row.type ?? 1)).size !== view.cardItem.length) throw new Error('无法确认月卡更新权益');
+    if (!Array.isArray(view.cardItem) || new Set(view.cardItem.map(row => row.type ?? 1)).size !== view.cardItem.length) throw new Error('无法确认月卡刷新权益');
     for (const card of view.cardItem) {
       const type = card.type ?? 1, endTime = card.endTime ?? 0;
-      if (![1, 2].includes(type) || !Number.isSafeInteger(endTime) || endTime < -1) throw new Error('月卡更新权益状态异常');
+      if (![1, 2].includes(type) || !Number.isSafeInteger(endTime) || endTime < -1) throw new Error('月卡刷新权益状态异常');
       if (endTime !== -1 && endTime <= clock(client)) continue;
       const name = type === 1 ? '普通月卡' : '高级月卡';
       const row = cards.find(entry => entry.id === name);
-      if (!row) throw new Error('缺少当前月卡更新权益配置');
+      if (!row) throw new Error('缺少当前月卡刷新权益配置');
       limit += refreshBonus(row.effectList);
     }
   }
-  if (!whole(limit)) throw new Error('游戏商店更新次数上限异常');
+  if (!whole(limit)) throw new Error('游戏商店刷新次数上限异常');
   return { cfg, limit };
 }
 async function gameRefreshQuote(client, config, { raw, identity, state, player, enabled, protocol, inventory, gateReason, icon }) {
@@ -311,17 +311,17 @@ async function gameRefreshQuote(client, config, { raw, identity, state, player, 
   Object.defineProperty(quote, 'pending', { value: pending });
   try {
     assertProtocol(protocol, ['DiscountShopRefreshRequest', 'DiscountShopResponse']);
-    if (!whole(count) || !whole(raw.refreshTime ?? 0)) throw new Error('无法确认游戏商店更新次数或周期');
+    if (!whole(count) || !whole(raw.refreshTime ?? 0)) throw new Error('无法确认游戏商店刷新次数或周期');
     const { cfg, limit } = await discountRefreshLimit(client, config, player, enabled, protocol);
     const cost = (cfg.find(row => row.times >= count + 1) ?? cfg.at(-1)).cost;
-    if (!Array.isArray(cost) || (cost.length && (cost.length !== 2 || cost[0] !== 'RUBY' || !whole(cost[1])))) throw new Error('无法确认游戏商店更新费用');
+    if (!Array.isArray(cost) || (cost.length && (cost.length !== 2 || cost[0] !== 'RUBY' || !whole(cost[1])))) throw new Error('无法确认游戏商店刷新费用');
     quote.limit = limit;
     quote.remaining = Math.max(0, limit - count);
     quote.price.num = cost.length ? cost[1] : 0;
-    if (pending) quote.blockedReason ||= '上一次更新游戏商店结果待确认，请重新获取商品核对，勿重复更新';
-    if (count >= limit) quote.blockedReason ||= '今日更新游戏商店次数已用完';
+    if (pending) quote.blockedReason ||= '上一次刷新折扣商店结果待确认，请重新进入商店核对，勿重复刷新';
+    if (count >= limit) quote.blockedReason ||= '今日刷新次数已耗尽';
     if ((inventory.get('RUBY') ?? 0) < quote.price.num) quote.blockedReason ||= '钻石余额不足';
-    if (raw.refreshTime > 0 && clock(client) >= raw.refreshTime) quote.blockedReason ||= '商店重置时间已到，请重新获取商店商品';
+    if (raw.refreshTime > 0 && clock(client) >= raw.refreshTime) quote.blockedReason ||= '商店重置时间已到，请重新进入商店';
     if (!quote.blockedReason) {
       quote.canRefresh = true;
       quote.token = crypto.randomUUID();
@@ -396,7 +396,7 @@ async function readShopSnapshot(client, config, options) {
       const rewardAssets = assets.map(item => displayAsset(config, item, null)).filter(Boolean).map(({ id, num }) => ({ id, num }));
       const asset = displayAsset(config, assets[0], icon);
       const available = inventory.map.get('RUBY') ?? 0;
-      const blocked = gate.reason || (gameRefresh?.pending ? '更新游戏商店结果待确认，请先重新获取商品核对' : '')
+      const blocked = gate.reason || (gameRefresh?.pending ? '刷新折扣商店结果待确认，请先重新进入商店核对' : '')
         || (!asset || rewardAssets.length !== assets.length ? '商品奖励无法确认' : isBuy ? '本期商品已购买' : priceNum > available ? '钻石余额不足' : '');
       const unknown = settleUnknowns(ledger, tokenPrefix(identity, shopId, raw.id), isBuy ? 1 : 0, inventory.map, cycle);
       const signature = JSON.stringify([cycle, fingerprint(shop, { ...raw, isBuy }, Math.floor(raw.discount * 100), null, asset)]);
@@ -460,7 +460,7 @@ async function readShopSnapshot(client, config, options) {
       runtime.tokens.delete(gameRefresh.token);
       gameRefresh.token = '';
       gameRefresh.canRefresh = false;
-      gameRefresh.blockedReason ||= '当前商品有购买结果待确认，请先重新获取商店商品核对后再更新游戏商店';
+      gameRefresh.blockedReason ||= '当前商品有购买结果待确认，请重新进入折扣商店核对后再刷新';
     }
   }
   const currencies = [...new Set(result.map(product => product.price.id).filter(Boolean))];
@@ -480,15 +480,15 @@ export async function readShop(client, config, options) { return readShopSnapsho
 // This mutation is intentionally separate from readShop: GET never renews game goods.
 export async function refreshDiscountShop(client, config, options) {
   const { shop: shopId, token, paid, player, state, ledger, guard, enabled = () => true, protocol = client?.protocol } = options;
-  if (shopId !== 'discount') throw new Error('更新游戏商店仅支持折扣商店');
-  if (typeof token !== 'string' || !token || !guardShape(guard)) throw new Error('更新凭据或消费保护无效，请重新获取商店商品');
-  if (!ledger || typeof ledger.reserve !== 'function' || typeof ledger.confirm !== 'function' || typeof ledger.keyRecords !== 'function') throw new Error('商店更新防重账本尚未就绪');
+  if (shopId !== 'discount') throw new Error('仅折扣商店支持刷新');
+  if (typeof token !== 'string' || !token || !guardShape(guard)) throw new Error('刷新凭据或消费保护无效，请重新进入商店');
+  if (!ledger || typeof ledger.reserve !== 'function' || typeof ledger.confirm !== 'function' || typeof ledger.keyRecords !== 'function') throw new Error('商店刷新防重账本尚未就绪');
   assertProtocol(protocol, ['DiscountShopRefreshRequest', 'DiscountShopResponse']);
   checkEnabled(enabled);
   const runtime = ensureState(state), identity = roleIdentity(player), issued = runtime.tokens.get(token);
   if (issued?.action !== 'game-refresh' || issued.identity !== identity.key || issued.shop !== shopId
     || issued.expiresAt <= Date.now() || runtime.inFlight.has(token)) {
-    return { action: 'game-refresh', status: 'rejected', message: '更新报价已失效，请重新获取商店商品后确认', shopId, costs: [] };
+    return { action: 'game-refresh', status: 'rejected', message: '刷新报价已失效，请重新进入商店后确认', shopId, costs: [] };
   }
   runtime.inFlight.add(token);
   let reservation, ticket, step, prepared = false, settled = false, sent = false, ledgerKey;
@@ -501,14 +501,14 @@ export async function refreshDiscountShop(client, config, options) {
       settled = true;
     }
     if (reservation) { try { ledger.cancel(reservation); } catch { /* keep durable state if cancellation fails */ } }
-    return result(enabled() ? 'rejected' : 'cancelled', error.message || '游戏商店更新未发送');
+    return result(enabled() ? 'rejected' : 'cancelled', error.message || '游戏商店刷新未发送');
   };
   const keepUnknown = async error => {
     if (prepared && !settled) {
-      try { await guard.cancel(step, ticket, { error: { message: error?.message || '游戏商店更新结果待确认' } }); } catch { /* retain uncertain spend */ }
+      try { await guard.cancel(step, ticket, { error: { message: error?.message || '游戏商店刷新结果待确认' } }); } catch { /* retain uncertain spend */ }
       settled = true;
     }
-    return result('unknown', '更新游戏商店已发送，但次数或扣款尚未确认；请使用“重新获取商店商品”核对，勿重复更新。');
+    return result('unknown', '刷新请求已发送，次数或扣款尚待核对。');
   };
   const quoteMatches = view => {
     const quote = view.gameRefresh, record = quote && runtime.tokens.get(quote.token);
@@ -517,13 +517,13 @@ export async function refreshDiscountShop(client, config, options) {
   const readCurrent = () => readShopSnapshot(client, config, { ...options, state: runtime });
   try {
     const first = await readCurrent();
-    if (!quoteMatches(first)) return await releaseUnsent(new Error(first.gameRefresh?.blockedReason || '游戏商店商品、次数或更新费用已变化，请重新获取后确认'));
+    if (!quoteMatches(first)) return await releaseUnsent(new Error(first.gameRefresh?.blockedReason || '游戏商店商品、次数或刷新费用已变化，请重新进入商店后确认'));
     const quote = first.gameRefresh;
-    if (quote.price.num > 0 && paid !== true) return await releaseUnsent(new Error('更新游戏商店需要单独确认本次钻石费用'));
+    if (quote.price.num > 0 && paid !== true) return await releaseUnsent(new Error('刷新折扣商店需要单独确认本次钻石费用'));
     costs = quote.price.num > 0 ? [{ id: 'RUBY', num: quote.price.num }] : [];
     const cycle = cycleKey(client, byShopId.get('discount'), first.nextRefreshTime);
     const expectedRefreshCount = quote.refreshCount + 1;
-    step = { kind: 'shopRefresh', scope: 'manual', request: 'DiscountShopRefreshRequest', body: {}, costs, label: '更新游戏商店',
+    step = { kind: 'shopRefresh', scope: 'manual', request: 'DiscountShopRefreshRequest', body: {}, costs, label: '刷新折扣商店',
       verifyGrowth: async nextClient => {
         if (nextClient?.connected === false || !enabled() || roleIdentity(player).key !== identity.key) return false;
         const after = await request(nextClient, 'DiscountShopRequest', {}, 'DiscountShopResponse');
@@ -534,7 +534,7 @@ export async function refreshDiscountShop(client, config, options) {
     prepared = true;
     checkEnabled(enabled);
     const final = await readCurrent();
-    if (!quoteMatches(final)) return await releaseUnsent(new Error(final.gameRefresh?.blockedReason || '发送前游戏商店更新报价已变化，请重新获取后确认'));
+    if (!quoteMatches(final)) return await releaseUnsent(new Error(final.gameRefresh?.blockedReason || '发送前游戏商店刷新报价已变化，请重新进入商店后确认'));
     const priceNum = quote.price.num;
     const details = { kind: 'shopRefresh', identity: identity.key, cycle, expectedRefreshCount,
       baselineRefreshCount: quote.refreshCount, priceNum, baselineStock: { RUBY: final.stock.get('RUBY') ?? 0 },
@@ -544,7 +544,7 @@ export async function refreshDiscountShop(client, config, options) {
     const beforeSend = () => {
       if (!enabled() || client?.connected === false || roleIdentity(player).key !== identity.key
         || issued.expiresAt <= Date.now() || clock(client) >= issued.resetAt) {
-        throw Object.assign(new Error('账号或报价已变化，请重新获取商店商品后确认'), { notSent: true });
+        throw Object.assign(new Error('账号或报价已变化，请重新进入商店后确认'), { notSent: true });
       }
       checkSpendAtSend(options, final.stock, step);
     };
@@ -561,18 +561,18 @@ export async function refreshDiscountShop(client, config, options) {
     try {
       after = await request(client, 'DiscountShopRequest', {}, 'DiscountShopResponse');
       checkEnabled(enabled);
-      if (!Array.isArray(after?.shopItem)) return await keepUnknown(new Error('商店更新状态不完整'));
+      if (!Array.isArray(after?.shopItem)) return await keepUnknown(new Error('商店刷新状态不完整'));
       balances = (await readBalances(client, config, enabled)).map;
     } catch (error) { return await keepUnknown(error); }
     if (!whole(after.refreshTime ?? 0) || !refreshEvidence(details, { count: after.refreshCount ?? 0, cycle: cycleKey(client, byShopId.get('discount'), after.refreshTime ?? 0) }, balances)) {
-      return await keepUnknown(new Error('商店更新次数或扣款尚未同步'));
+      return await keepUnknown(new Error('商店刷新次数或扣款尚未同步'));
     }
     ledger.confirm(reservation);
     if (ticket?.id && ticket?.day) ledger.confirm(ticket);
     try { ledger.releaseCompletedKey(ledgerKey); } catch { /* keep confirmed durable state */ }
     try { await guard.after(step, ticket, { ok: true, status: 'completed' }); } catch { /* confirmed writes cannot be rolled back by observers */ }
     settled = true;
-    return result('completed', '游戏中的折扣商店已更新，已回读确认更新次数' + (priceNum > 0 ? '及钻石扣款。' : '，本次免费。'));
+    return result('completed', '游戏中的折扣商店已刷新，已回读确认刷新次数' + (priceNum > 0 ? '及钻石扣款。' : '，本次免费。'));
   } catch (error) {
     return sent ? await keepUnknown(error) : await releaseUnsent(error);
   } finally {
@@ -627,7 +627,7 @@ export async function buyShopProduct(client, config, options) {
   const runtime = ensureState(state), identity = roleIdentity(player), issued = runtime.tokens.get(token);
   if (!issued || issued.shop !== shopId || issued.productId !== productId || issued.identity !== identity.key
     || issued.expiresAt <= Date.now() || runtime.inFlight.has(token)) {
-    return result('rejected', '购买报价已失效，请重新获取商店商品后确认', shopId, productId, quantity);
+    return result('rejected', '购买报价已失效，请核对最新商品后确认', shopId, productId, quantity);
   }
   runtime.inFlight.add(token);
   const requestName = shop.kind === 'discount' ? 'DiscountShopBuyRequest' : shop.kind === 'ad' ? 'GotAdvRewardRequest' : 'BuyShopProductRequest';
@@ -650,7 +650,7 @@ export async function buyShopProduct(client, config, options) {
       settled = true;
     }
     consumeToken();
-    return result('unknown', '购买已发送，但商品次数或库存尚未同步；已阻止重复购买，请重新获取商店商品核对。', shopId, productId, quantity, [],
+    return result('unknown', '购买已发送，但商品次数或库存尚未同步；已阻止重复购买，请重新进入商店核对。', shopId, productId, quantity, [],
       costs.map(item => ({ ...item, name: materialName(config, item.id) })));
   };
   const stillSameRole = currentClient => currentClient?.connected !== false && roleIdentity(player).key === identity.key;
@@ -658,13 +658,13 @@ export async function buyShopProduct(client, config, options) {
     const first = await readShopSnapshot(client, config, { shop: shopId, player, clientInfo, settings: getSettings?.() ?? settings,
       ledger, state: runtime, icon, enabled, protocol });
     current = first.products.find(item => item.id === productId);
-    if (!current) return await releaseUnsent(new Error('商品已下架，请重新获取商店商品'));
+    if (!current) return await releaseUnsent(new Error('商品已下架，请重新进入商店'));
     if (!current.canBuy) return await releaseUnsent(new Error(current.blockedReason || '商品当前不可购买'));
     const freshIssued = runtime.tokens.get(current.token);
-    if (!freshIssued || freshIssued.signature !== issued.signature || current.buyTimes !== issued.baseline) return await releaseUnsent(new Error('商品价格、库存或购买资格已变化，请重新获取商店商品'));
+    if (!freshIssued || freshIssued.signature !== issued.signature || current.buyTimes !== issued.baseline) return await releaseUnsent(new Error('商品价格、库存或购买资格已变化，请重新进入商店'));
     if (current.price.id === 'RUBY' && current.price.num > 0 && paid !== true) return await releaseUnsent(new Error('钻石购买需要再次确认'));
     if ((shop.kind === 'ad' || shop.kind === 'discount') && quantity !== 1) return await releaseUnsent(new Error('该商店商品一次只能购买一个'));
-    if (quantity > current.maxQuantity || quantity > issued.quantityCap) return await releaseUnsent(new Error('当前余额或限购次数不足，请重新获取商店商品'));
+    if (quantity > current.maxQuantity || quantity > issued.quantityCap) return await releaseUnsent(new Error('当前余额或限购次数不足，请重新进入商店'));
     const baseline = current.buyTimes;
     expectedCount = shop.kind === 'discount' ? 1 : baseline + quantity;
     if (shop.kind !== 'ad' && current.price.num > 0) costs = [{ id: current.price.id, num: current.price.num * quantity }];
@@ -693,7 +693,7 @@ export async function buyShopProduct(client, config, options) {
     const final = finalView.products.find(item => item.id === productId), finalToken = final && runtime.tokens.get(final.token);
     if (!enabled() || !final || !final.canBuy || !finalToken || finalToken.signature !== issued.signature
       || final.buyTimes !== baseline || quantity > final.maxQuantity) {
-      return await releaseUnsent(new Error('发送前商店价格、库存、资格或购买次数已变化，请重新获取商店商品后重试'), !enabled());
+      return await releaseUnsent(new Error('发送前商店价格、库存、资格或购买次数已变化，请重新进入商店后重试'), !enabled());
     }
     outcomeRewards = finalToken.rewards ?? outcomeRewards;
     const expectedChanges = expectedStockChanges(outcomeRewards, costs, quantity);
@@ -714,7 +714,7 @@ export async function buyShopProduct(client, config, options) {
       const waitedProduct = afterWait.products.find(item => item.id === productId);
       const waitedToken = waitedProduct && runtime.tokens.get(waitedProduct.token);
       if (!waitedProduct?.canBuy || !waitedToken || waitedToken.signature !== issued.signature) {
-        return await releaseUnsent(new Error('广告等待后商品资格或领取次数已变化，请重新获取商店商品后再试'));
+        return await releaseUnsent(new Error('广告等待后商品资格或领取次数已变化，请重新进入商店后再试'));
       }
       details.baselineStock = Object.fromEntries(Object.keys(expectedChanges).map(id => [id, afterWait.stock.get(id) ?? 0]));
       ledger.updateKeyDetails(ledgerKey, details);
@@ -722,7 +722,7 @@ export async function buyShopProduct(client, config, options) {
     const beforeSend = () => {
       if (!enabled() || !stillSameRole(client)) throw Object.assign(new Error('操作已暂停或账号已切换'), { notSent: true });
       if (Date.now() >= issued.expiresAt || clock(client) >= finalView.priceValidUntil) {
-        throw Object.assign(new Error('购买报价已过期，请重新获取商店商品后确认'), { notSent: true });
+        throw Object.assign(new Error('购买报价已过期，请重新进入商店后确认'), { notSent: true });
       }
       checkSpendAtSend(options, finalView.stock, step);
     };

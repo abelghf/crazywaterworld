@@ -46,8 +46,6 @@ const quantity = (id) =>
     name: `${BLUEPRINT}购买份数`,
     exact: true,
   });
-const refresh = () =>
-  panel().getByRole("button", { name: "重新获取商店商品", exact: true });
 const confirmation = () =>
   page.getByRole("dialog", { name: "确认购买", exact: true });
 const receipt = (status) =>
@@ -62,18 +60,16 @@ const shopResponse = (response, shop, account) => {
 };
 async function ready(id = VIP_PRODUCT) {
   await product(id).waitFor();
-  await page.waitForFunction(() => {
-    const button = [...document.querySelectorAll("#tab-shops button")].find(
-      (item) => item.textContent.trim() === "重新获取商店商品",
-    );
-    return button && !button.disabled;
-  });
+  await panel().locator('[aria-busy="false"]').waitFor();
 }
-async function choose(shop) {
+function shopTab(shop) {
   const title = SHOP_FIXTURE_CATALOG.find((row) => row.id === shop).title;
-  const button = panel()
+  return panel()
     .getByRole("group", { name: "商店分类" })
     .getByRole("button", { name: title, exact: true });
+}
+async function choose(shop) {
+  const button = shopTab(shop);
   if ((await button.getAttribute("aria-pressed")) !== "true") {
     const response = page.waitForResponse((row) => shopResponse(row, shop));
     await button.click();
@@ -81,13 +77,10 @@ async function choose(shop) {
   }
   await panel().locator("tr[data-product-id]").first().waitFor();
 }
-async function reloadShop(shop = "vip", account = "a") {
-  const response = page.waitForResponse((row) =>
-    shopResponse(row, shop, account),
-  );
-  await refresh().click();
-  assert.equal((await response).status(), 200);
-  await ready(shop === "arena" ? ARENA_PRODUCT : VIP_PRODUCT);
+async function reenterShop(shop, id) {
+  await choose("arena");
+  await choose(shop);
+  await ready(id);
 }
 async function select(account) {
   await page.evaluate(
@@ -120,17 +113,9 @@ const gamePosts = () =>
     (row) => row.path === "/api/shops/game-refresh" && row.method === "POST",
   );
 const updateButton = () =>
-  panel().getByRole("button", { name: "更新游戏商店", exact: true });
+  panel().getByRole("button", { name: /^(刷新|今日刷新次数已耗尽)/ });
 const updateDialog = () =>
-  page.getByRole("dialog", { name: "更新游戏商店", exact: true });
-async function rereadDiscount() {
-  const read = page.waitForResponse((response) =>
-    shopResponse(response, "discount", "a"),
-  );
-  await refresh().click();
-  assert.equal((await read).status(), 200);
-  await ready(a.state.discount[0].id);
-}
+  page.getByRole("dialog", { name: "确认刷新", exact: true });
 async function confirmGameRefresh(double = false) {
   const written = page.waitForResponse(
     (response) =>
@@ -142,14 +127,14 @@ async function confirmGameRefresh(double = false) {
   if (double) {
     await updateDialog().evaluate((dialog) => {
       const button = [...dialog.querySelectorAll("button")].find(
-        (item) => item.textContent.trim() === "确认更新游戏商店",
+        (item) => item.textContent.trim() === "确认刷新",
       );
       button.click();
       button.click();
     });
   } else
     await updateDialog()
-      .getByRole("button", { name: "确认更新游戏商店", exact: true })
+      .getByRole("button", { name: "确认刷新", exact: true })
       .click();
   const response = await written;
   assert.equal(response.status(), 200, await response.text());
@@ -406,7 +391,7 @@ try {
     await receipt("rejected").waitFor();
     assert.match(
       await receipt("rejected").textContent(),
-      /未购买[\s\S]*重新获取/,
+      /未购买[\s\S]*报价已失效/,
     );
     assert.equal(a.state.writes.length, 0);
     await ready(VIP_PRODUCT);
@@ -511,6 +496,7 @@ try {
   });
 
   await test("A读取延迟时切到B，迟到商品响应不会覆盖B余额", async () => {
+    await choose("arena");
     const started = deferred(),
       release = deferred(),
       finished = deferred();
@@ -527,7 +513,7 @@ try {
       },
       { times: 1 },
     );
-    await refresh().click();
+    await shopTab("vip").click();
     try {
       await started.promise;
       await select("b");
@@ -624,7 +610,7 @@ try {
     assert.equal(posts().length, count + 1);
     assert.equal(a.state.writes.length, writes + 1);
     assert.equal(a.state.balances.RUBY, ruby - 25);
-    await reloadShop();
+    await reenterShop("vip", VIP_PRODUCT);
     assert.equal(posts().length, count + 1);
     await screenshot("unknown-response-1280.png");
   });
@@ -639,7 +625,7 @@ try {
     assert.match(await receipt("unknown").textContent(), /结果待核对/);
     assert.match(await receipt("unknown").textContent(), /勿重复购买/);
     assert.equal(await purchase(VIP_PRODUCT).isDisabled(), true);
-    await reloadShop();
+    await reenterShop("vip", VIP_PRODUCT);
     assert.equal(posts().length, count + 1);
     assert.equal(a.state.writes.length, writes + 1);
     assert.equal(a.state.balances.RUBY, ruby);
@@ -647,16 +633,39 @@ try {
     await noOverflow();
     await screenshot("unknown-pending-390.png");
     a.commitPending();
-    await reloadShop();
+    await reenterShop("vip", VIP_PRODUCT);
     assert.equal(a.state.balances.RUBY, ruby - 25);
     assert.equal(a.state.writes.length, writes + 1);
   });
 
-  await test("折扣商店两个按钮区分明确，取消和重新获取均不更新游戏商店", async () => {
+  await test("读取失败可以重试，只读重试不消耗刷新次数", async () => {
+    const writes = gamePosts().length;
+    await page.route("**/api/shops?*", (route) => route.abort("failed"), {
+      times: 1,
+    });
+    await shopTab("discount").click();
+    const retry = panel().getByRole("button", { name: "重试读取" });
+    await retry.waitFor();
+    assert.equal(await updateButton().isDisabled(), true);
+    assert.equal(await updateButton().textContent(), "刷新");
+    await retry.click();
+    await ready(a.state.discount[0].id);
+    assert.equal(await retry.count(), 0);
+    assert.equal(gamePosts().length, writes);
+  });
+
+  await test("折扣商店仅显示含费用与剩余次数的刷新按钮，取消和重新进入均只读", async () => {
     await page.setViewportSize({ width: 1280, height: 1000 });
     await choose("discount");
     await ready(a.state.discount[0].id);
-    assert.equal(await updateButton().isEnabled(), true);
+    assert.equal(
+      await updateButton().textContent(),
+      "刷新 · 免费 · 剩余次数：3",
+    );
+    assert.equal(
+      await panel().getByRole("button", { name: "重新获取商店商品" }).count(),
+      0,
+    );
     const writes = a.state.writes.length,
       postsBefore = gamePosts().length,
       ruby = a.state.balances.RUBY,
@@ -668,7 +677,7 @@ try {
       .getByRole("button", { name: "取消", exact: true })
       .click();
     await updateDialog().waitFor({ state: "hidden" });
-    await rereadDiscount();
+    await reenterShop("discount", a.state.discount[0].id);
     assert.equal(a.state.writes.length, writes);
     assert.equal(gamePosts().length, postsBefore);
     assert.equal(a.state.refreshCount, count);
@@ -679,7 +688,7 @@ try {
     await screenshot("discount-actions-390.png");
     await page.setViewportSize({ width: 1280, height: 1000 });
   });
-  await test("免费更新经独立确认且双击只发送一次，随后只读重新获取商品", async () => {
+  await test("免费刷新经独立确认且双击只发送一次，随后只读重新获取商品", async () => {
     const writes = a.state.writes.length,
       postsBefore = gamePosts().length,
       ruby = a.state.balances.RUBY,
@@ -699,11 +708,15 @@ try {
     assert.equal(a.state.balances.RUBY, ruby);
     assert.notEqual(a.state.discount[0].id, oldId);
   });
-  await test("付费更新显示50钻与剩余次数，确认后扣款且次数用完禁用更新", async () => {
+  await test("付费刷新显示50钻与剩余次数，确认后扣款且次数用完禁用刷新", async () => {
     a.state.refreshCount = 2;
-    await rereadDiscount();
+    await reenterShop("discount", a.state.discount[0].id);
     const ruby = a.state.balances.RUBY,
       count = gamePosts().length;
+    assert.equal(
+      await updateButton().textContent(),
+      "刷新 · 50 钻石 · 剩余次数：1",
+    );
     await updateButton().click();
     await updateDialog().waitFor();
     assert.match(await updateDialog().textContent(), /50.*钻石/s);
@@ -716,15 +729,14 @@ try {
     assert.equal(gamePosts().length, count + 1);
     assert.equal(JSON.parse(gamePosts().at(-1).body).paid, true);
     assert.equal(await updateButton().isDisabled(), true);
-    assert.equal(await refresh().isEnabled(), true);
-    await rereadDiscount();
+    assert.equal(await updateButton().textContent(), "今日刷新次数已耗尽");
+    await reenterShop("discount", a.state.discount[0].id);
     assert.equal(gamePosts().length, count + 1);
     await screenshot("discount-updated-1280.png");
   });
-  await test("更新游戏商店按钮仅在折扣商店显示", async () => {
+  await test("刷新按钮仅在折扣商店显示", async () => {
     await choose("arena");
     assert.equal(await updateButton().count(), 0);
-    assert.equal(await refresh().isEnabled(), true);
     await choose("vip");
     assert.equal(await updateButton().count(), 0);
   });
