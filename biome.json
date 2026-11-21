@@ -12,7 +12,8 @@
       "vite.config.ts",
       "tsconfig.ui.json",
       "biome.json",
-      "!!output"
+      "!!output",
+      "!!work"
     ]
   },
   "formatter": { "indentStyle": "space", "indentWidth": 2 },

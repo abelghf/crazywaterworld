@@ -643,6 +643,7 @@ node src/app.mjs accounts login-phone --code "$env:CW_PHONE_CODE" --probe
 | `npm run test:offline` | 使用显式测试数据运行核心回归，无需本机游戏协议包 |
 | `npm run typecheck` | 检查全部 UI TS/TSX、持久化与用量账本的类型约束 |
 | `npm run check:ui` | 使用 Biome 检查已迁移客户端代码与配套测试 |
+| `npm run test:browser` | 构建一次界面，依次执行全部浏览器回归，遇错即停 |
 | `npm run test:client:browser` | 使用隔离账号验收账号卡片登录设置、独立保存和草稿隔离 |
 | `npm run test:startup` | 检查环境与依赖准备、自备协议包、控制台地址和终端输出 |
 | `npm run test:core` | 核心协议、日常、原有玩法、阵容和掉线处理回归 |
