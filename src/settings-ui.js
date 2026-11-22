@@ -190,7 +190,7 @@ const configGroups = [
       }),
     ]),
     configField('resourceFields.fleetIds','参与舰队','multi',{catalog:'expeditionFleets',empty:'请选择参与占领的舰队，空选不派遣',help:'只使用已编队、空闲且没有待确认任务的舰队，遵守舰队调度顺序与城战预留。'}),
-    configField('resourceFields.minDurabilityPercent','最低耐久','number',{unit:'%',help:'占领需要战斗；舰队需达到耐久门槛及田地推荐战力。出征返航后仍未确认占领时，当日暂停自动占田。'}),
+    configField('resourceFields.minDurabilityPercent','最低耐久','number',{unit:'%',help:'舰队需达到耐久门槛及田地推荐战力。返航后等待一个检查周期核对占领结果。同一舰队当天有两块田仍未确认时，暂缓该舰队自动占田。'}),
     configField('resourceFields.reserveFleetCount','保留空闲舰队','number',{unit:'队',help:'派遣后至少保留此数量的可用空闲舰队给其他任务。设为 0 可使用所有符合条件的舰队。'}),
     configField('resourceFields.minLevel','最低资源田等级','number',{help:'从最高等级开始选田，高级田不足时逐级向下选择，直到此等级。'}),
     configField('resourceFields.checkEverySeconds','检查间隔','number',{unit:'秒',help:'每次检查都会查找可占的高级田。需要更换时，先放弃旧田，再派舰队占领新田。'}),
