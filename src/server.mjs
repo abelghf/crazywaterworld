@@ -664,7 +664,9 @@ export function createConsole({ host = '127.0.0.1', port = 17321, onLog, recover
     if (closing || session.connectionDrain) return Promise.reject(new Error('账号正在结束当前挑战并恢复阵容，请稍后操作'));
     if (session.queueTail && label) emit(session, 'info', label + '已排队，当前操作结束后执行');
     const generation = session.generation;
+    session.waitingJobs++;
     const run = async () => {
+      session.waitingJobs--;
       if (closing || session.connectionDrain || session.paused || generation !== session.generation) throw new Error('账号已暂停，已取消排队操作');
       if (recoverFormation && !session.lineupJob && session.client?.connected && session.player
         && readLineupRuntime(session.id).pending) {
@@ -735,6 +737,7 @@ export function createConsole({ host = '127.0.0.1', port = 17321, onLog, recover
       reportClaim: null,
       heroJob: null,
       queueTail: null,
+      waitingJobs: 0,
       lineupJob: null,
       lineupState: { phase: 'idle' },
       appointmentJob: null,
@@ -4937,6 +4940,7 @@ export function createConsole({ host = '127.0.0.1', port = 17321, onLog, recover
           adChannel: { clientInfo: { appId, channelId, originVersion }, language: currentAccount.login?.language },
           rounds: rounds === 0 ? 0 : rounds - completedBefore, everyMs: loop.everyMs, allowMutate: true, stop: attemptController.signal,
           schedule: work => enqueue(session, work),
+          shouldYieldQueue: () => session.waitingJobs > 0,
           isEnabled: key => loop.tasks[key] === true,
           getCompassSpinCount: () => loop.compassSpinCount,
           isStageBusy: () => session.stages.view().running,

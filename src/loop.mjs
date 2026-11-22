@@ -108,6 +108,7 @@ export async function runLoop(client, protocol, {
   usageLedger = null, heroUsageLedger = usageLedger,
   getEveryMs = () => everyMs,
   schedule = work => work(),
+  shouldYieldQueue,
   executeBattle = work => work(),
   onRound,
   onStep,
@@ -184,7 +185,7 @@ export async function runLoop(client, protocol, {
   let merchantRunAfter = 0;
   const merchantNext = () => merchantSelected()
     ? Math.max(merchantRunAfter, merchantMonitor.nextCheckAt * 1000 - (client.serverClockOffsetMs || 0)) : Infinity;
-  const scheduler = createLoopScheduler({ client, stop, sleep,
+  const scheduler = createLoopScheduler({ client, stop, sleep, shouldYieldQueue,
     schedule: work => schedule(async () => {
       assertRuntime();
       const result = await work();
