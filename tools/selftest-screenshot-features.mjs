@@ -66,6 +66,29 @@ function fixture() {
     stock:v=>{stock=v;},balance:v=>{diamonds=v;} };
 }
 try {
+  await test('到港策略按顺位和航时补缺，改线、补购关闭和余额不足均不花钻', async () => {
+    for (const mode of ['race', 'full', 'guard']) {
+      const f = fixture();
+      Object.assign(f.settings.merchant, { speedUpMode: mode === 'guard' ? 'race' : mode, guardLastPointer: mode === 'guard' });
+      f.state.cargo.moveEndTime = at + (mode === 'guard' ? 1800 : 3600);
+      f.state.worldCargo[0].cargo.moveEndTime = at + 1850;
+      const count = mode === 'full' ? 2 : 1;
+      await f.run();
+      assert.deepEqual(f.writes().map(row => row.body), [{ buyNum: count }]);
+      await f.run();
+      assert.deepEqual(f.writes().map(row => row.body), [{ buyNum: count }, { useNum: count }]);
+    }
+    for (const change of [f => { f.settings.merchant.autoBuyPointers = false; }, f => f.balance(799),
+      f => { f.settings.merchant.pointerDailyDiamondLimit = 799; },
+      f => { f.state.worldCargo[0].cargo.moveEndTime = at + 30; }, // 补购后下一轮已经追不上。
+      f => f.hook(name => { if (name === 'TradeInfoRequest') f.state.worldCargo[0].cargo.moveToCityId = 30; })]) {
+      const f = fixture();
+      f.settings.merchant.speedUpMode = 'race';
+      change(f);
+      await f.run();
+      assert.deepEqual(f.writes(), []);
+    }
+  });
   await test('新增模块消费默认关闭，真实配置目录校验和独立参数持久化',()=>{
     const settings=defaultSettings();validateSettings(settings,{catalog:settingsCatalog(loadConfig())});
     for(const key of ['alliance','guildShip','guildFort','silicon','heroRaid'])assert.equal(settings[key].enabled,false);

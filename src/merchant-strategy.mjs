@@ -1,6 +1,7 @@
 import { clock, dayOf, natural, positive, read, table, waiting, windowOpen } from './activity-actions.mjs';
 import { refreshOrderMaterialSpends } from './order-reservations.mjs';
 import { merchantTiming } from './merchant-planner.mjs';
+import { watchMerchant } from './merchant-monitor.mjs';
 
 export async function reconcileMerchantAction(client, ctx, [key, record], after, matches) {
   const { expected } = record.details;
@@ -113,7 +114,9 @@ export async function buyMerchantPointers(client, config, ctx, event, state, pur
       const after = await read(client, 'TradeInfo'), finalStock = await inventory(client);
       if (!natural(reply?.buySpeedTimes) || reply.buySpeedTimes < bought + count || after.period !== event.period ||
         after.player?.buySpeedTimes < bought + count || finalStock.count < stock.count + count || dayOf(clock(client)) !== today) throw Error('指针购买后的次数与库存待确认');
-      ledger.confirm(ticket); report({ ok: true, status: 'confirmed', note: '购买 ' + count + ' 根，消耗 ' + cost + ' 钻石；下一次检查重新评估加速' });
+      ledger.confirm(ticket);
+      if (choice.expedite) watchMerchant(client).observe({ event, state: after, time: clock(client), config, settings: settings(ctx), expedite: true });
+      report({ ok: true, status: 'confirmed', note: '购买 ' + count + ' 根，消耗 ' + cost + ' 钻石；下一次检查重新评估加速' });
     } catch (error) { report({ ok: false, status: 'unknown', error: error.message }); }
     return true;
   } catch (error) { return skip(error.message); }

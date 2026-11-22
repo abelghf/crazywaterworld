@@ -70,6 +70,54 @@ const sample = (f, changes = {}) => ({ period: f.event.period, startTime: f.even
   observedAt: f.now - 10, turnoverProfitPerSecond: 1, ...changes });
 
 try {
+  await test('同港抢先比较最早的同盟船，并列多用一根，无法领先时留针', () => {
+    const f = fixture(now - 6 * 3600);
+    f.settings.merchant.speedUpMode = 'race';
+    f.settings.merchant.speedUpMinProfit = 1_000_000;
+    const rival = (playerId, eta, dest = 20, guildIdx = 1) => ({ playerId, guildIdx,
+      cargo: { cityId: 30, moveToCityId: dest, moveStartTime: f.now - 10, moveEndTime: f.now + eta } });
+    const plan = () => f.plan({ actor: f.player });
+    f.state.worldCargo = [rival(f.player.playerId, 10), rival('91', 20, 30), rival('92', 30, 20, 2)];
+    assert.equal(plan().kind, 'none');
+    f.state.worldCargo.push(rival('93', 4501));
+    assert.equal(plan().leading, true);
+    f.state.worldCargo.push(rival('94', 4500));
+    assert.equal(plan().useNum, 1);
+    f.state.worldCargo.push(rival('95', 2700));
+    assert.equal(plan().useNum, 2);
+    assert.equal(plan().rivalEta, f.now + 2700);
+    f.stock.set(pointer, 2); // 其中一根必须保留。
+    assert.equal(plan().kind, 'wait');
+  });
+  await test('最后一根按剩余航时独立触发，全程用针受背包和额度约束', async () => {
+    const f = fixture(now - 6 * 3600);
+    f.state.player.goods = [];
+    Object.assign(f.settings.merchant, { speedUpMode: 'race', guardLastPointer: true });
+    f.state.cargo.moveEndTime = f.now + 1801;
+    assert.equal(f.plan().kind, 'none');
+    f.state.cargo.moveEndTime--;
+    assert.equal(f.plan().accelerationReason, 'guard');
+    await f.run();
+    assert.deepEqual(f.sent().map(row => row.body), [{ useNum: 1 }]);
+    assert.equal(f.reports.at(-1).status, 'confirmed');
+    const g = fixture(now - 6 * 3600);
+    g.state.player.goods = [];
+    Object.assign(g.settings.merchant, { speedUpMode: 'full', keepPointers: 0 });
+    for (const [seconds, useNum] of [[7200, 4], [3600, 2], [8, 1]]) {
+      g.state.cargo.moveEndTime = g.now + seconds;
+      assert.equal(g.plan().useNum, useNum);
+    }
+    g.state.cargo.moveEndTime = g.now + 7200;
+    assert.equal(g.plan({ usedPointers: 3 }).useNum, 1);
+    assert.equal(g.plan({ dailyUsed: 28 }).kind, 'wait');
+    g.stock.set(pointer, 2);
+    assert.equal(g.plan().useNum, 2);
+    g.state.player.profit = 50_000_000;
+    assert.equal(g.plan().kind, 'none');
+    g.state.player.profit = 0;
+    g.event.endTime = g.now + 59;
+    assert.equal(g.plan().kind, 'wait');
+  });
   await test('旧账本的本期选择不能覆盖账号开关，发送前关闭立即生效', async () => {
     for (const enabled of [false, true]) {
       const f = fixture();

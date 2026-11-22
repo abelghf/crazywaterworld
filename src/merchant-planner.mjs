@@ -17,7 +17,7 @@ export const MERCHANT_DEFAULTS = Object.freeze({
   autoSpeedUp: false,
   speedUpMinProfit: 1000,
   keepPointers: 0,
-  speedUpMode: 'profit', speedUpMaxPerLeg: 4, monitorSeconds: 60,
+  speedUpMode: 'profit', guardLastPointer: false, speedUpMaxPerLeg: 4, monitorSeconds: 60,
   refreshWindowMinutes: 8, dailyPointerLimit: 28, autoBuyPointers: false, pointerDailyDiamondLimit: 0,
   profitLimit: 0, firstDepartureMode: 'smart', firstDepartureTime: '10:00', firstDepartureWaitMinutes: 29,
   autoUpgrade: false
@@ -28,7 +28,7 @@ export function merchantSettings(input = {}) {
   for (const [key, fallback] of Object.entries(output)) {
     const value = input?.[key];
     if (typeof fallback === 'boolean') output[key] = typeof value === 'boolean' ? value : fallback;
-    else if (key === 'speedUpMode') output[key] = ['deadline', 'profit', 'refresh', 'arrival'].includes(value) ? value : fallback;
+    else if (key === 'speedUpMode') output[key] = ['deadline', 'profit', 'refresh', 'arrival', 'race', 'full'].includes(value) ? value : fallback;
     else if (key === 'firstDepartureMode') output[key] = ['smart', 'time'].includes(value) ? value : fallback;
     else if (key === 'firstDepartureTime') output[key] = typeof value === 'string' && /^([01]\d|2[0-3]):[0-5]\d$/.test(value) ? value : fallback;
     else if (natural(value)) output[key] = value;
@@ -43,6 +43,11 @@ export function merchantSettings(input = {}) {
 export function merchantActionSeconds(settings = {}, intervalSeconds = 0) {
   const configured = settings?.loop?.everySeconds;
   return Math.max(60, positive(configured) ? configured : 0, positive(intervalSeconds) ? intervalSeconds : 0);
+}
+
+export function merchantPointerSeconds(config) {
+  const seconds = Number(param(config, '海商王加速时长')) * 60;
+  return positive(seconds) ? seconds : null;
 }
 
 export function merchantTiming(config, event, time) {

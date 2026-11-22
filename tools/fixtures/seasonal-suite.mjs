@@ -219,6 +219,17 @@ export function seasonalFixture() {
       });
       return { player: t.player };
     },
+    TradeSpeed: (b) => {
+      const cargo = state.trade.cargo;
+      state.stock['海商王加速'] -= b.useNum;
+      const now = Math.floor((Date.now() + client.serverClockOffsetMs) / 1000);
+      cargo.moveEndTime = Math.max(now, cargo.moveEndTime - b.useNum * 1800);
+      if (cargo.moveEndTime === now) {
+        cargo.cityId = cargo.moveToCityId;
+        cargo.moveToCityId = 0;
+      }
+      return { moveEndTime: cargo.moveEndTime };
+    },
     TradeMove: (b) => {
       const c = state.trade.cargo;
       c.moveToCityId = b.mvToCityId;

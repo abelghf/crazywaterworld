@@ -321,6 +321,15 @@ export async function merchantActivity(client, config, ctx) {
     start: clock(client), marketEpoch: currentEpoch, cargoSignature: cargoSignature(fresh), exploration: !!plan.exploration };
   return checkedAction(ctx, { ...common, expected,
     send: () => send(expected.request, { cityId: plan.city, mvToCityId: plan.destination }, 'TradeMoveResponse'),
+    inspect: async () => {
+      const current = await getState();
+      if (current.period !== event.period) return null;
+      if (policy.autoSpeedUp && ['race', 'full'].includes(policy.speedUpMode) && current.cargo?.moveToCityId === plan.destination) {
+        const now = clock(client);
+        watchMerchant(client).observe({ event, state: current, time: now, config, settings: ctx.settings?.(), expedite: true });
+      }
+      return fingerprint(current);
+    },
     accept: r => r.cargo?.moveToCityId === plan.destination || r.cargo?.cityId === plan.destination
   });
 }
