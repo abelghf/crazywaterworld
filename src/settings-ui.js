@@ -71,13 +71,13 @@ const configZeroHints={
 };
 const merchantActivityFields = [
     configField('merchant.enabled','开启自动挂机'),
-    configField('schedule.merchantTrade','按整船收益自动走商','switch',{help:'周期活动。按批次成本、资金、舱位和本港库存规划多商品组合，比较整船预期收益选港；没有成员共享紧缺货也可选择已知普通港口，本港盈利出售不依赖商情。远端价格可能是估算，到港重新核价；临近结束停止无法及时卖出的采购。'}),
+    configField('schedule.merchantTrade','按整船收益自动走商','switch',{help:'按每件占舱、剩余舱位、资金和本港可购库存配货，比较各目的港扣除买入成本后的整船预计利润。没有成员共享紧缺货也可选择已知普通港口，本港盈利出售不依赖商情。到港重读实价，临近结束只采购来得及卖出的货。'}),
     configField('merchant.autoShareIntel','到港自动共享情报','switch',{help:'默认关闭，手动开启后随已开启的走商及所属分组执行。确认到港后共享本港尚未共享的紧缺情报，已有共享直接跳过；每日紧缺更新后重新检查，不按每次价格刷新重复发送。回读确认后才记为已共享，未知结果保留防重记录，失败不阻塞买卖；达到利润上限仍可共享当前港口。'}),
     configField('schedule.tradeTasks','领取海商王联盟任务奖励','switch',{help:'保留原联盟任务领奖开关，按本期联盟任务达成进度自动领取。'}),
     configField('schedule.merchantRewards','领取战令、利润和联盟奖励','switch',{help:'按本期利润、战令分数、联盟任务进度和当日商情贡献领取已达成档。'}),
     configField('merchant.quoteMaxAgeSeconds','报价最长参考时间','number',{unit:'秒',help:'默认300秒。记录采集时间，过期或跨刷新时点的报价不能当作有效报价；到港仍须重新读取当前报价。'}),
     configField('merchant.monitorSeconds','港口监控间隔','number',{unit:'秒',help:'默认60秒。监测本港价格和联盟共享库存，推送可提前唤醒串行检查；刷新时刻和到港时刻单独安排检查。异地港口没有实时价格接口，仍以到港读取为准。'}),
-    configField('merchant.estimateDiscountPercent','估算卖价风险折扣','number',{unit:'%',help:'默认10%。没有可用远端报价时，以商品基准价扣除此比例估算，日志标明估算；实际成交价和收益以到港回读为准。'}),
+    configField('merchant.estimateDiscountPercent','估算卖价风险折扣','number',{unit:'%',help:'默认0%，直接按参考卖价估算利润。填1%至99%时，优先购买打折后仍有利润的货，再按原参考价寻找薄利机会。设为100%时停用估价采购。没有可执行的盈利买卖时，空船仍可能换港寻价。'}),
     configField('merchant.minExpectedProfit','最低预期整船利润','number',{unit:'商会币',help:'采购与选港需达到的风险调整后预期利润，默认1。资金、容量和可购库存同时限制采购数量。'}),
     configField('merchant.refreshWaitSeconds','刷新前最多等待','number',{unit:'秒',help:'默认120秒，0关闭。仅在等待后的预计收益优于立即出航且能及时成交时等待；刷新后重新读取价格和库存。刷新时刻使用游戏配置。'}),
     configField('merchant.liquidationMinutes','活动结束前清仓窗口','number',{unit:'分钟',help:'默认120分钟，0关闭提前清仓。窗口内优先处理持货；无论此值多少，都不采购无法在交易截止前卖出的货物。'}),
