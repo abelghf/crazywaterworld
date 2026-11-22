@@ -347,6 +347,21 @@ test('设置页不再出现汽油保留量或消费上限，其他资源约束�
   assert(f.widget('resources.diamondDailyLimit'));
 });
 
+test('海盗设置只为免费扫荡显示种类选择，自动首杀按类设置连败上限', () => {
+  const f = fixture(); f.renderPage();
+  for (const key of ['pirateHunt.types', 'pirateHunt.maxLevel']) assert.equal(f.widget(key), undefined);
+  assert.equal(f.widget('pirateSweep.type'), undefined);
+  const sweep = f.widget('pirateSweep.types').spec;
+  assert.equal(sweep.kind, 'multi');
+  assert.equal(sweep.label, '免费扫荡目标');
+  assert.deepEqual(sweep.options.map(option => option[0]), ['1', '2', '3']);
+  f.set('pirateSweep.types', ['1','3']);
+  assert(!f.widget('pirateSweep.times1').node.hidden);
+  assert(f.widget('pirateSweep.times2').node.hidden);
+  assert(!f.widget('pirateSweep.times3').node.hidden);
+  assert.equal(f.widget('pirateHunt.maxFailures').spec.label, '每类连续战败上限');
+});
+
 test('海兽、博物馆和情报只展示统一配置，探宝单开关直接展开参数', () => {
   const f = fixture(); f.renderPage();
   for (const name of ['petCollect', 'petBreed', 'museumCollect', 'museumExplore', 'museumRevenue', 'museumAchievements', 'radarAuto', 'radarRepair']) {

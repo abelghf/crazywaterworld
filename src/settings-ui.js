@@ -455,12 +455,13 @@ const configGroups = [
   { id: 'pirate-hunt', title: '海盗', category: 'world', fields: [
     configField('pirate.enabled','开启挂机'),
     configField('schedule.pirate','每日免费扫荡'),
-    configField('pirateSweep.type','扫荡种类','choice',{options:[['1','海盗先锋'],['2','海盗精锐'],['3','海盗头目']],help:'只扫荡该种类中自己已击败的最高等级。地图上没有该等级时等待刷新。'}),
+    configField('pirateSweep.types','免费扫荡目标','multi',{options:[['1','海盗先锋'],['2','海盗精锐'],['3','海盗头目']],selectAll:true,empty:'未选择扫荡目标',help:'三类共享每日免费次数。固定次数按先锋、精锐、头目的顺序分配，每类扫荡已首杀的最高等级。'}),
+    ...['海盗先锋','海盗精锐','海盗头目'].map((name,index)=>configField('pirateSweep.times'+(index+1),name+'每日扫荡次数','number',{
+      unit:'次',when:d=>d.pirateSweep.types.includes(String(index+1)),help:'填正整数指定每日次数，0 表示跳过，-1 表示使用固定次数分配后的余额。多个种类填 -1 时优先扫荡今天刷得较少的种类。',
+    })),
     configField('pirateHunt.enabled','自动挑战下一级'),
-    configField('pirateHunt.maxFailures','连续战败上限','number',{unit:'次',help:'只计已确认的战败，首杀成功后清零。达到上限后，本次挂机停止挑战海盗。'}),
+    configField('pirateHunt.maxFailures','每类连续战败上限','number',{unit:'次',help:'每类单独计算已确认的连败，首杀成功清零。该类到顶或连败达到设定次数后转到下一类，三类都完成后结束当天首杀。'}),
     configField('pirateHunt.fleetIds','首杀舰队','multi',{catalog:'expeditionFleets',empty:'请选择舰队',help:'每次从所选舰队中派出一支已编队的空闲舰队。'}),
-    configField('pirateHunt.types','首杀种类','multi',{catalog:'pirateTypes',empty:'全部种类',help:'留空表示全部种类。优先挑战可选目标中等级最低的海盗。'}),
-    configField('pirateHunt.maxLevel','首杀等级上限','number',{unit:'级',help:'包含所填等级。0 表示按当前赛季已开放的等级挑战。'}),
     configField('pirateHunt.minDurabilityPercent','首杀最低耐久','number',{unit:'%',help:'跳过耐久低于此比例的舰队。耐久上限未知时也跳过。0 表示有耐久即可。'}),
   ] },
   { id: 'cityWar', title: '联盟城战', category: 'world', fields: [
@@ -1841,7 +1842,8 @@ function configMultiselect(spec, id, options = {}) {
   const count = el('span'); let limit = 120;
   const more = configButton('显示更多选项', () => { limit += 120; paintList(); });
   const all = () => {
-    const options = (catalog[spec.catalog] ?? []).filter(item =>
+    const choices = spec.options?.map(([value,label])=>({value,label})) ?? catalog[spec.catalog] ?? [];
+    const options = choices.filter(item =>
       spec.key !== 'heroes.heroIds' || !item.hidden || read().includes(item.value));
     if (spec.catalog!=='expeditionFleets') for (const value of read()) if (!options.some(item => item.value === value)) options.unshift({ value, label: value + '（当前配置中未找到）' });
     return options;

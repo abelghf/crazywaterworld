@@ -92,6 +92,18 @@ try {
   await page.screenshot({ path: path.join(output, 'config-navigation-desktop.png'), animations: 'disabled',
     clip: { x: toolbarBounds.x, y: toolbarBounds.y, width: toolbarBounds.width, height: tabBounds.y + tabBounds.height - toolbarBounds.y + 8 } });
   {
+    await group('pirate-hunt');
+    const picker = page.locator('#config-field-pirateSweep-types');
+    await picker.locator('summary').click();
+    await picker.getByRole('checkbox', { name: '海盗精锐' }).check();
+    await page.keyboard.press('Escape');
+    const eliteTimes = page.locator('#config-field-pirateSweep-times2');
+    await eliteTimes.fill('2');
+    await saved();
+    assert.deepEqual(loadAutomationSettings('config-a').settings.pirateSweep, { types: ['1', '2'], times1: -1, times2: 2, times3: 1 });
+    assert(!await page.locator('#config-field-pirateSweep-times3').isVisible());
+  }
+  {
     await page.getByRole('tab', { name: '日常', exact: true }).click();
     const tabs = await page.locator('#config-panel-daily [data-config-group]').allTextContents();
     assert.deepEqual(tabs.slice(tabs.indexOf('日常行动'), tabs.indexOf('日常行动') + 3), ['日常行动', '折扣商店', '广告奖励']);
