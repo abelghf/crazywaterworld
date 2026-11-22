@@ -698,7 +698,7 @@ test('世界Boss领奖只在世界分组出现，首战派遣与领奖独立控�
   assert.deepEqual(ids.slice(daily - 2, daily + 3), ['league', 'arena', 'daily-actions', 'discount-shop', 'ad-rewards']);
   assert.deepEqual(f.editor.groups.get('arena').fields.map(field => field.key), ['schedule.arena', 'arena.challengeHigher', 'arena.challengeLimit', 'arena.target', 'arena.maxPowerRatio', 'arena.fallbackWeakest', 'arena.sweepLower', 'arena.sweepLimit', 'arena.claimTask']);
   assert.deepEqual(f.editor.groups.get('league').fields.map(field => field.key),
-    ['schedule.leagueChallenge', 'league.target', 'league.maxPowerRatio', 'league.fallbackWeakest', 'league.dailyBattleLimit', 'league.claimTask', 'schedule.leagueCollect', 'schedule.leaguePassRewards']);
+    ['schedule.leagueChallenge', 'league.maxPowerRatio', 'league.dailyBattleLimit', 'league.claimTask', 'schedule.leagueCollect', 'schedule.leaguePassRewards']);
   for (const [key, owner] of [['dailies.claimTasks', 'rewards'], ['arena.claimTask', 'arena'], ['league.claimTask', 'league'],
     ['schedule.leagueCollect', 'league'], ['schedule.leaguePassRewards', 'league']]) {
     assert.deepEqual([...f.editor.groups.values()].filter(group => group.fields.some(field => field.key === key)).map(group => group.id), [owner]);
