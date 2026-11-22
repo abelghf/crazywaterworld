@@ -16,7 +16,7 @@ import {resourceFieldRows,resourceFieldTotals} from './resource-fields.mjs';
 import { readResourceFieldsOverview, previewResourceField, runResourceFieldShortcut, previewResourceFieldPlan, previewResourceFieldGiveUp, runResourceFieldGiveUp } from './resource-field-automation.mjs';
 import {activityRankCatalog,readActivityRanking} from './activity-rankings.mjs';
 import {readActivityStatistics} from './activity-statistics.mjs';
-import { merchantActivity, readMerchantStatus, readMerchantJournal, merchantJournalSummary } from './merchant-activity.mjs';
+import { merchantActivity, readMerchantStatus, readMerchantOverview, readMerchantJournal, merchantJournalSummary } from './merchant-activity.mjs';
 import { watchMerchant } from './merchant-monitor.mjs';
 import { giftCodeStatus, giftCodeSummary, startGiftCodes, startGiftCodeBatch } from './gift-codes.mjs';
 import { publicGiftCodes } from './gift-code-library.mjs';
@@ -1843,6 +1843,9 @@ export function createConsole({ host = '127.0.0.1', port = 17321, onLog, recover
       account: describeAccount(account, { active: account.id === loadStore().activeId }),
       status: accountStatus(session),
       weekCalendar: await readWeekCalendar(instance).then(items=>({items})).catch(error=>({items:[],error:error.message})),
+      merchant: instance.tradeWindow ? await readMerchantOverview(instance, config, {
+        player: session.player, ledger: usageFor(session), settings: session.preferences,
+      }) : null,
       items: {
         ...view.items,
         top: view.items.top.map((item) => ({ itemId: item.itemId, name: displayMaterial(config, item.itemId), num: item.num, sources: config?.materialSources(item.itemId), icon: itemIcon(item.itemId) })),

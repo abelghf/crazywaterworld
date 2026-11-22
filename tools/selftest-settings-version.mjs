@@ -669,7 +669,7 @@ try {
     assert.throws(() => validateSettings(old), error => !!error.fields?.['discountShop.extra']);
   });
   test('版本1升级后重复迁移保持一致，保留有效的用户值', () => {
-    assert.equal(SETTINGS_SCHEMA_VERSION, 43);
+    assert.equal(SETTINGS_SCHEMA_VERSION, 44);
     const settings = legacySettings();
     settings.factory.checkEverySeconds = 270;
     settings.resources.diamondDailyLimit = 1234;
@@ -787,7 +787,7 @@ try {
   test('旧配置升级后连续保存只递增revision，格式版本不随保存次数增长', () => {
     for (const version of [SETTINGS_SCHEMA_VERSION - 1, SETTINGS_SCHEMA_VERSION]) {
       const settings = defaultSettings();
-      if (version < SETTINGS_SCHEMA_VERSION) delete settings.treasure.followMode;
+      if (version === 43) Object.assign(settings.merchant, { upgradeMaxLevel: 2, upgradeDailyDiamondLimit: 300 });
       const other = { revision: 901, settingsVersion: version, settings: defaultSettings() };
       fs.writeFileSync(file, JSON.stringify({ version, accounts: {
         account: { revision: 244, settingsVersion: version, settings }, other,
