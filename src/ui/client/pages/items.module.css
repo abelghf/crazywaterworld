@@ -210,3 +210,48 @@
 .page select {
   appearance: none;
 }
+
+.dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #e04b3a;
+  display: inline-block;
+  margin-left: 4px;
+}
+
+.auto {
+  border-top: 1px dashed var(--border);
+  margin-top: 10px;
+  padding-top: 8px;
+  display: grid;
+  gap: 6px;
+}
+
+.requirement {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  align-items: center;
+}
+
+.requirement select {
+  font-size: 0.78rem;
+  padding: 0.15rem 0.3rem;
+}
+
+.autoLog {
+  max-height: 12em;
+  overflow: auto;
+  display: grid;
+  gap: 2px;
+  font-size: 0.75rem;
+}
+
+.autoLogLine[data-level="error"] {
+  color: #c8483f;
+}
+
+.autoLogLine[data-level="warn"] {
+  color: #b07c1e;
+}

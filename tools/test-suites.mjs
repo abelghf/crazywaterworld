@@ -146,6 +146,7 @@ const core = [
 const progression = [
   'tools/selftest-equipment-automation.mjs',
   'tools/selftest-items.mjs',
+  'tools/selftest-items-http.mjs',
   'tools/selftest-radar.mjs',
   'tools/selftest-radar-idle-repair.mjs',
   'tools/selftest-order-reservations.mjs',

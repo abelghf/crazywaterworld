@@ -3,6 +3,7 @@
 // 评级是协议自带的 rating：1=C、2=B、3=A、4=S，0 表示游戏里不显示评级。
 import { exactAutomationId } from './automation-policy.mjs';
 import { iconEntry } from './art.mjs';
+import { syncItems } from './item-store.mjs';
 import { uidText, wireUid } from './hero-equipment.mjs';
 
 const RATING_LETTERS = { 0: '', 1: 'C', 2: 'B', 3: 'A', 4: 'S' };
@@ -65,7 +66,7 @@ function computeBase(row, level, kind, tables) {
 
 const bestRating = attrs => attrs.reduce((best, attr) => (attr.rating > best ? attr.rating : best), 0);
 
-export function createGameItems(client, { config } = {}) {
+export function createGameItems(client, { config, accountId = '' } = {}) {
   const tables = attrTables(config);
   const names = enhanceNames(client.protocol);
   const equips = new Map(rows(config, 'EquipCfg').map(row => [row.id, row]));
@@ -155,7 +156,16 @@ export function createGameItems(client, { config } = {}) {
     const worn = wornBy(state.heroes);
     const list = [...state.equips.map(equipRow), ...state.badges.map(badgeRow)];
     for (const row of list) row.wornBy = worn.get(row.uid) ?? '';
-    return { rows: list, materials: state.counts, hint: '' };
+    // 没有账号（离线自测）时不落盘，只补默认字段。
+    const stored = accountId
+      ? syncItems(accountId, list)
+      : { unread: 0, added: 0, baseline: false };
+    for (const row of list) {
+      row.firstSeen = row.firstSeen ?? 0;
+      row.read = row.read === true;
+      row.isNew = row.isNew === true;
+    }
+    return { rows: list, materials: state.counts, unread: stored.unread, added: stored.added, hint: '' };
   }
 
   async function materials(current) {
@@ -210,5 +220,5 @@ export function createGameItems(client, { config } = {}) {
     });
   }
 
-  return { read, reroll, decide };
+  return { read, reroll, decide, materials };
 }

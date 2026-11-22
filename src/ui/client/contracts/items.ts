@@ -29,6 +29,9 @@ export type ItemRow = {
   wornBy: string;
   icon: string;
   rerollable: boolean;
+  firstSeen: number;
+  read: boolean;
+  isNew: boolean;
 };
 
 function text(value: unknown) {
@@ -105,6 +108,9 @@ function parseRow(value: unknown): ItemRow {
     wornBy: text(value.wornBy),
     icon: value.icon,
     rerollable: value.rerollable === true,
+    firstSeen: number(value.firstSeen),
+    read: value.read === true,
+    isNew: value.isNew === true,
   };
 }
 
@@ -118,14 +124,14 @@ export function parseItems(data: unknown) {
     if (seen.has(key)) throw Error("装备列表存在重复条目");
     seen.add(key);
   }
-  const materials: Record<string, number> = {};
-  if (isRecord(data.materials)) {
-    for (const [key, value] of Object.entries(data.materials)) {
-      if (typeof value === "number" && Number.isFinite(value))
-        materials[key] = value;
-    }
-  }
-  return { rows, materials, hint: text(data.hint) };
+  const materials = counts(data.materials);
+  return {
+    rows,
+    materials,
+    unread: number(data.unread),
+    added: number(data.added),
+    hint: text(data.hint),
+  };
 }
 
 export function parseReroll(data: unknown) {
@@ -138,6 +144,70 @@ export function parseReroll(data: unknown) {
           after: counts(data.materials.after),
         }
       : null,
+  };
+}
+
+export type AutoRequirement = {
+  attr: string;
+  minRating: number;
+  count: number;
+  letter: string;
+};
+
+export type AutoStatus = {
+  running: boolean;
+  uid: string;
+  name: string;
+  roll: number;
+  maxRolls: number;
+  materialFloor: number;
+  lockedSlots: number[];
+  stopReason: string;
+  saved: boolean;
+  requirements: AutoRequirement[];
+  log: { at: number; level: string; message: string }[];
+};
+
+export function parseAutoStatus(data: unknown): AutoStatus {
+  if (!isRecord(data) || typeof data.running !== "boolean")
+    throw Error("自动洗炼状态格式无效");
+  const requirements = Array.isArray(data.requirements)
+    ? data.requirements.map((item) => {
+        if (!isRecord(item) || typeof item.attr !== "string")
+          throw Error("自动洗炼需求格式无效");
+        return {
+          attr: item.attr,
+          minRating: number(item.minRating),
+          count: number(item.count),
+          letter: text(item.letter),
+        };
+      })
+    : [];
+  const log = Array.isArray(data.log)
+    ? data.log.map((item) => {
+        if (!isRecord(item) || typeof item.message !== "string")
+          throw Error("自动洗炼日志格式无效");
+        return {
+          at: number(item.at),
+          level: text(item.level),
+          message: item.message,
+        };
+      })
+    : [];
+  return {
+    running: data.running,
+    uid: text(data.uid),
+    name: text(data.name),
+    roll: number(data.roll),
+    maxRolls: number(data.maxRolls),
+    materialFloor: number(data.materialFloor),
+    lockedSlots: Array.isArray(data.lockedSlots)
+      ? data.lockedSlots.filter((slot) => typeof slot === "number")
+      : [],
+    stopReason: text(data.stopReason),
+    saved: data.saved === true,
+    requirements,
+    log,
   };
 }
 

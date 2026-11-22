@@ -1,5 +1,8 @@
 // 装备与徽章：属性数值、评级、词条位、穿戴归属与洗炼动作（假 client，不连游戏）。
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 
 const { createGameItems } = await import('../src/items.mjs');
 
@@ -159,4 +162,48 @@ const conflict = createGameItems(makeClient({
 }), { config });
 await assert.rejects(conflict.read(schedule, current), /同一件装备被记到两个英雄名下/);
 
+// ---- 入库时间与已读状态 ----
+const storeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cw-items-store-'));
+process.env.CW_DATA_DIR = storeDir;
+const { syncItems, markItemRead, markAllItemsRead, unreadItems, itemsStatePath } = await import('../src/item-store.mjs');
+const { evaluateRoll: evaluate, normalizeRequirements: normalize } = await import('../src/reroll-runner.mjs');
+
+const first = syncItems('acct', [
+  { kind: 'equip', uid: '1' }, { kind: 'badge', uid: '2' },
+]);
+assert.equal(first.baseline, true, '首次只建立基线');
+assert.equal(first.unread, 0, '基线不算未读');
+const again = syncItems('acct', [
+  { kind: 'equip', uid: '1' }, { kind: 'badge', uid: '2' }, { kind: 'badge', uid: '3' },
+]);
+assert.equal(again.added, 1, '新出现的物品才算新增');
+assert.equal(again.unread, 1);
+const rowsAgain = [
+  { kind: 'equip', uid: '1' }, { kind: 'badge', uid: '2' }, { kind: 'badge', uid: '3' },
+];
+syncItems('acct', rowsAgain);
+assert.equal(rowsAgain[2].isNew, true, '新物品要带红点');
+assert.equal(rowsAgain[2].firstSeen > 0, true, '入库时间要落盘');
+assert.equal(markItemRead('acct', 'badge:3').unread, 0, '看过就消红点');
+assert.equal(unreadItems('acct'), 0);
+syncItems('acct', [...rowsAgain, { kind: 'equip', uid: '4' }]);
+assert.equal(unreadItems('acct'), 1);
+assert.equal(markAllItemsRead('acct'), 1, '一键已读只改未读项');
+assert.equal(unreadItems('acct'), 0);
+assert.ok(fs.existsSync(itemsStatePath('acct')), '状态文件按账号存放');
+
+// ---- 自动洗炼条件 ----
+const attr = (name, rating) => ({ name, rating });
+const reqs = normalize([{ attr: '攻击速度', minRating: 2, count: 2 }], 3);
+assert.equal(evaluate([attr('攻击速度', 2), attr('攻击速度', 3), attr('生命', 1)], reqs).satisfied, true, '3 条攻速也满足 2 条需求');
+assert.equal(evaluate([attr('攻击速度', 3), attr('攻击速度', 1)], reqs).satisfied, false, '评级不够不算');
+assert.equal(evaluate([attr('攻击速度', 3)], normalize([{ attr: '攻击速度', minRating: 1, count: 1 }], 2)).satisfied, true, '设 C 出 A 也要停');
+assert.equal(evaluate([attr('生命', 1), attr('护甲', 1), attr('攻击速度', 1)],
+  normalize([{ attr: '攻击速度', minRating: 1, count: 1 }], 3)).satisfied, true, '不区分第几条');
+assert.equal(evaluate([attr('生命', 4), attr('闪避', 4), attr('暴击', 1)],
+  normalize([{ attr: '*', minRating: 3, count: 2 }], 3)).satisfied, true, '任意属性按条数判定');
+assert.throws(() => normalize([{ attr: '攻击', minRating: 1, count: 3 }], 2), /只有 2 条词条位/, '需求超过词条位要拒绝');
+assert.throws(() => normalize([{ attr: '', minRating: 1, count: 1 }], 2), /缺少属性名/);
+
+console.log('selftest-items state ok: 级线 / 未读 / 单件已读 / 一键已读 / 自动洗炼条件');
 console.log('selftest-items ok: 属性数值 / 评级 / 词条位 / 穿戴归属 / 洗炼与保存');

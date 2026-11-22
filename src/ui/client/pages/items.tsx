@@ -4,8 +4,10 @@ import { useStore } from "zustand";
 import { Button } from "../../button";
 import { Input } from "../../input";
 import {
+  type AutoStatus,
   type ItemAttr,
   type ItemRow,
+  parseAutoStatus,
   parseItems,
   parseReroll,
   parseRerollDecision,
@@ -36,6 +38,7 @@ const RATINGS = [
   [1, "C"],
 ] as const;
 const SORTS = [
+  ["newest", "最新入库"],
   ["quality", "品质"],
   ["star", "星级"],
   ["rating", "评级"],
@@ -43,12 +46,27 @@ const SORTS = [
   ["name", "名称"],
 ] as const;
 const REROLL_MATERIALS = ["装备洗炼石", "红装备洗炼石", "锁定石"];
+const PAGE_SIZE = 120;
 const GRADE_CLASS: Record<string, string> = {
   S: styles.gradeS,
   A: styles.gradeA,
   B: styles.gradeB,
   C: styles.gradeC,
 };
+
+type Requirement = {
+  id: number;
+  attr: string;
+  minRating: number;
+  count: number;
+};
+let requirementSeq = 0;
+const newRequirement = (): Requirement => ({
+  id: ++requirementSeq,
+  attr: "*",
+  minRating: 1,
+  count: 1,
+});
 
 function Grade({ letter }: { letter: string }) {
   if (!letter) return null;
@@ -63,11 +81,11 @@ function attrText(attr: ItemAttr) {
   return `${attr.name} ${attr.display}`;
 }
 
-// 徽章/装备进度条式的两行摘要：随机属性优先，其次基础属性。
+// 两行摘要：随机属性优先（带评级），其次基础属性。
 function summary(row: ItemRow) {
   const parts = [
     ...row.attrs.map(
-      (attr) => `${attrText(attr)}${attr.letter ? " " + attr.letter : ""}`,
+      (attr) => `${attrText(attr)}${attr.letter ? ` ${attr.letter}` : ""}`,
     ),
     ...row.baseAttrs.map(attrText),
   ];
@@ -90,20 +108,252 @@ function AttrList({ attrs }: { attrs: ItemAttr[] }) {
   );
 }
 
+function AutoPanel({
+  row,
+  api,
+  attrOptions,
+  onFinished,
+}: {
+  row: ItemRow;
+  api: ReturnType<typeof createAccountRequest>;
+  attrOptions: string[];
+  onFinished: () => void;
+}) {
+  const [requirements, setRequirements] = useState<Requirement[]>([
+    newRequirement(),
+  ]);
+  const [maxRolls, setMaxRolls] = useState(10);
+  const [materialFloor, setMaterialFloor] = useState(0);
+  const [lockedSlots, setLockedSlots] = useState<number[]>([]);
+  const [status, setStatus] = useState<AutoStatus | null>(null);
+  const [note, setNote] = useState("");
+  const previous = useRef(false);
+
+  const poll = async () => {
+    try {
+      const data = await api("/api/items/auto", {});
+      const next = parseAutoStatus(data);
+      setStatus(next);
+      if (previous.current && !next.running) onFinished();
+      previous.current = next.running;
+    } catch {
+      /* 轮询失败不影响手动操作 */
+    }
+  };
+
+  // biome-ignore lint/correctness/useExhaustiveDependencies: 打开时轮询一次即可，后续由定时器驱动
+  useEffect(() => {
+    void poll();
+    const timer = setInterval(() => void poll(), 2500);
+    return () => clearInterval(timer);
+  }, []);
+
+  const running = status?.running === true && status.uid === row.uid;
+  const change = (index: number, patch: Partial<Requirement>) =>
+    setRequirements((list) =>
+      list.map((item, at) => (at === index ? { ...item, ...patch } : item)),
+    );
+
+  const start = async () => {
+    setNote("");
+    try {
+      const data = await api("/api/items/auto", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          uid: row.uid,
+          requirements,
+          maxRolls,
+          materialFloor,
+          lockedSlots,
+          confirm: true,
+        }),
+      });
+      const next = parseAutoStatus(data);
+      setStatus(next);
+      previous.current = next.running;
+    } catch (error) {
+      setNote(error instanceof ApiError ? error.message : "启动失败");
+    }
+  };
+
+  const stop = async () => {
+    setNote("");
+    try {
+      const data = await api("/api/items/auto/stop", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ confirm: true }),
+      });
+      setStatus(parseAutoStatus(data));
+    } catch (error) {
+      setNote(error instanceof ApiError ? error.message : "停止失败");
+    }
+  };
+
+  return (
+    <section className={styles.auto}>
+      <h4>自动洗炼</h4>
+      <p className={styles.status}>
+        条件按「≥评级」判定，且不区分第几条：设 C 时出 A/S
+        也算满足；多余词条随意。
+      </p>
+      {requirements.map((requirement, index) => (
+        <div key={requirement.id} className={styles.requirement}>
+          <select
+            value={requirement.attr}
+            onChange={(event) => change(index, { attr: event.target.value })}
+          >
+            <option value="*">任意</option>
+            {attrOptions.map((name) => (
+              <option key={name} value={name}>
+                {name}
+              </option>
+            ))}
+          </select>
+          <select
+            value={String(requirement.minRating)}
+            onChange={(event) =>
+              change(index, { minRating: Number(event.target.value) })
+            }
+          >
+            {[1, 2, 3, 4].map((value) => (
+              <option key={value} value={String(value)}>
+                ≥{["C", "B", "A", "S"][value - 1]}
+              </option>
+            ))}
+          </select>
+          <Input
+            className="w-14"
+            type="number"
+            min={1}
+            max={4}
+            value={requirement.count}
+            onChange={(event) =>
+              change(index, { count: Number(event.target.value) })
+            }
+          />
+          <Button
+            size="sm"
+            variant="outline"
+            disabled={running || requirements.length <= 1}
+            onClick={() =>
+              setRequirements((list) => list.filter((_, at) => at !== index))
+            }
+          >
+            删除
+          </Button>
+        </div>
+      ))}
+      <div className={styles.row}>
+        <Button
+          size="sm"
+          variant="outline"
+          disabled={running}
+          onClick={() => setRequirements((list) => [...list, newRequirement()])}
+        >
+          加一条需求
+        </Button>
+        <span className={styles.status}>
+          最多洗{" "}
+          <Input
+            className="w-16"
+            type="number"
+            min={1}
+            max={500}
+            value={maxRolls}
+            onChange={(event) => setMaxRolls(Number(event.target.value))}
+          />{" "}
+          次
+        </span>
+        <span className={styles.status}>
+          材料留{" "}
+          <Input
+            className="w-20"
+            type="number"
+            min={0}
+            value={materialFloor}
+            onChange={(event) => setMaterialFloor(Number(event.target.value))}
+          />{" "}
+          个
+        </span>
+      </div>
+      {row.quality === "RED" && row.slots > 0 && (
+        <div className={styles.row}>
+          <span className={styles.status}>锁定词条</span>
+          {Array.from({ length: row.slots }, (_, slot) => (
+            // biome-ignore lint/suspicious/noArrayIndexKey: 词条位是固定顺序的位置编号
+            <label key={slot} className={styles.status}>
+              <input
+                type="checkbox"
+                checked={lockedSlots.includes(slot)}
+                disabled={running}
+                onChange={(event) =>
+                  setLockedSlots((list) =>
+                    event.target.checked
+                      ? [...list, slot].sort()
+                      : list.filter((value) => value !== slot),
+                  )
+                }
+              />{" "}
+              第 {slot + 1} 条
+            </label>
+          ))}
+        </div>
+      )}
+      <div className={styles.row}>
+        <Button disabled={running} onClick={() => void start()}>
+          开始自动洗炼
+        </Button>
+        <Button
+          variant="outline"
+          disabled={!running}
+          onClick={() => void stop()}
+        >
+          停止
+        </Button>
+        <span className={styles.status}>{note}</span>
+      </div>
+      {status && (
+        <div className={styles.autoLog} aria-live="polite">
+          <p className={styles.status}>
+            {status.running
+              ? `运行中：第 ${status.roll}/${status.maxRolls} 次`
+              : status.stopReason || "未在运行"}
+          </p>
+          {status.log.map((row) => (
+            <div
+              key={row.at + row.message}
+              className={styles.autoLogLine}
+              data-level={row.level}
+            >
+              {row.message}
+            </div>
+          ))}
+        </div>
+      )}
+    </section>
+  );
+}
+
 function RerollDialog({
   row,
   materials,
   api,
+  attrOptions,
   onClose,
   onChanged,
   onMaterials,
+  onRefresh,
 }: {
   row: ItemRow;
   materials: Record<string, number>;
   api: ReturnType<typeof createAccountRequest>;
+  attrOptions: string[];
   onClose: () => void;
   onChanged: (next: ItemRow) => void;
   onMaterials: (next: Record<string, number>) => void;
+  onRefresh: () => void;
 }) {
   const dialog = useRef<HTMLDialogElement>(null);
   const [current, setCurrent] = useState(row);
@@ -182,52 +432,58 @@ function RerollDialog({
         </div>
       </div>
       {current.rerollable ? (
-        <div className={styles.row}>
-          <Button
-            variant="outline"
-            disabled={Boolean(busy)}
-            onClick={() =>
-              void act("/api/items/reroll", { uid: current.uid }, "洗炼")
-            }
-          >
-            洗炼一次
-          </Button>
-          <Button
-            disabled={!pending || Boolean(busy)}
-            onClick={() =>
-              void act(
-                "/api/items/decide",
-                { uid: current.uid, save: true },
-                "保存",
-              )
-            }
-          >
-            保存
-          </Button>
-          <Button
-            variant="outline"
-            disabled={!pending || Boolean(busy)}
-            onClick={() =>
-              void act(
-                "/api/items/decide",
-                { uid: current.uid, save: false },
-                "放弃",
-              )
-            }
-          >
-            放弃
-          </Button>
-          <span className={styles.status}>{busy ? `${busy}中…` : note}</span>
-        </div>
+        <>
+          <div className={styles.row}>
+            <Button
+              variant="outline"
+              disabled={Boolean(busy)}
+              onClick={() =>
+                void act("/api/items/reroll", { uid: current.uid }, "洗炼")
+              }
+            >
+              洗炼一次
+            </Button>
+            <Button
+              disabled={!pending || Boolean(busy)}
+              onClick={() =>
+                void act(
+                  "/api/items/decide",
+                  { uid: current.uid, save: true },
+                  "保存",
+                )
+              }
+            >
+              保存
+            </Button>
+            <Button
+              variant="outline"
+              disabled={!pending || Boolean(busy)}
+              onClick={() =>
+                void act(
+                  "/api/items/decide",
+                  { uid: current.uid, save: false },
+                  "放弃",
+                )
+              }
+            >
+              放弃
+            </Button>
+            <span className={styles.status}>{busy ? `${busy}中…` : note}</span>
+          </div>
+          <p className={styles.status}>
+            洗炼每次消耗 10
+            个洗炼石，放弃会保留原属性但材料不退；保存只在结果满足需求时使用。
+          </p>
+          <AutoPanel
+            row={current}
+            api={api}
+            attrOptions={attrOptions}
+            onFinished={onRefresh}
+          />
+        </>
       ) : (
         <p className={styles.status}>
           这件装备没有洗炼功能（只有橙装和红装能洗炼）。
-        </p>
-      )}
-      {current.rerollable && (
-        <p className={styles.status}>
-          洗炼每次消耗 10
-          个洗炼石，放弃会保留原属性但材料不退；保存只在结果满足需求时使用。
         </p>
       )}
       <form method="dialog">
@@ -237,10 +493,43 @@ function RerollDialog({
   );
 }
 
+function updateNavDot(count: number) {
+  const tab = document.querySelector<HTMLElement>('#tabs [data-tab="items"]');
+  if (!tab) return;
+  let dot = tab.querySelector<HTMLElement>(":scope > .items-unread-dot");
+  if (!count) {
+    if (dot) dot.remove();
+    return;
+  }
+  if (!dot) {
+    dot = document.createElement("span");
+    dot.className = "items-unread-dot";
+    Object.assign(dot.style, {
+      display: "inline-block",
+      minWidth: "16px",
+      height: "16px",
+      lineHeight: "16px",
+      marginLeft: "4px",
+      padding: "0 4px",
+      borderRadius: "9px",
+      background: "#e04b3a",
+      color: "#fff",
+      fontSize: "0.68rem",
+      textAlign: "center",
+      verticalAlign: "middle",
+    });
+    tab.appendChild(dot);
+  }
+  const label = count > 99 ? "99+" : String(count);
+  if (dot.textContent !== label) dot.textContent = label;
+  dot.title = `${count} 件装备/徽章未读`;
+}
+
 function ItemsPanel({ account }: { account: string }) {
   const api = useMemo(() => createAccountRequest(account), [account]);
   const [rows, setRows] = useState<ItemRow[]>([]);
   const [materials, setMaterials] = useState<Record<string, number>>({});
+  const [unread, setUnread] = useState(0);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
   const [kind, setKind] = useState<"all" | "equip" | "badge">("all");
@@ -251,11 +540,12 @@ function ItemsPanel({ account }: { account: string }) {
   const [career, setCareer] = useState("");
   const [attr, setAttr] = useState("");
   const [query, setQuery] = useState("");
-  const [sort, setSort] = useState<(typeof SORTS)[number][0]>("quality");
+  const [sort, setSort] = useState<(typeof SORTS)[number][0]>("newest");
   const [openFilters, setOpenFilters] = useState(false);
   const [detail, setDetail] = useState<string>("");
-
+  const [rendered, setRendered] = useState(PAGE_SIZE);
   const [reload, setReload] = useState(0);
+  const listRef = useRef<HTMLDivElement>(null);
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: 账号变化由外层 key 重挂载，这里只跟随手动刷新
   useEffect(() => {
@@ -269,6 +559,9 @@ function ItemsPanel({ account }: { account: string }) {
         const parsed = parseItems(data);
         setRows(parsed.rows);
         setMaterials(parsed.materials);
+        setUnread(parsed.unread);
+        setRendered(PAGE_SIZE);
+        updateNavDot(parsed.unread);
       } catch (caught) {
         if (controller.signal.aborted) return;
         setError(caught instanceof ApiError ? caught.message : "读取装备失败");
@@ -323,6 +616,7 @@ function ItemsPanel({ account }: { account: string }) {
       return true;
     });
     const compare: Record<string, (a: ItemRow, b: ItemRow) => number> = {
+      newest: (a, b) => b.firstSeen - a.firstSeen || b.star - a.star,
       quality: (a, b) => b.qualityIndex - a.qualityIndex || b.star - a.star,
       star: (a, b) => b.star - a.star || b.qualityIndex - a.qualityIndex,
       rating: (a, b) => b.rating - a.rating || b.star - a.star,
@@ -342,6 +636,61 @@ function ItemsPanel({ account }: { account: string }) {
     attr,
   ].filter(Boolean).length;
 
+  const openDetail = (row: ItemRow) => {
+    setDetail(row.uid);
+    if (!row.isNew) return;
+    setRows((list) =>
+      list.map((item) =>
+        item.uid === row.uid ? { ...item, isNew: false, read: true } : item,
+      ),
+    );
+    setUnread((count) => Math.max(0, count - 1));
+    void api("/api/items/read", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ kind: row.kind, uid: row.uid }),
+    })
+      .then((data) => {
+        const next =
+          data && typeof data === "object"
+            ? (data as { unread?: unknown }).unread
+            : undefined;
+        if (typeof next === "number") {
+          setUnread(next);
+          updateNavDot(next);
+        }
+      })
+      .catch(() => {
+        /* 失败时下次读取会恢复红点 */
+      });
+  };
+
+  const markAllRead = async () => {
+    try {
+      await api("/api/items/read-all", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ confirm: true }),
+      });
+      setRows((list) =>
+        list.map((row) => ({ ...row, isNew: false, read: true })),
+      );
+      setUnread(0);
+      updateNavDot(0);
+    } catch (caught) {
+      setError(caught instanceof ApiError ? caught.message : "一键已读失败");
+    }
+  };
+
+  const onScroll = () => {
+    const node = listRef.current;
+    if (!node) return;
+    if (node.scrollTop + node.clientHeight < node.scrollHeight - 240) return;
+    if (rendered >= shown.length) return;
+    setRendered((count) => count + PAGE_SIZE);
+  };
+
+  const visible = shown.slice(0, rendered);
   return (
     <div className={styles.page}>
       <div className={styles.bar}>
@@ -396,6 +745,13 @@ function ItemsPanel({ account }: { account: string }) {
           onClick={() => setReload((n) => n + 1)}
         >
           刷新
+        </Button>
+        <Button
+          variant="outline"
+          disabled={!unread}
+          onClick={() => void markAllRead()}
+        >
+          一键已读{unread ? `（${unread}）` : ""}
         </Button>
       </div>
 
@@ -515,18 +871,18 @@ function ItemsPanel({ account }: { account: string }) {
 
       <p className={styles.status}>
         {error ||
-          `共 ${rows.length} 件 · 显示 ${shown.length}${loading ? " · 读取中…" : ""}`}
+          `共 ${rows.length} 件 · 显示 ${shown.length}${unread ? ` · 未读 ${unread}` : ""}${loading ? " · 读取中…" : ""}`}
       </p>
 
-      <div className={styles.list}>
-        {shown.map((row) => {
+      <div className={styles.list} ref={listRef} onScroll={onScroll}>
+        {visible.map((row) => {
           const [first, second] = summary(row);
           return (
             <button
               key={row.kind + row.uid}
               type="button"
               className={styles.item}
-              onClick={() => setDetail(row.uid)}
+              onClick={() => openDetail(row)}
             >
               <span
                 className={styles.tile}
@@ -546,6 +902,14 @@ function ItemsPanel({ account }: { account: string }) {
                   style={{ color: QUALITY_COLOR[row.quality] }}
                 >
                   {row.name}
+                  {row.isNew && (
+                    <span
+                      className={styles.dot}
+                      title="新获得"
+                      role="img"
+                      aria-label="新获得"
+                    />
+                  )}
                 </span>
                 <span className={styles.sub}>
                   {[
@@ -570,6 +934,14 @@ function ItemsPanel({ account }: { account: string }) {
             </button>
           );
         })}
+        {rendered < shown.length && (
+          <Button
+            variant="outline"
+            onClick={() => setRendered((n) => n + PAGE_SIZE * 2)}
+          >
+            显示更多（还有 {shown.length - rendered} 件）
+          </Button>
+        )}
         {!shown.length && !loading && (
           <p className={styles.empty}>
             {rows.length
@@ -585,6 +957,7 @@ function ItemsPanel({ account }: { account: string }) {
           row={target}
           materials={materials}
           api={api}
+          attrOptions={facets.attrs}
           onClose={() => setDetail("")}
           onChanged={(next) =>
             setRows((list) =>
@@ -592,6 +965,7 @@ function ItemsPanel({ account }: { account: string }) {
             )
           }
           onMaterials={setMaterials}
+          onRefresh={() => setReload((n) => n + 1)}
         />
       )}
     </div>
