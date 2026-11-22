@@ -669,7 +669,7 @@ try {
     assert.throws(() => validateSettings(old), error => !!error.fields?.['discountShop.extra']);
   });
   test('版本1升级后重复迁移保持一致，保留有效的用户值', () => {
-    assert.equal(SETTINGS_SCHEMA_VERSION, 45);
+    assert.equal(SETTINGS_SCHEMA_VERSION, 46);
     const settings = legacySettings();
     settings.factory.checkEverySeconds = 270;
     settings.resources.diamondDailyLimit = 1234;

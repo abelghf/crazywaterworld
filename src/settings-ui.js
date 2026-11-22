@@ -225,9 +225,7 @@ const configGroups = [
   ]},
   {id:'league',title:'积分赛',category:'daily',fields:[
     configField('schedule.leagueChallenge','积分赛每日挑战','switch',{help:'使用已有编队和挑战券，每轮最多挑战一次，达到每日战斗次数后停止。'}),
-    configField('league.target','选对手策略','choice',{componentSelect:true,options:[['weakest','优先战力最低'],['score','优先积分最高']]}),
-    configField('league.maxPowerRatio','对手战力上限（相对己方）','number',{unit:'%',help:'填 70 表示优先选战力不超过本人积分赛战力 70% 的对手，再按所选策略排序。0 表示不限。'}),
-    configField('league.fallbackWeakest','免费刷新后兜底挑战','switch',{help:'当前名单无人符合上限时使用免费刷新次数。刷到符合条件的对手就打，免费次数用完仍无人符合时，挑战当前名单中战力最低者。'}),
+    configField('league.maxPowerRatio','对手战力上限（相对己方）','number',{unit:'%',help:'填 70 表示仅挑战总战力不超过本人积分赛战力 70% 的对手。0 表示不限。'}),
     configField('league.dailyBattleLimit','每日战斗次数','number',{unit:'次',help:'每场用 1 张券。填 0 暂停战斗并留券，领奖仍按各自开关执行。'}),
     configField('league.claimTask','领取积分赛每日任务奖励','switch',{help:'任务达标后领取，需开启「每日任务与奖励」总开关。'}),
     configField('schedule.leagueCollect','领取累计收集奖励'),

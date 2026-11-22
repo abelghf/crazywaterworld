@@ -67,6 +67,7 @@ import { readTrialSweeps, executeTrialSweep } from './trial-sweeps.mjs';
 import { readHeroEquipment, equipHeroEmptySlots, enhanceHeroEquipment, uidText } from './hero-equipment.mjs';
 import { readEquipmentCrafting, startEquipmentCraft, collectEquipmentCraft } from './equipment-crafting.mjs';
 import { readLineups, applyLineup, editorLineupRecommendations } from './lineups.mjs';
+import { moveLeagueTeam, readManualLeagueOrder, recoverLeagueOrder } from './league-order.mjs';
 import { getLineupCatalog, normalizeFormation, readLineupEditor, validateLineupSettings } from './saved-lineups.mjs';
 import { readLineupRuntime, recoverLineup } from './lineup-runtime.mjs';
 import { createLineupExecutor, lineupRole, selectedSavedLineup } from './lineup-execution.mjs';
@@ -1693,6 +1694,10 @@ export function createConsole({ host = '127.0.0.1', port = 17321, onLog, recover
       enabled:()=>session.client===client&&session.generation===generation&&!session.paused&&client.connected,
       report:entry=>emit(session,entry.ok?'info':'warn',entry.label+' · '+(entry.reason||entry.error||''))});}
     catch(error){emit(session,'warn','舰队阵容仍待恢复：'+error.message);}
+    try {
+      await recoverLeagueOrder(client, session.player, usageFor(session),
+        () => session.client === client && session.generation === generation && !session.paused && client.connected);
+    } catch (error) { emit(session, 'warn', '积分赛防守队序待核对：' + error.message); }
     if (session.client !== client || session.generation !== generation || session.paused || !client.connected) {
       throw new Error('连接初始化期间已断开或取消');
     }
@@ -3792,6 +3797,19 @@ export function createConsole({ host = '127.0.0.1', port = 17321, onLog, recover
       if (route === 'GET /api/lineups') {
         const { account, session } = scoped_(parsed);
         json(await progressionJob(session, account, route, null, client => readLineups(client, loadConfigSafe(), session.player), { read: true }));
+        return;
+      }
+      if (route === 'GET /api/league/order') {
+        const { account, session } = scoped_(parsed);
+        json(await progressionJob(session, account, route, null, client => readManualLeagueOrder(client, loadConfigSafe(), session.player), { read: true }));
+        return;
+      }
+      if (route === 'POST /api/league/order') {
+        const { account, session } = scoped_(parsed), payload = jsonBody();
+        needConfirm(payload);
+        const key = JSON.stringify([route, payload.signature, payload.from, payload.to]);
+        json(await progressionJob(session, account, key, operationLabels[parsed.pathname], (client, enabled) =>
+          moveLeagueTeam(client, loadConfigSafe(), session.player, usageFor(session), payload, enabled)));
         return;
       }
       if (route === 'POST /api/lineups/apply') {
