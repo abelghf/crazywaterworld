@@ -48,7 +48,7 @@ import { readAllianceRadar } from './alliance-radar.mjs';
 import { previewRadarSweep } from './radar-sweep.mjs';
 import { planRadarPreview, pendingPetrol } from './dispatch-preview.mjs';
 import { inspectHunt } from './pirates.mjs';
-import { selectPirateAdvance, runSinglePirateHunt } from './pirate-advance.mjs';
+import { pirateAutoDay, selectPirateAdvance, runSinglePirateHunt } from './pirate-advance.mjs';
 import { fleetRecordReason, dispatchReservationReason, fleetDispatchView, dispatchLabels, bridgeFleetReservations } from './fleet-availability.mjs';
 import { watchFreeRewardClock } from './extra-free-rewards.mjs';
 import { createPirateAdvanceTask } from './pirate-advance.mjs';
@@ -2580,8 +2580,9 @@ export function createConsole({ host = '127.0.0.1', port = 17321, onLog, recover
             return {...output({actions:[],notes:['任务顺序：'+settings.fleetDispatch.priority.map(k=>dispatchLabels[k]).join(' → '),'意向仅表示配置允许；派遣前仍核对目标和费用，正在执行的任务不抢占。']},{fleets:table.length},'舰队调度'),viewOnly:true,dispatch:{fleets:table.map(f=>({name:f.buildingId,reason:[f.reason,...f.reserved.map(r=>'预留给'+r),'允许顺序：'+(f.intents.map(i=>i.label).join(' → ')||'无'),'当前目标：'+(f.targetGrid??'主城')].filter(Boolean).join('；')}))}};
           }
           if(category==='pirateSweep'){
-            const state=await readPirateSweeps(client,config,session.player,settings),notes=[];
+            const state=await readPirateSweeps(client,config,session.player,settings,usageFor(session).keyRecords()),notes=[];
             if(state.left!==null)notes.push('今日剩余 '+state.left+'/'+state.limit+' 次（三种海盗共用）');
+            for(const row of state.allocations)notes.push(row.name+' · 挂机已用 '+row.used+' 次，'+(row.times===-1?'使用剩余次数':'每日设定 '+row.times+' 次'));
             if(state.reason)notes.push(state.reason);if(!settings.schedule.pirate)notes.push('每日免费扫荡已关闭');
             return output({actions:!state.reason&&settings.schedule.pirate?[{kind:'pirateSweep',label:'扫荡'+state.name+' '+state.level+'级',costs:[]}]:[],notes},{remaining:state.left},'海盗日常扫荡');
           }
@@ -2600,8 +2601,12 @@ export function createConsole({ host = '127.0.0.1', port = 17321, onLog, recover
           if (category === 'pirateHunt') {
             const snapshot=await inspectHunt(client,config,session.player),ledger=usageFor(session);
             for(const fleet of snapshot.view.fleets??[])fleet.reason ||= (!settings.pirateHunt.fleetIds.includes(fleet.buildingId)?'未选择此舰队':'')|| fleetRecordReason(ledger.keyRecords(),fleet.buildingId,exactAutomationId(session.player.worldId))||(previewCityReserved.includes(fleet.buildingId)?'城战时段预留':dispatchReservationReason(client,settings,'pirateHunt',fleet.buildingId,{ignoreOwners:['cityWar']}));
-            const progress=pirateRunState(session);
-            const selection=progress.halted?{reason:progress.reason}:selectPirateAdvance(snapshot,settings.pirateHunt,{pendingFuel:pendingPetrol(ledger)});
+            const checkpoint=session.loop.running?session.loop.challengeRun?.pirate:null;
+            const dailyRun=pirateAutoDay(ledger,session.player,checkpoint);
+            const halted=checkpoint?.scope===dailyRun.scope && checkpoint.state?.halted;
+            const reason=dailyRun.reason || (halted && checkpoint.state.reason) || (session.pirateAdvance.view().running && '手动首杀推进中，本轮跳过');
+            const autoState=checkpoint?.scope===dailyRun.scope ? checkpoint.state??{} : {};
+            const selection=reason?{reason}:selectPirateAdvance(snapshot,settings.pirateHunt,{pendingFuel:pendingPetrol(ledger),autoState});
             const plan={actions:selection.reason?[]:[{kind:'pirateFirst',label:selection.fleet.name+' → '+selection.target.name+' '+selection.target.level+'级',costs:[{id:'汽油',num:selection.cost}]}],notes:selection.reason?[selection.reason]:[]};
             return {...output(plan,{fleets:snapshot.view.fleets?.length??0,targets:snapshot.view.targets?.length??0},'海盗首杀'),dispatch:{fleets:snapshot.view.fleets,fuel:snapshot.view.fuel,pending:pendingPetrol(ledger)}};
           }
