@@ -73,6 +73,8 @@ export function createGameItems(client, { config } = {}) {
   const badges = new Map(rows(config, 'HeroBadgeCfg').map(row => [row.id, row]));
   const badgeAttr = new Map(rows(config, 'HeroBadgeAttrCfg').map(row => [row.id + '|' + String(row.star), row]));
   const heroNames = new Map(rows(config, 'HeroCfg').map(row => [row.id, row.name]));
+  // 只有配置了洗炼费用的品质才能洗（橙 qualityIndex 4、红 5；紫/蓝/绿没有）
+  const rerollQualities = new Set(rows(config, 'EquipRerollCfg').map(row => Number(row.quality)));
 
   async function inventory(current) {
     const [equipment, badge, heroes] = await Promise.all([
@@ -102,6 +104,7 @@ export function createGameItems(client, { config } = {}) {
       pending: computeAttrs(equip.rerollAttrs, tables, names),
       rating, ratingLetter: RATING_LETTERS[rating] ?? '', wornBy: '',
       icon: iconEntry(definition.icon)?.thumb || '',
+      rerollable: rerollQualities.has(Number(definition.qualityIndex ?? -1)),
     };
   }
 
@@ -117,7 +120,8 @@ export function createGameItems(client, { config } = {}) {
       level: Number(badge.level ?? 0), maxLevel: Number(growth.maxLevel ?? 0), star: Number(badge.star ?? 0),
       refineLv: 0, slots: 1,
       baseAttrs: computeBase(growth, badge.level, 'badge', tables), attrs, pending: [],
-      rating, ratingLetter: RATING_LETTERS[rating] ?? '', wornBy: '',
+      rating, ratingLetter: RATING_LETTERS[rating] ?? '', wornBy: '', icon: iconEntry(definition.icon)?.thumb || '',
+      rerollable: false,
     };
   }
 
@@ -182,6 +186,7 @@ export function createGameItems(client, { config } = {}) {
       const state = await inventory(current);
       const equip = state.equips.find(row => exactAutomationId(row.uid) === target);
       if (!equip) throw Error('洗炼后没有读回这件装备');
+      if (!rerollQualities.has(Number(equips.get(equip.equipId)?.qualityIndex ?? -1))) throw Error('只有橙装和红装能洗炼');
       const row = equipRow(equip);
       if (!row.pending.length) throw Error('没有等到洗炼结果，请刷新后重试');
       return { equip: row, materials: { before, after: await materials(current) } };

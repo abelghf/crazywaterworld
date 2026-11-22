@@ -23,6 +23,7 @@ const config = {
         baseAttrs: [['基础攻击', 568], ['基础法强', 243], ['法抗穿透', 16]],
         growAttrs: [['基础攻击', 19.9], ['基础法强', 8.5], ['法抗穿透', 0.6]] },
     ] },
+    EquipRerollCfg: { data: [ { quality: 4, star: 3, lockCount: 0, cost: ['装备洗炼石', 10], lockCost: [] } ] },
     HeroBadgeCfg: { data: [
       { id: '橙射手徽章', name: '白银徽章·射手', career: '射手', quality: 'ORANGE', qualityIndex: 3, icon: 'badge_sheshou_5' },
     ] },
@@ -108,6 +109,7 @@ assert.equal(equipRow.uid, '1208549744519', 'UID 必须精确成字符串');
 assert.equal(equipRow.name, '电刀');
 assert.equal(equipRow.slots, 2, '词条位来自装备模板');
 assert.equal(equipRow.wornBy, '兰博', '要标出穿在哪个英雄身上');
+assert.equal(equipRow.rerollable, true, '橙装可以洗炼');
 assert.equal(equipRow.ratingLetter, 'B', '评级取该装备最好的一条');
 // 基础属性 = 配置 base + grow × 等级；装备保留一位小数
 assert.deepEqual(equipRow.baseAttrs.map(attr => [attr.name, attr.display]),
@@ -119,6 +121,7 @@ assert.deepEqual(equipRow.attrs.map(attr => [attr.name, attr.display, attr.lette
 assert.equal(badgeRow.kind, 'badge');
 assert.equal(badgeRow.name, '白银徽章·射手');
 assert.equal(badgeRow.slots, 1);
+assert.equal(badgeRow.rerollable, false, '徽章不属于装备洗炼');
 // 徽章基础属性游戏里取整
 assert.deepEqual(badgeRow.baseAttrs.map(attr => [attr.name, attr.display]),
   [['生命', '3861'], ['攻击', '772'], ['技能强度', '102']]);

@@ -28,6 +28,7 @@ export type ItemRow = {
   ratingLetter: string;
   wornBy: string;
   icon: string;
+  rerollable: boolean;
 };
 
 function text(value: unknown) {
@@ -103,6 +104,7 @@ function parseRow(value: unknown): ItemRow {
     ratingLetter: text(value.ratingLetter),
     wornBy: text(value.wornBy),
     icon: value.icon,
+    rerollable: value.rerollable === true,
   };
 }
 

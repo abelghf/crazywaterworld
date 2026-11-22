@@ -181,47 +181,55 @@ function RerollDialog({
           <AttrList attrs={current.pending} />
         </div>
       </div>
-      <div className={styles.row}>
-        <Button
-          variant="outline"
-          disabled={Boolean(busy)}
-          onClick={() =>
-            void act("/api/items/reroll", { uid: current.uid }, "洗炼")
-          }
-        >
-          洗炼一次
-        </Button>
-        <Button
-          disabled={!pending || Boolean(busy)}
-          onClick={() =>
-            void act(
-              "/api/items/decide",
-              { uid: current.uid, save: true },
-              "保存",
-            )
-          }
-        >
-          保存
-        </Button>
-        <Button
-          variant="outline"
-          disabled={!pending || Boolean(busy)}
-          onClick={() =>
-            void act(
-              "/api/items/decide",
-              { uid: current.uid, save: false },
-              "放弃",
-            )
-          }
-        >
-          放弃
-        </Button>
-        <span className={styles.status}>{busy ? `${busy}中…` : note}</span>
-      </div>
-      <p className={styles.status}>
-        洗炼每次消耗 10
-        个洗炼石，放弃会保留原属性但材料不退；保存只在结果满足需求时使用。
-      </p>
+      {current.rerollable ? (
+        <div className={styles.row}>
+          <Button
+            variant="outline"
+            disabled={Boolean(busy)}
+            onClick={() =>
+              void act("/api/items/reroll", { uid: current.uid }, "洗炼")
+            }
+          >
+            洗炼一次
+          </Button>
+          <Button
+            disabled={!pending || Boolean(busy)}
+            onClick={() =>
+              void act(
+                "/api/items/decide",
+                { uid: current.uid, save: true },
+                "保存",
+              )
+            }
+          >
+            保存
+          </Button>
+          <Button
+            variant="outline"
+            disabled={!pending || Boolean(busy)}
+            onClick={() =>
+              void act(
+                "/api/items/decide",
+                { uid: current.uid, save: false },
+                "放弃",
+              )
+            }
+          >
+            放弃
+          </Button>
+          <span className={styles.status}>{busy ? `${busy}中…` : note}</span>
+        </div>
+      ) : (
+        <p className={styles.status}>
+          这件装备没有洗炼功能（只有橙装和红装能洗炼）。
+        </p>
+      )}
+      {current.rerollable && (
+        <p className={styles.status}>
+          洗炼每次消耗 10
+          个洗炼石，放弃会保留原属性但材料不退；保存只在结果满足需求时使用。
+        </p>
+      )}
       <form method="dialog">
         <Button type="submit">关闭</Button>
       </form>
