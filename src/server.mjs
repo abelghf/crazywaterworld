@@ -62,7 +62,7 @@ import path from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
 import zlib from 'node:zlib';
 import { GameClient, toNumber } from './client.mjs';
-import { challengeTrial, trialProgress, createTrialTask } from './trials.mjs';
+import { challengeTrial, trialProgress, createTrialTask, readRaid, trialStageSummary } from './trials.mjs';
 import { readTrialSweeps, executeTrialSweep } from './trial-sweeps.mjs';
 import { readHeroEquipment, equipHeroEmptySlots, enhanceHeroEquipment, uidText } from './hero-equipment.mjs';
 import { readEquipmentCrafting, startEquipmentCraft, collectEquipmentCraft } from './equipment-crafting.mjs';
@@ -1160,6 +1160,7 @@ export function createConsole({ host = '127.0.0.1', port = 17321, onLog, recover
         instance.freeRecruitTimes??={};instance.freeRecruitTimes[name==='RecruitStartResponse'?'hero':'antique']=body.recruitData?.freeEndTimeSeconds;
       }
       if (name === 'TreasureLootStatsResponse') recordTreasureRewards(instance, body);
+      if (name === 'TrialRaidInfoResponse' || name === 'SCTrialRaidUpdate') recordTrialStage(instance, body?.raid);
     });
     instance.on('login',()=>{session.loop.controlStatus=new Map();session.loop.fleetMaintenance=null;});
     watchFreeRewardClock(instance);
@@ -4685,7 +4686,9 @@ export function createConsole({ host = '127.0.0.1', port = 17321, onLog, recover
             }catch { /* 未取到时间时沿用已有的实际观察，不推算冷却。 */ }
           }).catch(()=>{});
         }
-        json(loopView(session));
+        const view = loopView(session);
+        if (parsed.searchParams.get('trials') === '1') view.trialProgress = configTrialStages(session);
+        json(view);
         return;
       }
       if (route === 'POST /api/loop/start') {
@@ -5098,6 +5101,33 @@ export function createConsole({ host = '127.0.0.1', port = 17321, onLog, recover
   }
 
   // 活动统计与自动参与的真实回包也会刷新此连接的当日领奖数。
+  function recordTrialStage(client, raid) {
+    if (!Number.isSafeInteger(raid?.raidId) || !Number.isSafeInteger(raid.passedStage) || raid.passedStage < 0) return;
+    client.trialPassedStages ??= new Map();
+    client.trialPassedStages.set(raid.raidId, Math.max(client.trialPassedStages.get(raid.raidId) ?? 0, raid.passedStage));
+  }
+
+  function configTrialStages(session) {
+    const { client, player } = session;
+    const rows = trialStageSummary(loadConfigSafe({ allowStale: true }), player?.level, client?.trialPassedStages);
+    const connected = () => client?.connected && session.client === client && session.player === player && !session.paused;
+    const missing = rows.filter(row => row.passed === null && !row.reason);
+    if (!missing.length || !player?.level || !connected() || client.trialStageRead || Date.now() < (client.trialRetryAt ?? 0)) return rows;
+    // 只在打开此分组时补读缺失的副本，后续直接复用普通查询、挑战和扫荡收到的进度更新。
+    client.trialStageRead = readJob(session, async () => {
+      for (const { raidId } of missing) {
+        if (!connected()) break;
+        if (client.trialPassedStages?.has(raidId)) continue;
+        try { recordTrialStage(client, await readRaid(client, raidId)); }
+        catch { /* 保留待同步，其他副本仍可正常显示。 */ }
+      }
+    }, { recoverFormation: false }).catch(() => {}).finally(() => {
+      client.trialStageRead = null;
+      if (missing.some(row => !client.trialPassedStages?.has(row.raidId))) client.trialRetryAt = Date.now() + 15000;
+    });
+    return rows;
+  }
+
   const treasureRewards = new WeakMap();
   const rewardClock = client => Date.now() + (client.serverClockOffsetMs || 0);
   function recordTreasureRewards(client, stats) {
@@ -5144,6 +5174,7 @@ export function createConsole({ host = '127.0.0.1', port = 17321, onLog, recover
       connected,
       fleetMaintenance:{...(loop.fleetMaintenance??{rows:[]}),configured:maintenanceConfigured,enabled:loop.running&&connected&&maintenanceConfigured},
       singleTasks: {pirate:session.pirateAdvance.view(), stages:session.stages?.view?.(), mutual:session.mutualAid?.view?.()},
+      mainlineStage: session.player?.mainlineStage ?? null,
       challenges: { mainline: loop.challengeRun?.mainline ?? {}, trials: loop.challengeRun?.trials ?? {}, pirate: loop.challengeRun?.pirate?.state ?? {} },
       pirateAdvance: session.pirateAdvance.view(),
       controls: automationControlView(settings).filter(control => !control.taskKey || isActivityTaskAvailable(control.taskKey, session.client)).map(control=>{

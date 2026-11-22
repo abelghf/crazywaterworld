@@ -1135,6 +1135,20 @@ function configRender() {
       const section = el('section', 'config-section'); section.id = 'config-group-' + group.id;
       section.setAttribute('role', direct ? 'group' : 'tabpanel');
       section.setAttribute('aria-labelledby', singleGroup ? 'config-tab-' + category : direct ? 'config-family-' + family.id : 'config-subtab-' + group.id);
+      if (group.id === 'progression') {
+        const progress = el('div', 'mainline-progress');
+        const card = el('section');
+        card.id = 'config-mainline-progress';
+        card.setAttribute('aria-labelledby', 'config-mainline-progress-title');
+        const trials = el('section', 'config-trial-progress');
+        trials.id = 'config-trial-progress';
+        trials.setAttribute('aria-labelledby', 'config-trial-progress-title');
+        const title = el('h3', '', '试炼进度');
+        title.id = 'config-trial-progress-title';
+        trials.append(title, el('div'));
+        progress.append(card, trials);
+        section.append(progress);
+      }
       if (group.description) section.append(el('p','config-section-intro',group.description));
       if (['cityWar','silicon','treasure','resourceFields'].includes(group.id) && !configEditor.data.catalog?.fleetAvailability?.known) {
         section.append(el('p','config-section-intro','舰队名单尚未同步。连接游戏后重新打开挂机配置即可查看舰队名单。'));
@@ -1387,6 +1401,10 @@ function configLineupPicker(spec, id) {
 function configRenderUsage() {
   const group = configEditor.groups.get(configEditor.selectedGroups[configEditor.category]);
   const root = $('config-usage'), runtime = configEditor.runtime;
+  if (group?.id === 'progression') {
+    configRenderMainlineProgress(runtime);
+    configRenderTrialProgress(runtime);
+  }
   const preview = configEditor.previewSummary;
   const summary = $('config-preview-summary');
   const matching = group && preview?.group === group.id ? preview : null;
@@ -1465,6 +1483,81 @@ function configRenderUsage() {
   }
 }
 
+function configRenderMainlineProgress(runtime) {
+  const card = $('config-mainline-progress');
+  const stage = runtime?.mainlineStage;
+  const synced = Number.isSafeInteger(stage) && stage > 0;
+  const key = synced ? stage + '/' + !!runtime.connected : 'pending';
+  if (card.renderKey === key) return;
+  card.renderKey = key;
+  const head = el('div', 'mainline-progress-head');
+  const title = el('h3', '', '主线推关进度');
+  title.id = 'config-mainline-progress-title';
+  head.append(title);
+  clear(card).append(head);
+  if (!synced) {
+    card.append(el('p', 'mainline-progress-note', '关卡待同步'));
+    return;
+  }
+  if (!runtime.connected) head.append(el('span', 'mainline-progress-note', '最近同步'));
+  const stages = el('ol', 'mainline-progress-stages');
+  stages.setAttribute('aria-label', '主线关卡');
+  // 游戏的关卡条固定七格，第一关之前留空，当前关始终在第四格。
+  for (let offset = -3; offset <= 3; offset++) {
+    const number = stage + offset;
+    if (number < 1) continue;
+    const step = el('li');
+    step.style.gridColumn = String(offset + 4);
+    step.dataset.state = offset < 0 ? 'passed' : offset === 0 ? 'current' : 'upcoming';
+    const caption = offset === 0 ? '当前关' : offset === 1 ? '下一关' : '';
+    step.setAttribute('aria-label', '第 ' + number + ' 关，' + (caption || (offset < 0 ? '已通关' : '待挑战')));
+    if (offset === 0) step.setAttribute('aria-current', 'step');
+    step.append(el('span', 'mainline-stage-number', number));
+    stages.append(step);
+  }
+  card.append(stages);
+}
+
+function configRenderTrialProgress(runtime) {
+  const body = $('config-trial-progress').lastElementChild;
+  const rows = runtime?.trialProgress ?? (configEditor.data?.catalog?.trialRaids ?? []).map(raid => ({ name: raid.label }));
+  const key = JSON.stringify(rows);
+  if (body.renderKey === key) return;
+  body.renderKey = key;
+  clear(body);
+  if (!rows.length) {
+    body.append(el('p', 'mainline-progress-note', '试炼配置待同步'));
+    return;
+  }
+  const table = el('table');
+  table.setAttribute('aria-labelledby', 'config-trial-progress-title');
+  const head = table.createTHead().insertRow();
+  for (const label of ['副本', '已通关', '下一关']) {
+    const th = el('th', '', label);
+    th.scope = 'col';
+    head.append(th);
+  }
+  const list = table.createTBody();
+  for (const raid of rows) {
+    const row = list.insertRow();
+    const name = el('th', '', raid.name);
+    name.scope = 'row';
+    row.append(name);
+    if (raid.passed == null) {
+      const status = row.insertCell();
+      status.colSpan = 2;
+      status.className = 'mainline-progress-note';
+      status.textContent = raid.reason || '待同步';
+      continue;
+    }
+    row.insertCell().textContent = raid.passed ? '第 ' + raid.passed + ' 关' : '未首通';
+    const next = row.insertCell();
+    next.textContent = raid.next != null ? '第 ' + raid.next + ' 关' : '全部通关';
+    if (raid.reason) next.append(el('small', 'mainline-progress-note', raid.reason));
+  }
+  body.append(table);
+}
+
 function configPreviewFacts(preview) {
   const actions = preview.moduleActions ?? (preview.viewOnly ? null : preview.actions);
   let result = preview.fields && !preview.moduleActivities ? '参数预览' : '只读预览';
@@ -1521,7 +1614,7 @@ async function configLoad(force = false) {
   if (!Object.keys(configEditor.errors).length) configMessage('');
   configUpdateState();
   try {
-    const [data,runtime]=await Promise.all([call('/api/settings?fleets=1'),call('/api/loop').catch(()=>null)]);
+    const [data,runtime]=await Promise.all([call('/api/settings?fleets=1'),call(configLoopPath()).catch(()=>null)]);
     if (configPageStale() || account !== current || version !== configEditor.serial) return;
     const recoveryChanged = data.recovery?.required && (data.recoveryToken !== configEditor.data?.recoveryToken || JSON.stringify(data.recovery) !== JSON.stringify(configEditor.data?.recovery));
     if((!force || JSON.stringify(configEditor.draft)!==original)&&configEditor.owner===account&&configEditor.draft&&!(recoveryChanged&&!configIsDirty()&&!configEditor.recoveryBlocked)&&
