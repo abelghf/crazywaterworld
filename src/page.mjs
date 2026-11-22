@@ -90,6 +90,7 @@ ${chrome()}
   <section id="tab-dailies" class="hidden" aria-label="日常任务"><div id="daily-tasks-root"></div></section>
   <section id="tab-shops" class="hidden" aria-label="商店"><div id="shops-root"></div></section>
   <section id="tab-chat" class="hidden" aria-label="聊天"><div id="chat-root"></div></section>
+  <section id="tab-items" class="hidden" aria-label="装备"><div id="items-root"></div></section>
 
   <section id="tab-giftcodes" class="hidden">
     ${giftCodesPage()}
