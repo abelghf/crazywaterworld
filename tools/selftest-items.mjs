@@ -97,8 +97,9 @@ const schedule = work => work();
 calls.length = 0;
 const items = createGameItems(makeClient(), { config });
 const view = await items.read(schedule, current);
-assert.deepEqual(calls.map(call => call[1]), ['EquipsRequest', 'BadgesRequest', 'AllHeroRequest']);
+assert.deepEqual(calls.map(call => call[1]), ['EquipsRequest', 'BadgesRequest', 'AllHeroRequest', 'AllItemRequest']);
 assert.equal(view.hint, '');
+assert.equal(view.materials['装备洗炼石'], 5505, '列表读取要带回洗炼材料余量');
 assert.equal(view.rows.length, 2, '装备与徽章都要出现');
 
 const [equipRow, badgeRow] = view.rows;

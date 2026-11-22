@@ -38,6 +38,16 @@ function number(value: unknown) {
   return typeof value === "number" && Number.isFinite(value) ? value : 0;
 }
 
+function counts(value: unknown) {
+  const table: Record<string, number> = {};
+  if (isRecord(value)) {
+    for (const [key, item] of Object.entries(value)) {
+      if (typeof item === "number" && Number.isFinite(item)) table[key] = item;
+    }
+  }
+  return table;
+}
+
 function parseAttr(value: unknown): ItemAttr {
   if (
     !isRecord(value) ||
@@ -106,7 +116,14 @@ export function parseItems(data: unknown) {
     if (seen.has(key)) throw Error("装备列表存在重复条目");
     seen.add(key);
   }
-  return { rows, hint: text(data.hint) };
+  const materials: Record<string, number> = {};
+  if (isRecord(data.materials)) {
+    for (const [key, value] of Object.entries(data.materials)) {
+      if (typeof value === "number" && Number.isFinite(value))
+        materials[key] = value;
+    }
+  }
+  return { rows, materials, hint: text(data.hint) };
 }
 
 export function parseReroll(data: unknown) {
@@ -115,8 +132,8 @@ export function parseReroll(data: unknown) {
     equip: parseRow(data.equip),
     materials: isRecord(data.materials)
       ? {
-          before: isRecord(data.materials.before) ? data.materials.before : {},
-          after: isRecord(data.materials.after) ? data.materials.after : {},
+          before: counts(data.materials.before),
+          after: counts(data.materials.after),
         }
       : null,
   };

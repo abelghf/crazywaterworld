@@ -205,3 +205,8 @@
   color: var(--muted-foreground);
   margin-bottom: 2px;
 }
+
+/* 主题启用 appearance: base-select 后，收起的选择框会渲染 option::checkmark（浅色 ✓）；本页恢复普通下拉外观。 */
+.page select {
+  appearance: none;
+}

@@ -143,14 +143,15 @@ export function createGameItems(client, { config } = {}) {
     const state = await schedule(async () => {
       current();
       const value = await inventory(current);
+      const counts = await materials(current);
       current();
-      return value;
+      return { ...value, counts };
     });
     current();
     const worn = wornBy(state.heroes);
     const list = [...state.equips.map(equipRow), ...state.badges.map(badgeRow)];
     for (const row of list) row.wornBy = worn.get(row.uid) ?? '';
-    return { rows: list, hint: '' };
+    return { rows: list, materials: state.counts, hint: '' };
   }
 
   async function materials(current) {

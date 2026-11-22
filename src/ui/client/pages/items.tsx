@@ -42,6 +42,7 @@ const SORTS = [
   ["level", "等级"],
   ["name", "名称"],
 ] as const;
+const REROLL_MATERIALS = ["装备洗炼石", "红装备洗炼石", "锁定石"];
 const GRADE_CLASS: Record<string, string> = {
   S: styles.gradeS,
   A: styles.gradeA,
@@ -91,17 +92,22 @@ function AttrList({ attrs }: { attrs: ItemAttr[] }) {
 
 function RerollDialog({
   row,
+  materials,
   api,
   onClose,
   onChanged,
+  onMaterials,
 }: {
   row: ItemRow;
+  materials: Record<string, number>;
   api: ReturnType<typeof createAccountRequest>;
   onClose: () => void;
   onChanged: (next: ItemRow) => void;
+  onMaterials: (next: Record<string, number>) => void;
 }) {
   const dialog = useRef<HTMLDialogElement>(null);
   const [current, setCurrent] = useState(row);
+  const [counts, setCounts] = useState(materials);
   const [busy, setBusy] = useState("");
   const [note, setNote] = useState("");
 
@@ -123,11 +129,16 @@ function RerollDialog({
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ ...payload, confirm: true }),
       });
-      const next = path.endsWith("reroll")
-        ? parseReroll(data).equip
-        : parseRerollDecision(data).equip;
-      setCurrent(next);
-      onChanged(next);
+      const parsed = path.endsWith("reroll")
+        ? parseReroll(data)
+        : { equip: parseRerollDecision(data).equip, materials: null };
+      setCurrent(parsed.equip);
+      onChanged(parsed.equip);
+      // 洗炼会扣材料：用响应里的余额直接更新，不需要手动刷新
+      if (parsed.materials) {
+        setCounts(parsed.materials.after);
+        onMaterials(parsed.materials.after);
+      }
     } catch (error) {
       setNote(error instanceof ApiError ? error.message : "操作失败");
     } finally {
@@ -153,6 +164,9 @@ function RerollDialog({
           `Lv ${current.level}`,
           current.wornBy ? `已装备：${current.wornBy}` : "未装备",
           `词条位 ${current.slots}`,
+          REROLL_MATERIALS.map((name) => `${name} ${counts[name] ?? 0}`).join(
+            " · ",
+          ),
         ]
           .filter(Boolean)
           .join(" · ")}
@@ -218,6 +232,7 @@ function RerollDialog({
 function ItemsPanel({ account }: { account: string }) {
   const api = useMemo(() => createAccountRequest(account), [account]);
   const [rows, setRows] = useState<ItemRow[]>([]);
+  const [materials, setMaterials] = useState<Record<string, number>>({});
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
   const [kind, setKind] = useState<"all" | "equip" | "badge">("all");
@@ -243,7 +258,9 @@ function ItemsPanel({ account }: { account: string }) {
       try {
         const data = await api("/api/items", { signal: controller.signal });
         if (controller.signal.aborted) return;
-        setRows(parseItems(data).rows);
+        const parsed = parseItems(data);
+        setRows(parsed.rows);
+        setMaterials(parsed.materials);
       } catch (caught) {
         if (controller.signal.aborted) return;
         setError(caught instanceof ApiError ? caught.message : "读取装备失败");
@@ -558,6 +575,7 @@ function ItemsPanel({ account }: { account: string }) {
         <RerollDialog
           key={target.uid + target.pending.length}
           row={target}
+          materials={materials}
           api={api}
           onClose={() => setDetail("")}
           onChanged={(next) =>
@@ -565,6 +583,7 @@ function ItemsPanel({ account }: { account: string }) {
               list.map((row) => (row.uid === next.uid ? next : row)),
             )
           }
+          onMaterials={setMaterials}
         />
       )}
     </div>
