@@ -806,10 +806,12 @@ export function createConsole({ host = '127.0.0.1', port = 17321, onLog, recover
       session.operations = createOperationJournal((level, message, data, quiet) => emit(session, level, message, data, quiet), LOG_LIMIT);
       sessions.set(id, session);
       if (session.settingsRecovery) emit(session, 'error', session.settingsRecovery.message);
-      try {
-        const audit = JSON.parse(fs.readFileSync(factoryReportFile(id), 'utf8'));
-        if (audit.lines?.length) emit(session, 'info', '上次工厂检查 · ' + audit.time, { diagnostic: audit.lines.join('\n') });
-      } catch { /* 新账号没有历史核对记录 */ }
+      if (!session.paused) {
+        try {
+          const audit = JSON.parse(fs.readFileSync(factoryReportFile(id), 'utf8'));
+          if (audit.lines?.length) emit(session, 'info', '上次工厂检查 · ' + audit.time, { diagnostic: audit.lines.join('\n') });
+        } catch { /* 新账号没有历史核对记录 */ }
+      }
     }
     return sessions.get(id);
   }
