@@ -5291,6 +5291,8 @@ export function createConsole({ host = '127.0.0.1', port = 17321, onLog, recover
           .sort((a,b) => (b.checkedAt ?? 0) - (a.checkedAt ?? 0))[0];
         const observed = rewards?.status(key);
         let state=(observed?.checkedAt??0)>(recorded?.checkedAt??0)?observed:recorded||observed;
+        // 订单回读与发送日志可能在同一秒，当前连接的调度记录已包含最近一次回读或发送结果。
+        if (key === 'orderDaily' && observed) state = observed;
         if(state?.checkedAt && beijingDay(state.checkedAt*1000)!==displayUsage.day)state=null;
         if (state && control.taskKey === 'tradeTasks') state = { ...state, text: '海商王统一领奖的最近记录：' + state.text };
         let nextCheck = rewards?.nextCheck(checkKey) ?? null;
