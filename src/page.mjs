@@ -50,7 +50,9 @@ export const PAGE = `<!doctype html>
 ${chrome()}
 <div class="deck"><main>
   <nav id="resource-tabs" class="resource-tabs" aria-label="杂项分类" hidden>
-    <button type="button" data-resource-tab="guild">联盟</button><button type="button" data-resource-tab="inventory">仓库</button><button type="button" data-resource-tab="heroes">英雄与装备</button><button type="button" data-resource-tab="giftcodes">礼包兑换</button>
+    <button type="button" data-resource-tab="guild">联盟</button><button type="button" data-resource-tab="inventory">仓库</button><button type="button" data-resource-tab="heroes">英雄与装备</button>
+    <button type="button" data-resource-tab="items">装备与徽章</button>
+    <button type="button" data-resource-tab="giftcodes">礼包兑换</button>
     <button type="button" data-resource-tab="dailies">日常任务</button>
     <button type="button" data-resource-tab="shops">商店</button>
     <button type="button" data-resource-tab="chat">聊天</button>
@@ -91,6 +93,7 @@ ${chrome()}
   <section id="tab-dailies" class="hidden" aria-label="日常任务"><div id="daily-tasks-root"></div></section>
   <section id="tab-shops" class="hidden" aria-label="商店"><div id="shops-root"></div></section>
   <section id="tab-chat" class="hidden" aria-label="聊天"><div id="chat-root"></div></section>
+  <section id="tab-items" class="hidden" aria-label="装备与徽章"><div id="items-root"></div></section>
 
   <section id="tab-giftcodes" class="hidden">
     ${giftCodesPage()}
@@ -2693,7 +2696,8 @@ new ResizeObserver(() => {
 async function boot() {
   // 显式链接优先，否则恢复当前历史记录的页面；配置分组由 configApplyHash 恢复。
   const previousView = history.state?.consoleView;
-  const savedView = previousView?.tab === 'chat' ? { tab: 'resources', resource: 'chat' } : previousView;
+  const savedView = ['chat', 'items'].includes(previousView?.tab)
+    ? { tab: 'resources', resource: previousView.tab } : previousView;
   const initialTab = location.hash.startsWith('#config-group-') ? 'settings'
     : location.hash === '#pirate-first-kill' ? 'stages' : location.hash === '#journal' ? 'overview'
     : savedView?.tab === 'login-settings' ? 'account'
@@ -2701,7 +2705,7 @@ async function boot() {
   try {
     // 恢复账号页时先显示保存的角色资料，由该页按连接状态决定是否读取资源。
     await loadAccounts(true, initialTab !== 'account'
-      && !(initialTab === 'resources' && ['shops', 'chat'].includes(savedView?.resource)));
+      && !(initialTab === 'resources' && ['shops', 'chat', 'items'].includes(savedView?.resource)));
   } catch (error) {
     $('hint').textContent = '';
     reportError(error);

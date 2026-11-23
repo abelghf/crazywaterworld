@@ -218,7 +218,8 @@ try {
     await tab('overview');
     assert.equal(await page.locator('#tabs [data-tab="activities"]').getAttribute('aria-label'), '活动');
     assert.equal(await page.locator('#tabs [data-tab="resources"]').getAttribute('aria-label'), '杂项');
-    assert.deepEqual(await page.locator('[data-resource-tab]').allTextContents(), ['联盟', '仓库', '英雄与装备', '礼包兑换', '日常任务', '商店', '聊天']);
+    assert.deepEqual(await page.locator('[data-resource-tab]').allTextContents(), ['联盟', '仓库', '英雄与装备', '装备与徽章', '礼包兑换', '日常任务', '商店', '聊天']);
+    assert.equal(await page.locator('#tabs [data-tab="items"]').count(), 0);
     await main('settings');
     await config('base', 'building');
     await page.reload();
@@ -345,6 +346,13 @@ try {
     await tab('resources', 'heroes');
     await page.reload();
     await tab('resources', 'heroes');
+    await page.getByRole('button', { name: '装备与徽章', exact: true }).click();
+    await tab('resources', 'items');
+    await page.reload();
+    await tab('resources', 'items');
+    await page.locator('#items-root').getByText('账号已暂停，恢复托管后可查看装备。').waitFor();
+    await reloadFrom({ consoleView: { tab: 'items', resource: 'guild' } });
+    await tab('resources', 'items');
     await page.locator('[data-resource-tab="dailies"]').click();
     await page.reload();
     await tab('resources', 'dailies');

@@ -1,5 +1,7 @@
 import { createSettingsHistory } from './settings-history.mjs';
 import { createGameChat } from './chat.mjs';
+import { createGameItems } from './items.mjs';
+import { autoRerollStatus, normalizeRequirements, startAutoReroll, stopAutoReroll } from './reroll-runner.mjs';
 import { planDiscountShop } from './discount-shop-automation.mjs';
 import { SHOP_CATALOG, createShopState, readShop, buyShopProduct, refreshDiscountShop } from './shops.mjs';
 import { serveClientAsset } from './ui-assets.mjs';
@@ -3560,6 +3562,56 @@ export function createConsole({ host = '127.0.0.1', port = 17321, onLog, recover
         const peerId = parsed.searchParams.get('peer');
         json(route === 'GET /api/chat/profile' ? await client.chat.profile(peerId, schedule, current)
           : await client.chat.read(parsed.searchParams.get('channel'), peerId, schedule, current));
+        return;
+      }
+      if (['GET /api/items', 'GET /api/items/auto', 'POST /api/items/reroll', 'POST /api/items/decide',
+        'POST /api/items/auto', 'POST /api/items/auto/stop'].includes(route)) {
+        const id = parsed.searchParams.get('account');
+        if (!id) throw Error('请选择装备账号');
+        const { session } = scoped_(parsed);
+        if (id !== session.id) throw Error('装备账号不匹配');
+        const client = session.client, player = session.player, generation = session.generation;
+        const current = () => {
+          if (!client?.connected || !player || session.paused || session.generation !== generation || session.client !== client || session.player !== player)
+            throw Error('请先连接当前账号，再使用装备');
+        };
+        current();
+        client.items ??= createGameItems(client, { config: loadConfigSafe({ allowStale: true }), accountId: id });
+        res.setHeader('cache-control', 'no-store');
+        const schedule = work => readJob(session, work, { recoverFormation: false });
+        const work = item => enqueue(session, item, '装备洗炼', { recoverFormation: false });
+        if (route === 'GET /api/items') {
+          json(await client.items.read(schedule, current));
+          return;
+        }
+        if (route === 'GET /api/items/auto') {
+          json(autoRerollStatus(id));
+          return;
+        }
+        const payload = jsonBody();
+        needConfirm(payload);
+        if (route === 'POST /api/items/auto/stop') {
+          stopAutoReroll(id);
+          json(autoRerollStatus(id));
+          return;
+        }
+        if (route === 'POST /api/items/auto') {
+          const equip = await client.items.read(schedule, current);
+          const row = equip.rows.find(item => item.uid === String(payload.uid ?? ''));
+          if (!row) throw Error('仓库里找不到这件装备');
+          if (!row.rerollable) throw Error('只有橙装和红装能洗炼');
+          if (row.quality !== 'RED' && Array.isArray(payload.lockedSlots) && payload.lockedSlots.length)
+            throw Error('只有红装能锁定词条');
+          json(startAutoReroll(id, client.items, {
+            uid: row.uid, name: row.name, quality: row.quality, requirements: normalizeRequirements(payload.requirements, row.slots),
+            maxRolls: payload.maxRolls, materialFloor: payload.materialFloor, lockedSlots: payload.lockedSlots ?? [],
+            run: work, current,
+          }));
+          return;
+        }
+        json(route === 'POST /api/items/reroll'
+          ? await client.items.reroll(payload, work, current)
+          : await client.items.decide(payload, work, current));
         return;
       }
       if (route === 'GET /api/accounts/card') {
