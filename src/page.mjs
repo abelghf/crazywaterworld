@@ -53,6 +53,7 @@ ${chrome()}
     <button type="button" data-resource-tab="guild">联盟</button><button type="button" data-resource-tab="inventory">仓库</button><button type="button" data-resource-tab="heroes">英雄与装备</button><button type="button" data-resource-tab="giftcodes">礼包兑换</button>
     <button type="button" data-resource-tab="dailies">日常任务</button>
     <button type="button" data-resource-tab="shops">商店</button>
+    <button type="button" data-resource-tab="chat">聊天</button>
   </nav>
   <section id="tab-overview">
     ${overviewPage()}
@@ -2691,15 +2692,16 @@ new ResizeObserver(() => {
 
 async function boot() {
   // 显式链接优先，否则恢复当前历史记录的页面；配置分组由 configApplyHash 恢复。
-  const savedView = history.state?.consoleView;
+  const previousView = history.state?.consoleView;
+  const savedView = previousView?.tab === 'chat' ? { tab: 'resources', resource: 'chat' } : previousView;
   const initialTab = location.hash.startsWith('#config-group-') ? 'settings'
     : location.hash === '#pirate-first-kill' ? 'stages' : location.hash === '#journal' ? 'overview'
     : savedView?.tab === 'login-settings' ? 'account'
     : savedView?.tab === 'resources' && savedView.resource === 'activities' ? 'activities' : savedView?.tab;
   try {
     // 恢复账号页时先显示保存的角色资料，由该页按连接状态决定是否读取资源。
-    await loadAccounts(true, initialTab !== 'account' && initialTab !== 'chat'
-      && !(initialTab === 'resources' && savedView?.resource === 'shops'));
+    await loadAccounts(true, initialTab !== 'account'
+      && !(initialTab === 'resources' && ['shops', 'chat'].includes(savedView?.resource)));
   } catch (error) {
     $('hint').textContent = '';
     reportError(error);

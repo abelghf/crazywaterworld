@@ -218,7 +218,7 @@ try {
     await tab('overview');
     assert.equal(await page.locator('#tabs [data-tab="activities"]').getAttribute('aria-label'), '活动');
     assert.equal(await page.locator('#tabs [data-tab="resources"]').getAttribute('aria-label'), '杂项');
-    assert.deepEqual(await page.locator('[data-resource-tab]').allTextContents(), ['联盟', '仓库', '英雄与装备', '礼包兑换', '日常任务']);
+    assert.deepEqual(await page.locator('[data-resource-tab]').allTextContents(), ['联盟', '仓库', '英雄与装备', '礼包兑换', '日常任务', '商店', '聊天']);
     await main('settings');
     await config('base', 'building');
     await page.reload();
