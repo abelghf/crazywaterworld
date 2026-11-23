@@ -1822,7 +1822,8 @@ function factoryAutoSwitch(factory) {
     button.title = control?.reason || (!control ? '请刷新工厂状态' : (on ? '关闭' : '开启') + name + '原生自动生产 · ' + control.name);
     cell.title = button.title;
     button.disabled = busy || !connected() || !control?.key || !!control.reason || on == null;
-    status.textContent = message || (busy ? '切换中…' : on == null ? '未同步' : on ? '已开启' : '未开启');
+    status.textContent = message || (busy ? '切换中…' : on == null ? '未同步' : on ? '已开启' : '');
+    status.hidden = !status.textContent;
   };
   cell.updateAutoSwitch();
   button.onclick = async () => {

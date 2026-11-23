@@ -403,12 +403,13 @@ test('当前产物区分等待开工、已完成和空闲，缺少队列显示�
   }
 });
 
-test('自动生产按实际开关显示，缺少状态时显示未同步', () => {
-  for (const [autoEnabled, expected] of [[true, '已开启'], [false, '未开启'], [undefined, '未同步']]) {
+test('自动生产关闭时只显示开关，缺少状态时显示未同步', () => {
+  for (const [autoEnabled, expected] of [[true, '已开启'], [false, ''], [undefined, '未同步']]) {
     const env = fixture();
     env.render(worldData(env, { factories: [factory([], { autoEnabled })] }));
     const cell = env.tables[0].rows[0][4];
     assert.equal(cell.children[1].textContent, expected);
+    assert.equal(cell.children[1].hidden, !expected);
     assert.equal(cell.children[0].attributes['aria-checked'], String(autoEnabled === true));
     assert(cell.children[0].disabled);
   }
@@ -431,6 +432,8 @@ test('自动生产按实际开关显示，缺少状态时显示未同步', () =>
   assert(!button.disabled);
   assert.match(button.title,/开启.*面包/);
   const operation = button.onclick();
+  assert.equal(cell().children[1].textContent, '切换中…');
+  assert(!cell().children[1].hidden);
   await button.onclick();
   assert(button.disabled);
   assert.equal(button.attributes['aria-checked'],'false');
