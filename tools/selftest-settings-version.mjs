@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import {
   SETTINGS_FORMAT, SETTINGS_SCHEMA_VERSION, defaultSettings, migrateSettingsVersion,
-  importAutomationSettings, exportAutomationSettings, loadAutomationSettings, saveAutomationSettings,
+  importAutomationSettings, exportAutomationSettings, loadAutomationSettings, loadRecoverableAutomationSettings, saveAutomationSettings,
   nativeTaskValues, validateSettings, settingsUiRules, settingsFromNative, applyNativeTask,
 } from '../src/automation-settings.mjs';
 import { automationTasks, taskSettings } from '../src/automation.mjs';
@@ -723,8 +723,35 @@ try {
       }
     }
   });
+  test('第50版旧存档可读取、导入和保存，满舱航线只在缺项时补齐', () => {
+    // 固定旧版导出样本。用当前默认值构造旧存档会掩盖下次新增必填项时遗漏的迁移。
+    const legacy = JSON.parse(fs.readFileSync(new URL('./fixtures/automation-settings-v50.json', import.meta.url), 'utf8'));
+    for (const value of [undefined, false, true]) {
+      const document = structuredClone(legacy);
+      if (value !== undefined) document.settings.merchant.fullCargoRoutes = value;
+      const expected = structuredClone(document.settings);
+      expected.merchant.fullCargoRoutes = value ?? defaultSettings().merchant.fullCargoRoutes;
+      const entry = { settingsVersion: document.version, revision: 7, settings: document.settings };
+      fs.writeFileSync(file, JSON.stringify({ version: document.version, accounts: { merchant: entry, other: entry } }));
+      const bytes = fs.readFileSync(file);
+      const loaded = loadRecoverableAutomationSettings('merchant', { file, expected: true });
+      assert.equal(loaded.recovery, undefined);
+      assert.equal(loaded.revision, entry.revision);
+      assert.deepEqual(loaded.settings, expected);
+      assert.deepEqual(importAutomationSettings(document), expected);
+      assert.deepEqual(fs.readFileSync(file), bytes);
+      saveAutomationSettings('merchant', loaded.settings, { file, revision: loaded.revision });
+      const saved = JSON.parse(fs.readFileSync(file));
+      assert.equal(saved.accounts.merchant.settingsVersion, SETTINGS_SCHEMA_VERSION);
+      assert.deepEqual(saved.accounts.other, entry);
+      assert.deepEqual(loadAutomationSettings('merchant', { file }).settings, expected);
+    }
+    const invalid = structuredClone(legacy);
+    invalid.settings.merchant.fullCargoRoutes = 'false';
+    assert.throws(() => importAutomationSettings(invalid), error => !!error.fields?.['merchant.fullCargoRoutes']);
+  });
   test('版本1升级后重复迁移保持一致，保留有效的用户值', () => {
-    assert.equal(SETTINGS_SCHEMA_VERSION, 50);
+    assert.equal(SETTINGS_SCHEMA_VERSION, 51);
     const settings = legacySettings();
     settings.factory.checkEverySeconds = 270;
     settings.resources.diamondDailyLimit = 1234;

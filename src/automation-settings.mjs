@@ -22,7 +22,7 @@ export const settingsFile = () => path.join(dataDirectory(), 'automation-setting
 export const SETTINGS_FORMAT = 'crazywaterworld-automation';
 // 文件 version / 账号 settingsVersion 是格式编号，只随结构迁移调整；
 // revision 是每次保存递增的修订号，仅用于并发冲突检查，不能用作格式版本。
-export const SETTINGS_SCHEMA_VERSION = 50;
+export const SETTINGS_SCHEMA_VERSION = 51;
 const LEGACY_SETTINGS_FORMAT = 'crazywaterword-automation';
 const treasureQualityLabels = { ORANGE: '万吨货轮', PURPLE: '中型货轮', BLUE: '小型货轮' };
 const treasureChaseDefaults = {
@@ -720,7 +720,7 @@ export function importAutomationSettings(document, options) {
   return validateSettings(migrateSettingsVersion(document.settings, document.version), { ...options, partial: false });
 }
 
-const settingsMigrations = new Map([[1, migrateVersion1Settings], [2, migrateVersion2Settings], [3, migrateVersion3Settings], [4, migrateVersion4Settings], [5, migrateVersion5Settings], [6, migrateVersion6Settings], [7, migrateVersion7Settings], [8, migrateVersion8Settings], [9, migrateVersion9Settings], [10, migrateVersion10Settings], [11, migrateVersion11Settings], [12, migrateVersion12Settings], [13, migrateVersion13Settings], [14, migrateVersion14Settings], [15, migrateVersion15Settings], [16, migrateVersion16Settings], [17, migrateVersion17Settings], [18, migrateVersion18Settings], [19, migrateVersion19Settings], [20, migrateVersion20Settings], [21, migrateVersion21Settings], [22, migrateVersion22Settings], [23, migrateVersion23Settings], [24, migrateVersion24Settings], [25, migrateVersion25Settings], [26, migrateVersion26Settings], [27, migrateVersion27Settings], [28, migrateVersion28Settings], [29, migrateVersion29Settings], [30, migrateVersion30Settings], [31, migrateVersion31Settings], [32, migrateVersion32Settings], [33, migrateVersion33Settings], [34, migrateVersion34Settings], [35, migrateVersion35Settings], [36, migrateVersion36Settings], [37, migrateVersion37Settings], [38, migrateVersion38Settings], [39, migrateVersion39Settings], [40, migrateVersion40Settings], [41, migrateVersion41Settings], [42, migrateVersion42Settings], [43, migrateVersion43Settings], [44, migrateVersion44Settings], [45, migrateVersion45Settings], [46, migrateVersion46Settings], [47, migrateVersion47Settings], [48, migrateVersion48Settings], [49, migrateVersion49Settings]]);
+const settingsMigrations = new Map([[1, migrateVersion1Settings], [2, migrateVersion2Settings], [3, migrateVersion3Settings], [4, migrateVersion4Settings], [5, migrateVersion5Settings], [6, migrateVersion6Settings], [7, migrateVersion7Settings], [8, migrateVersion8Settings], [9, migrateVersion9Settings], [10, migrateVersion10Settings], [11, migrateVersion11Settings], [12, migrateVersion12Settings], [13, migrateVersion13Settings], [14, migrateVersion14Settings], [15, migrateVersion15Settings], [16, migrateVersion16Settings], [17, migrateVersion17Settings], [18, migrateVersion18Settings], [19, migrateVersion19Settings], [20, migrateVersion20Settings], [21, migrateVersion21Settings], [22, migrateVersion22Settings], [23, migrateVersion23Settings], [24, migrateVersion24Settings], [25, migrateVersion25Settings], [26, migrateVersion26Settings], [27, migrateVersion27Settings], [28, migrateVersion28Settings], [29, migrateVersion29Settings], [30, migrateVersion30Settings], [31, migrateVersion31Settings], [32, migrateVersion32Settings], [33, migrateVersion33Settings], [34, migrateVersion34Settings], [35, migrateVersion35Settings], [36, migrateVersion36Settings], [37, migrateVersion37Settings], [38, migrateVersion38Settings], [39, migrateVersion39Settings], [40, migrateVersion40Settings], [41, migrateVersion41Settings], [42, migrateVersion42Settings], [43, migrateVersion43Settings], [44, migrateVersion44Settings], [45, migrateVersion45Settings], [46, migrateVersion46Settings], [47, migrateVersion47Settings], [48, migrateVersion48Settings], [49, migrateVersion49Settings], [50, migrateVersion50Settings]]);
 const supportedSettingsVersion = version => Number.isSafeInteger(version) && version >= 1;
 const entrySettingsVersion = entry => Object.hasOwn(entry, 'settingsVersion') ? entry.settingsVersion : 1;
 function newestSettingsVersion(store) {
@@ -1133,6 +1133,12 @@ function migrateVersion22Settings(settings) {
     if (plain(next[group])) next[group] = { maxPowerRatio: 0, ...next[group] };
   }
   return next;
+}
+
+// Version 50 was written both before and after the full-cargo option was introduced.
+function migrateVersion50Settings(settings) {
+  if (!plain(settings?.merchant) || Object.hasOwn(settings.merchant, 'fullCargoRoutes')) return settings;
+  return { ...settings, merchant: { ...settings.merchant, fullCargoRoutes: DEFAULT_SETTINGS.merchant.fullCargoRoutes } };
 }
 
 // Keep the saved VIP master switch. Native-only selections predate that switch.
