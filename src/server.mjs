@@ -3429,6 +3429,20 @@ export function createConsole({ host = '127.0.0.1', port = 17321, onLog, recover
         watchMerchant(client).invalidate('手动港口情报已更新');
         json(result); return;
       }
+      if (route === 'GET /api/merchant/overview') {
+        const { session } = scoped_(parsed);
+        const { client, player, generation } = session;
+        const connected = () => client?.connected && !session.paused && session.client === client &&
+          session.generation === generation && player && session.player === player;
+        if (!connected()) throw Error('请先连接当前角色再刷新海商王');
+        json(await readJob(session, async () => {
+          if (!connected()) throw Error('账号连接已变化，请重新刷新海商王');
+          const panel = await readMerchantOverview(client, loadConfigSafe(), { player, ledger: usageFor(session), settings: session.preferences });
+          if (!connected()) throw Error('账号连接已变化，请重新刷新海商王');
+          return panel;
+        }, { recoverFormation: false }));
+        return;
+      }
       if(route==='GET /api/merchant/history'){
         const { session } = scoped_(parsed), ledger = usageFor(session);
         json({ summary: merchantJournalSummary(ledger), entries: readMerchantJournal(ledger) }); return;

@@ -511,8 +511,71 @@ function renderMerchantTrade(section, goal, trade, purchaseDetailsOpen) {
   section.append(trades, forecast);
 }
 
+let merchantAutoRefresh = true, merchantRefreshSeconds = 30;
+let merchantRefreshPending = false, merchantLastRefresh = 0, merchantRenderRevision = 0;
+const merchantIntervalInput = $('merchant-refresh-seconds');
+const merchantRefreshToggle = $('merchant-auto-refresh');
+const validMerchantInterval = seconds => Number.isInteger(seconds) && seconds >= 5 && seconds <= 300;
+try {
+  const saved = JSON.parse(localStorage.getItem('cw.merchant.refresh'));
+  if (typeof saved?.enabled === 'boolean') merchantAutoRefresh = saved.enabled;
+  if (validMerchantInterval(saved?.seconds)) merchantRefreshSeconds = saved.seconds;
+} catch { /* 存储不可用时沿用本页设置。 */ }
+
+function paintMerchantRefresh() {
+  merchantRefreshToggle.setAttribute('aria-pressed', String(merchantAutoRefresh));
+  merchantRefreshToggle.textContent = '自动刷新：' + (merchantAutoRefresh ? '开' : '关');
+  merchantIntervalInput.value = String(merchantRefreshSeconds);
+  merchantIntervalInput.setCustomValidity('');
+}
+function saveMerchantRefresh() {
+  try { localStorage.setItem('cw.merchant.refresh', JSON.stringify({ enabled: merchantAutoRefresh, seconds: merchantRefreshSeconds })); } catch {}
+}
+function merchantPollingActive() {
+  return merchantAutoRefresh && current && snapshot.connected && !snapshot.paused && !snapshot.loginBlocked &&
+    !disconnected.has(current) && !document.hidden && !$('tab-overview').classList.contains('hidden') && !$('merchant-overview').hidden;
+}
+async function maybeRefreshMerchant() {
+  if (!merchantPollingActive() || merchantRefreshPending || overviewPending?.account === current ||
+    Date.now() - merchantLastRefresh < merchantRefreshSeconds * 1000) return;
+  const account = current, revision = merchantRenderRevision;
+  const stillCurrent = () => current === account && revision === merchantRenderRevision && merchantPollingActive();
+  merchantRefreshPending = true;
+  try {
+    const panel = await call('/api/merchant/overview?account=' + encodeURIComponent(account));
+    if (stillCurrent()) renderMerchantOverview(panel);
+  } catch (error) {
+    if (stillCurrent()) reportError(error, '刷新海商王', account);
+  } finally {
+    merchantRefreshPending = false;
+    merchantLastRefresh = Date.now();
+  }
+}
+merchantRefreshToggle.onclick = () => {
+  merchantAutoRefresh = !merchantAutoRefresh;
+  paintMerchantRefresh();
+  saveMerchantRefresh();
+  if (merchantAutoRefresh) { merchantLastRefresh = 0; void maybeRefreshMerchant(); }
+};
+merchantIntervalInput.oninput = () => merchantIntervalInput.setCustomValidity('');
+merchantIntervalInput.onchange = () => {
+  const seconds = merchantIntervalInput.valueAsNumber;
+  if (!validMerchantInterval(seconds)) {
+    merchantIntervalInput.setCustomValidity('请输入 5–300 之间的整数秒数');
+    merchantIntervalInput.reportValidity();
+    return;
+  }
+  merchantRefreshSeconds = seconds;
+  saveMerchantRefresh();
+  void maybeRefreshMerchant();
+};
+paintMerchantRefresh();
+setInterval(maybeRefreshMerchant, 1000);
+
 let merchantOverviewTimer;
 function renderMerchantOverview(merchant) {
+  merchantRenderRevision++;
+  merchantLastRefresh = Date.now();
   merchantRewardObserver?.disconnect();
   clearTimeout(merchantOverviewTimer);
   merchantOverviewTimer = null;

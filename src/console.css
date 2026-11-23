@@ -165,7 +165,7 @@ section h2:first-child { margin-top:0 }
 /* ---- 世界地图 ---- */
 .world-refresh-controls { display:flex; align-items:center; flex-wrap:wrap; gap:8px; font-weight:400 }
 .world-refresh-setting { display:inline-flex; align-items:center; gap:6px; font-weight:400 }
-#world-map-refresh-seconds { width:72px }
+#world-map-refresh-seconds,#merchant-refresh-seconds { width:72px }
 .fleet-summary td { overflow-wrap:anywhere; font-variant-numeric:tabular-nums }
 @container main (width > 46.5rem) {
   .fleet-summary table { width:100%; table-layout:fixed }

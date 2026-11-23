@@ -158,6 +158,50 @@ try {
       assert.equal(await panel.locator('table').count(), 0);
       await paint(2, intel);
       assert.equal(await panel.locator('table').isVisible(), false);
+      const refreshToggle = page.locator('#merchant-auto-refresh'), interval = page.getByLabel('海商王刷新间隔（秒）');
+      assert.equal(await refreshToggle.getAttribute('aria-pressed'), 'true');
+      assert.equal(await interval.inputValue(), '30');
+      assert(await interval.evaluate(node => node.getBoundingClientRect().right <= document.documentElement.clientWidth));
+      await refreshToggle.click();
+      await interval.fill('4');
+      await interval.press('Tab');
+      assert.equal(await interval.evaluate(node => node.validity.valid), false);
+      await interval.fill('5');
+      await interval.press('Tab');
+      assert.deepEqual(await page.evaluate(() => JSON.parse(localStorage.getItem('cw.merchant.refresh'))), { enabled: false, seconds: 5 });
+      const reads = await page.evaluate(async () => {
+        const originalCall = call, originalStatus = snapshot, wasDisconnected = disconnected.has(current);
+        const reads = [];
+        try {
+          snapshot = { ...snapshot, connected: true, paused: false, loginBlocked: false };
+          disconnected.delete(current);
+          call = async path => {
+            reads.push(path);
+            return { startTime: 1, endTime: 3601, serverNow: 1, lines: ['已刷新本船'] };
+          };
+          merchantLastRefresh = 0;
+          await maybeRefreshMerchant();
+          if (reads.length) throw Error('关闭后仍自动读取');
+          $('merchant-auto-refresh').click();
+          await maybeRefreshMerchant();
+          if (reads.length !== 1 || !$('merchant-overview-progress').textContent.includes('已刷新本船')) throw Error('开启后未立即更新本船');
+          await maybeRefreshMerchant();
+          if (reads.length !== 1) throw Error('间隔未到就再次刷新');
+          merchantLastRefresh = Date.now() - 5000;
+          await Promise.all([maybeRefreshMerchant(), maybeRefreshMerchant()]);
+          $('merchant-auto-refresh').click();
+          return reads;
+        } finally {
+          call = originalCall;
+          snapshot = originalStatus;
+          if (wasDisconnected) disconnected.add(current);
+        }
+      });
+      assert.deepEqual(reads, Array(2).fill('/api/merchant/overview?account=' + account));
+      await page.reload();
+      await tab('overview');
+      assert.equal(await refreshToggle.getAttribute('aria-pressed'), 'false');
+      assert.equal(await interval.inputValue(), '5');
       await page.evaluate(() => renderMerchantOverview(null));
     }
     {

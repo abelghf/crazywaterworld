@@ -73,6 +73,17 @@ try {
     assert.match(panel.lines.join(' '), /折后基准价/);
     assert.equal(f.state.writes.length, 0);
   });
+  await test('海商王单卡刷新返回最新利润，只读取走商数据', async () => {
+    const start = f.state.reads.length, profit = f.state.trade.player.profit;
+    try {
+      f.state.trade.player.profit += 123;
+      const panel = ok(await api('merchant/overview'));
+      assert.equal(panel.goal.profit, profit + 123);
+      assert.equal(panel.trade.period, f.window.period);
+      assert(f.state.reads.slice(start).every(name => name.startsWith('Trade')));
+      assert.equal(f.state.writes.length, 0);
+    } finally { f.state.trade.player.profit = profit; }
+  });
   await test('航行中可读联盟港口情报，目的港优先，未共享、无联盟和读取失败各自有提示', async () => {
     const { cargo } = f.state.trade, beforeCargo = { ...cargo }, beforeRadar = f.state.radar, guild = f.player.guildId;
     Object.assign(cargo, { moveStartTime: f.now - 60, moveEndTime: f.now + 600, moveToCityId: 20 });

@@ -102,7 +102,10 @@ export function overviewPage() {
       </div>
     </Panel>
     <section id="merchant-overview" aria-label="海商王" hidden>
-      <Panel title="海商王"><div id="merchant-overview-progress" className="merchant-progress" /></Panel>
+      <Panel title="海商王" titleAfter={<div className="world-refresh-controls">
+        <Button id="merchant-auto-refresh" size="sm" variant="outline" aria-pressed="true">自动刷新：开</Button>
+        <label className="world-refresh-setting">每<input id="merchant-refresh-seconds" aria-label="海商王刷新间隔（秒）" type="number" min="5" max="300" step="1" defaultValue="30" />秒</label>
+      </div>}><div id="merchant-overview-progress" className="merchant-progress" /></Panel>
       <dialog id="merchant-intel-dialog" aria-labelledby="merchant-intel-title">
         <div className="account-dialog-heading"><DialogHeader><DialogTitle id="merchant-intel-title">港口情报</DialogTitle>
           <p id="merchant-intel-context" className="merchant-caption" /></DialogHeader>
