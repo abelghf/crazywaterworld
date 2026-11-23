@@ -3427,10 +3427,11 @@ export function createConsole({ host = '127.0.0.1', port = 17321, onLog, recover
       if (route === 'GET /api/gift-codes/initial' || route === 'POST /api/gift-codes/load') {
         const payload = req.method === 'POST' ? jsonBody() : null;
         if (payload) needConfirm(payload);
-        const known = new Map(loadStore().accounts.map(account => [account.id, account]));
+        const { accounts, activeId } = loadStore();
+        const known = new Set(accounts.map(account => account.id));
         const selected = payload ? payload.accounts
           : parsed.searchParams.has('accounts') ? JSON.parse(parsed.searchParams.get('accounts'))
-          : parsed.searchParams.has('account') ? [resolve(parsed).account.id] : [...known.keys()].slice(0, 1);
+          : parsed.searchParams.has('account') ? [resolve(parsed).account.id] : activeId ? [activeId] : [];
         if (!Array.isArray(selected) || selected.some(id => typeof id !== 'string' || !known.has(id))) throw Error('所选账号不存在，请刷新账号列表');
         if (payload) {
           try { await publicGiftCodes.refresh({ force: true }); }
