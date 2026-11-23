@@ -248,7 +248,8 @@ try {
     assert.equal(live.expectedProfit, 155);
     const replay = replayMerchantJournal(config, readMerchantJournal(reopened, event)).variants[0].decisions.at(-1);
     assert.equal(replay.estimatedProfit, live.expectedProfit);
-    assert.match(replay.reason, /参考涨跌 \+10.00%/);
+    assert.equal(replay.reason, live.label);
+    assert.match(replay.reason, /预计卖价 110/);
   });
 
   test('快照有界保留且无关执行记录不变，丢弃数量明确可见', () => {

@@ -27,7 +27,7 @@ function fixture() {
     { cityId: 30, specGoodsId: 3, rareGoodsId: 0 }] };
   const f = { config, event, state, market, radar, now, visited: [], settings: { estimateDiscountPercent: 10 }, markets: [] };
   f.plan = () => planMerchant(config, event, state, f.market, f.radar, f.now, f.visited,
-    { settings: { fullCargoRoutes: false, ...f.settings }, markets: f.markets, actionSeconds: f.actionSeconds, preferredPort: f.preferredPort });
+    { settings: f.settings, markets: f.markets, actionSeconds: f.actionSeconds, preferredPort: f.preferredPort });
   f.batch = (extra = {}) => ({ pid: 1, goodsId: 1, cityId: 10, buyPrice: 50, num: 10, ...extra });
   f.history = (cityId, price, extra = {}) => ({ cityId, observedAt: f.now, period: event.period, startTime: event.startTime,
     goods: [{ goodsId: 1, price, stock: 0 }], ...extra });
@@ -136,12 +136,31 @@ test('没有联盟紧缺共享也能按风险折扣估算先选港再买入', ()
   assert.equal(plan.count, 10);
   assert.equal(plan.expectedProfit, 412);
   assert.equal(plan.estimated, true);
-  assert.match(plan.label, /风险折扣估算/);
+  assert.match(plan.label, /卖价已扣 10% 风险折扣/);
   f.state.player.goods = [f.batch()];
   f.state.player.coins = 500;
   const move = f.plan();
   assert.equal(move.kind, 'move');
   assert.equal(move.destination, 20);
+});
+
+test('薄利补一件淡水时，提示分清每格价差、本批收益和整船收益', () => {
+  const f = fixture();
+  Object.assign(f.config.tables.TradeShipCfg.data[0], { capacity: 2, profitMargin: 0 });
+  const defs = f.config.tables.TradeGoodsCfg.data;
+  Object.assign(defs[0], { itemName: '淡水', unitPrice: 50 });
+  defs[1].unitPrice = 5200;
+  defs.push(...[5, 6].map(goodsId => ({ ...defs[0], goodsId })));
+  f.market.rareGoodsId = 4;
+  f.market.goods.push(...[5, 6].map(goodsId => ({ goodsId, price: 52, stock: 20 })));
+  f.state.player.coins = 50;
+  f.state.player.goods = [f.batch({ goodsId: 2, num: 1, buyPrice: 9 })];
+  f.radar.radar = [{ cityId: 70, specGoodsId: 3, rareGoodsId: 4 }];
+  const plan = f.plan();
+  assert.equal(plan.label, '买入淡水 ×1，单价 50，70 号港预计卖价 52。每格价差 2 商会币，整船预计净收益 5,193 商会币（未扣风险折扣）');
+  assert.deepEqual(Object.fromEntries(plan.purchaseDetails), {
+    '本批预计净收益': '2 商会币', '本批占舱': '1 格', '本港买价': '与基准价持平', '卖价依据': '同档普通货涨跌幅中位数（较基准价高 4%）'
+  });
 });
 
 test('单位容量收益与组合采购取代单商品跌幅优先', () => {
@@ -232,7 +251,7 @@ test('共享紧缺港参考同基准价紧缺货实价，空船先采购，装�
   assert.equal(buy.destination, 30);
   assert.equal(buy.purchases[0].expectedPrice, 50);
   assert.equal(buy.expectedProfit, 21);
-  assert.match(buy.label, /紧缺/);
+  assert.match(Object.fromEntries(buy.purchaseDetails)['卖价依据'], /紧缺/);
 
   f.state.player.goods = [f.batch({ buyPrice: 48 })];
   const move = f.plan();
@@ -287,8 +306,9 @@ test('同一笔本金和十格舱位，目的港可比涨跌幅改变时在高�
   f.market.goods[3].price = 960;
   const high = f.plan();
   assert.deepEqual([high.goodsId, high.count, high.purchases[0].expectedPrice, high.expectedProfit], [1, 1, 920, 289]);
-  assert.match(high.label, /本港涨跌 -20.00%/);
-  assert.match(high.label, /参考涨跌 \+15.00%（同档普通货涨跌幅中位数）/);
+  const details = Object.fromEntries(high.purchaseDetails);
+  assert.equal(details['本港买价'], '较基准价低 20%');
+  assert.equal(details['卖价依据'], '同档普通货涨跌幅中位数（较基准价高 15%）');
   f.state.player.goods = [f.batch({ num: 1, buyPrice: 640 })];
   const move = f.plan();
   assert.deepEqual([move.kind, move.expectedProfit], ['move', high.expectedProfit]);
@@ -329,7 +349,7 @@ test('按目的港不同刷新轮次估算，同轮重复、异期、未来和�
     sample(300, 8, { period: 1000 }), sample(400, -2)];
   const plan = f.plan();
   assert.deepEqual([plan.destination, plan.purchases[0].expectedPrice, plan.expectedProfit], [30, 110, 155]);
-  assert.match(plan.label, /目的港2轮同商品普通报价中位数/);
+  assert.match(Object.fromEntries(plan.purchaseDetails)['卖价依据'], /目的港2轮同商品普通报价中位数/);
   f.markets.splice(2, 1);
   assert.equal(f.plan().purchases[0].expectedPrice, 100);
 });
@@ -359,7 +379,7 @@ test('本金受限时紫货更赚，舱位受限时同一组报价改买橙货',
   const cashLimited = f.plan();
   assert.deepEqual(cashLimited.purchases.map(p => [p.goodsId, p.count]), [[3, 4]]);
   assert.equal(cashLimited.expectedProfit, 106);
-  assert.match(cashLimited.label, /每件占 4 格，本批占 16 格/);
+  assert.equal(Object.fromEntries(cashLimited.purchaseDetails)['本批占舱'], '16 格（每件 4 格）');
   for (const coins of [4_999_999, 5_000_000, 5_000_001]) {
     f.state.player.coins = coins;
     const spaceLimited = f.plan();
@@ -856,12 +876,12 @@ function fullCargoFixture() {
   return f;
 }
 
-test('默认满舱往返：单向、空船、差一格或缺本金都不出航，仍可按实价卖出', () => {
+test('开启满舱往返后，单向、空船、差一格或缺本金都不出航，仍可按实价卖出', () => {
   const f = fullCargoFixture();
-  assert.equal(merchantSettings().fullCargoRoutes, true);
+  assert.equal(merchantSettings().fullCargoRoutes, false);
   const buy = f.plan();
   assert.deepEqual([buy.kind, buy.destination, buy.count], ['buy', 20, 10]);
-  assert.match(buy.label, /每格预计价差 50 商会币/);
+  assert.match(buy.label, /每格价差 50 商会币/);
   f.state.player.coins = 0;
   assert.match(f.plan().reason, /余款 0 商会币不足/);
   f.state.player.goods = [f.batch({ num: 9 })];

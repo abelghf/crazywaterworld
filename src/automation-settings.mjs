@@ -57,7 +57,7 @@ export const DEFAULT_SETTINGS = {
   activityAutomation: activityAutomationDefaults,
   weeklyActivity: WEEKLY_ACTIVITY_DEFAULTS,
   weekOrder: { enabled: false, allowDiamonds: false },
-  merchant: { enabled: false, fullCargoRoutes: true, autoShareIntel: false, quoteMaxAgeSeconds: 300, estimateDiscountPercent: 0, refreshWaitSeconds: 120, liquidationMinutes: 120,
+  merchant: { enabled: false, fullCargoRoutes: false, autoShareIntel: false, quoteMaxAgeSeconds: 300, estimateDiscountPercent: 0, refreshWaitSeconds: 120, liquidationMinutes: 120,
     maxLossPercent: 0, minExpectedProfit: 1, autoSpeedUp: false, speedUpMinProfit: 1000, keepPointers: 0,
     speedUpMode: 'profit', guardLastPointer: false, speedUpMaxPerLeg: 4, monitorSeconds: 60,
     refreshWindowMinutes: 8, dailyPointerLimit: 28, autoBuyPointers: false, pointerDailyDiamondLimit: 0,

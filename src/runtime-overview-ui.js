@@ -473,7 +473,7 @@ function renderMerchantRewards(section, goal, items, position, intel) {
   renderMerchantRewardStrip(section, actions, nodes, nextIndex < 0 ? tiers.length - 1 : nextIndex, position);
 }
 
-function renderMerchantTrade(section, goal, trade) {
+function renderMerchantTrade(section, goal, trade, purchaseDetailsOpen) {
   const heading = el('div', 'merchant-trade-heading');
   heading.append(el('h3', null, '商船动态'), el('span', null, trade.voyage.status));
   const rows = [...trade.voyage.facts, ['商会币', merchantNumber(trade.coins)], ['商船等级', merchantNumber(trade.level)]];
@@ -481,6 +481,14 @@ function renderMerchantTrade(section, goal, trade) {
     ? '交易时段已结束' : (goal.remainingTradingSeconds / 3600).toLocaleString('zh-CN', { maximumFractionDigits: 2 }) + ' 小时']);
   const voyage = el('div', 'merchant-voyage');
   voyage.append(heading, merchantFacts(rows));
+  if (trade.voyage.purchaseDetails?.length) {
+    const details = el('details');
+    const summary = el('summary', 'merchant-caption', '采购明细');
+    summary.id = 'merchant-purchase-summary';
+    details.open = purchaseDetailsOpen;
+    details.append(summary, merchantFacts(trade.voyage.purchaseDetails));
+    voyage.append(details);
+  }
   section.append(voyage);
 
   const trades = el('section', 'merchant-trade-group');
@@ -512,6 +520,7 @@ function renderMerchantOverview(merchant) {
   const section = $('merchant-overview-progress');
   const key = merchant ? JSON.stringify([current, merchant.startTime, merchant.trade?.period]) : '';
   const samePeriod = key === section.dataset.period;
+  const purchaseDetailsOpen = samePeriod && !!section.querySelector('.merchant-voyage details[open]');
   const position = samePeriod ? section.querySelector('.merchant-tiers')?.dataset.position : undefined;
   const focused = samePeriod && section.contains(document.activeElement) && document.activeElement.id;
   clear(section);
@@ -534,7 +543,7 @@ function renderMerchantOverview(merchant) {
   card.hidden = false;
   const goal = merchant.goal;
   if (goal) renderMerchantRewards(section, goal, merchant.rewardItems, position, merchant.trade?.intel);
-  if (goal && merchant.trade) renderMerchantTrade(section, goal, merchant.trade);
+  if (goal && merchant.trade) renderMerchantTrade(section, goal, merchant.trade, purchaseDetailsOpen);
   else for (const line of merchant.lines ?? ['本期商船数据待同步，请刷新']) section.append(el('p', 'merchant-caption', line));
   if (goal?.checkedAt) {
     const period = merchant.trade ? '第 ' + merchant.trade.period + ' 期 · ' : '';

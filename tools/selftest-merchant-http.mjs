@@ -206,9 +206,12 @@ try {
     assert.equal((await save(change)).status, 400);
     const after = await plan();
     assert.deepEqual([after.kind, after.destination, after.expectedProfit], ['buy', 30, 10300]);
-    assert.match(after.label, /参考涨跌 \+60.00%（同档紧缺货最低涨跌幅），预计卖价 80/);
+    assert.match(after.label, /30 号港预计卖价 80/);
+    assert.equal(Object.fromEntries(after.purchaseDetails)['卖价依据'], '同档紧缺货最低涨跌幅（较基准价高 60%）');
     assert.match(after.label, /手动情报/);
-    assert.match(ok(await api('overview')).merchant.lines.join(' '), /10,300 商会币/);
+    const overview = ok(await api('overview')).merchant;
+    assert.match(overview.lines.join(' '), /10,300 商会币/);
+    assert.deepEqual(overview.trade.voyage.purchaseDetails, after.purchaseDetails);
     f.state.radar.radar[2].rareGoodsId = 1003;
     assert.equal((await plan()).destination, 20);
     assert.deepEqual((await intel()).edits, {});

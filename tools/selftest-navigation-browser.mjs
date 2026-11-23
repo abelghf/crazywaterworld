@@ -78,12 +78,13 @@ try {
         }
         await route.fulfill({ json: { edits, scope } });
       });
-      const paint = (period, intel) => page.evaluate(({ period, intel }) => renderMerchantOverview({
+      const paint = (period, intel, purchaseDetails) => page.evaluate(({ period, intel, purchaseDetails }) => renderMerchantOverview({
         startTime: 1, endTime: 3601, serverNow: 1, goal: { target: 50000000, profit: 60, claimed: 0,
           tiers: Array.from({ length: 8 }, (_, i) => ({ id: i + 1, target: (i + 1) * 100, rewards: [] })) }, trade: {
-          period, intel: { ...intel, scope: '测试联盟-' + period }, voyage: { facts: [['预期收益', '约 2,575 商会币']], status: '航行中' }, notes: [],
+          period, intel: { ...intel, scope: '测试联盟-' + period }, voyage: { facts: [['预期收益', '约 2,575 商会币']],
+            status: purchaseDetails ? '买入淡水 ×1' : '航行中', purchaseDetails }, notes: [],
         },
-      }), { period, intel: { ...intel, edits } });
+      }), { period, intel: { ...intel, edits }, purchaseDetails });
       const intel = { catalog: [{ id: 1, name: '维生素补剂' }, { id: 2, name: '鱼皮' }, { id: 3, name: '布匹' }], ports: [
         { cityId: 1, revision: '旧', city: '太阳岛', position: '目的港', shortageId: 1, specialtyId: 2, shortage: '维生素补剂', specialty: '鱼皮', reporter: '海鸥' },
         { cityId: 2, revision: '缺', city: '要塞D6', position: '出发港', specialtyId: 3, shortageId: 0, specialty: '布匹', shortage: null, reporter: null },
@@ -95,7 +96,18 @@ try {
       await paint(1, intel);
       await imported;
       assert.equal(edits[1].specialtyId, 3);
+      const purchaseDetails = [['本批预计净收益', '2 商会币'], ['本批占舱', '1 格']];
+      await paint(1, intel, purchaseDetails);
+      const summary = page.getByText('采购明细', { exact: true });
+      const batch = page.getByText('本批预计净收益', { exact: true });
+      assert.equal(await batch.isVisible(), false);
+      await summary.focus();
+      await summary.press('Enter');
+      assert.equal(await batch.isVisible(), true);
+      await paint(1, intel, purchaseDetails);
+      assert.equal(await batch.isVisible(), true);
       await paint(1, intel);
+      assert.equal(await summary.count(), 0);
       assert.equal(await page.evaluate(account => localStorage.getItem('cw.merchant-intel.' + account), account), null);
       const panel = page.getByRole('dialog', { name: '港口情报', includeHidden: true });
       const toggle = page.locator('.merchant-score-actions').getByRole('button', { name: '港口情报' });

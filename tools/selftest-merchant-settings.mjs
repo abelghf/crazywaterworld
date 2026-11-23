@@ -11,7 +11,7 @@ import {
 import { MERCHANT_DEFAULTS, merchantSettings } from '../src/merchant-planner.mjs';
 
 const defaults = {
-  fullCargoRoutes: true,
+  fullCargoRoutes: false,
   autoShareIntel: false,
   quoteMaxAgeSeconds: 300, estimateDiscountPercent: 0, refreshWaitSeconds: 120, liquidationMinutes: 120,
   maxLossPercent: 0, minExpectedProfit: 1, autoSpeedUp: false, speedUpMinProfit: 1000, keepPointers: 0,

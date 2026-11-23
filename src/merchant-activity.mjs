@@ -252,7 +252,7 @@ async function readMerchantVoyage(config, event, state, player, time, ask, ledge
   else facts.push(['计划走商', '换港寻价']);
   facts.push(['目标城池', cityName(plan.destination ?? plan.city)]);
   facts.push(expectedProfitFact(plan.expectedProfit, plan.exploration));
-  return { facts, status: plan.label };
+  return { facts, status: plan.label, ...(plan.purchaseDetails && { purchaseDetails: plan.purchaseDetails }) };
 }
 const samePlan = (a, b) => a.kind === b.kind &&
   ['city', 'destination', 'goodsId', 'pid', 'count', 'price', 'gain', 'mode', 'exploration'].every(k => a[k] === b[k]);

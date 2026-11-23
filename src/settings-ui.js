@@ -72,7 +72,7 @@ const configZeroHints={
 const merchantActivityFields = [
     configField('merchant.enabled','开启自动挂机'),
     configField('schedule.merchantTrade','按整船收益自动走商','switch',{help:'按实时买价、舱位、资金和库存配货，到港重读实价。没有成员共享时可在总览补录港口情报。本港可盈利的持货仍可出售。'}),
-    configField('merchant.fullCargoRoutes','满舱双向特产航线','switch',{help:'默认开启。两港的特产与对方紧缺货互相匹配才配货，优先折价特产，按折扣、每格价差和品质补满。库存不足时等刷新，本金不足以装满时留港。空余航次时间用于对准刷新，指针留到活动收尾或收盘救航。关闭可使用原有的灵活配货与寻价策略。'}),
+    configField('merchant.fullCargoRoutes','满舱双向特产航线','switch',{help:'默认关闭，按预计净收益灵活配货和选港。开启后只跑两港特产互为紧缺货的航线，按折扣、每格价差和品质补满再出发。库存不足时等刷新，本金不足以装满时留港。空余航次时间用于对准刷新，指针留到活动收尾或收盘救航。'}),
     configField('merchant.autoShareIntel','到港自动共享情报','switch',{help:'默认关闭，手动开启后随已开启的走商及所属分组执行。确认到港后共享本港尚未共享的紧缺情报，已有共享直接跳过；每日紧缺更新后重新检查，不按每次价格刷新重复发送。回读确认后才记为已共享，未知结果保留防重记录，失败不阻塞买卖；达到利润上限仍可共享当前港口。'}),
     configField('schedule.tradeTasks','领取海商王联盟任务奖励','switch',{help:'保留原联盟任务领奖开关，按本期联盟任务达成进度自动领取。'}),
     configField('schedule.merchantRewards','领取战令、利润和联盟奖励','switch',{help:'按本期利润、战令分数、联盟任务进度和当日商情贡献领取已达成档。'}),

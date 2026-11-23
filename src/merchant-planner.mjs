@@ -8,7 +8,7 @@ const dayOf = time => Math.floor((time + 28800) / 86400);
 const safe = value => Number.isSafeInteger(value) && Math.abs(value) <= Number.MAX_SAFE_INTEGER;
 
 export const MERCHANT_DEFAULTS = Object.freeze({
-  fullCargoRoutes: true,
+  fullCargoRoutes: false,
   autoShareIntel: false,
   quoteMaxAgeSeconds: 300,
   estimateDiscountPercent: 0,
@@ -236,6 +236,9 @@ const median = values => {
   return Math.floor((values[Math.floor((values.length - 1) / 2)] + values[Math.floor(values.length / 2)]) / 2);
 };
 const changeLabel = (price, base) => (price >= base ? '+' : '') + ((price / base - 1) * 100).toFixed(2) + '%';
+const amount = new Intl.NumberFormat('zh-CN', { maximumFractionDigits: 2 });
+const versusBase = (price, base) => price === base ? '与基准价持平' :
+  '较基准价' + (price > base ? '高 ' : '低 ') + amount.format(Math.abs(price - base) * 100 / base) + '%';
 
 function comparableQuotes(markets, definitions) {
   const groups = new Map();
@@ -579,19 +582,28 @@ export function planMerchant(config, event, state, market, radar, time, visited 
   if (buyRoute) {
     const purchase = strict ? buyRoute.purchases[0] : [...buyRoute.purchases].sort((a, b) => b.gain - a.gain || a.goodsId - b.goodsId)[0];
     const definition = definitions.get(purchase.goodsId);
+    const space = purchase.count * purchase.capacity;
+    const riskNote = reference ? '（未扣风险折扣）' : settings.estimateDiscountPercent ? '（卖价已扣 ' + settings.estimateDiscountPercent + '% 风险折扣）' : '';
+    const purchaseDetails = [
+      ['本批预计净收益', amount.format(purchase.gain) + ' 商会币' + (ship.profitMargin ? '（含船级加成）' : '')],
+      ['本批占舱', amount.format(space) + ' 格' + (purchase.count > 1 ? '（每件 ' + purchase.capacity + ' 格）' : '')],
+      ['本港买价', versusBase(purchase.price, definition.unitPrice)],
+      ['卖价依据', purchase.priceSource + (purchase.priceSource === '商品基准价' ? '' : '（' + versusBase(purchase.referencePrice, definition.unitPrice) + '）')],
+    ];
+    if (strict) purchaseDetails.push(['装入后舱位', amount.format(occupied + space) + ' / ' + amount.format(ship.capacity) + ' 格']);
+    if (buyRoute.approximate) purchaseDetails.push(['配货方式', '组合搜索近似估算']);
     return { kind: 'buy', mode: tradeMode, city: cargo.cityId, destination: buyRoute.port.cityId, goodsId: purchase.goodsId,
       count: purchase.count, price: purchase.price, expectedProfit: buyRoute.net, estimated: true, purchases: buyRoute.purchases,
       ...(stagedRoute && { nextCheckAt: timing.nextRefreshAt }),
       ...(reference && !hasDiscountedRoute && { waitForFirstDeparture: true }),
       approximate: buyRoute.approximate, arrival,
       latestActionAt: timing.tradeEndTime - timing.travelSeconds - (buyRoute.batches.length + buyRoute.purchases.length * 2 + 1) * actionSeconds,
-      label: '买入' + definition.itemName + ' ×' + purchase.count + '，单价 ' + purchase.price +
-        '，本港涨跌 ' + changeLabel(purchase.price, definition.unitPrice) + '，每件占 ' + purchase.capacity + ' 格，本批占 ' + purchase.count * purchase.capacity + ' 格' +
-        '，每格预计价差 ' + Number(purchase.marginPerSlot.toFixed(2)) + ' 商会币' +
-        (strict ? '，本批装入后 ' + (occupied + purchase.count * purchase.capacity) + '/' + ship.capacity + ' 格' : '') +
-        '；目标港 ' + buyRoute.port.cityId + '，' + (stagedRoute ? '刷新前先买本轮余货，已配货预计净收益 ' : estimateLabel) + buyRoute.net +
-        '；' + saleEstimate(definition, purchase.referencePrice, purchase.priceSource, purchase.expectedPrice) +
-        (buyRoute.purchases.length > 1 ? '（组合 ' + buyRoute.purchases.length + ' 种，逐笔复查）' : '') + (buyRoute.approximate ? '（有界组合搜索）' : '') };
+      purchaseDetails,
+      label: (buyRoute.purchases.length > 1 ? '组合 ' + buyRoute.purchases.length + ' 种，本笔' : '') +
+        (stagedRoute ? '刷新前买入' : '买入') + definition.itemName + ' ×' + amount.format(purchase.count) +
+        '，单价 ' + amount.format(purchase.price) + '，' + buyRoute.port.cityId + ' 号港预计卖价 ' + amount.format(purchase.expectedPrice) +
+        '。每格价差 ' + amount.format(purchase.marginPerSlot) + ' 商会币，' + (stagedRoute ? '已配货预计净收益 ' : '整船预计净收益 ') +
+        amount.format(buyRoute.net) + ' 商会币' + riskNote };
   }
   if (moveRoute) {
     if (strict) {
