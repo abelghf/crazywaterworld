@@ -84,7 +84,7 @@ const merchantActivityFields = [
     configField('merchant.liquidationMinutes','活动结束前清仓窗口','number',{unit:'分钟',help:'默认120分钟，0关闭提前清仓。窗口内优先处理持货；无论此值多少，都不采购无法在交易截止前卖出的货物。'}),
     configField('merchant.maxLossPercent','清仓最大亏损率','number',{unit:'%',help:'默认 0，不自动亏损卖出。平时可按原价卖出，为收益更高的现货腾出本金和舱位。填正数后，清仓期可按每批买价接受所设比例内的亏损。'}),
     configField('merchant.autoSpeedUp','允许使用指南针加速','switch',{help:'按账号保存，跨期生效。关闭时按自然航程走商。开启后按所选策略、用量上限和保留数量用针，达到 5000 万或更低的自设利润上限后停止用针。'}),
-    configField('merchant.speedUpMode','跑船与加速策略','choice',{options:[['deadline','稳定模式：免费跑船，临近截止才补救'],['refresh','刷新窗口加速'],['arrival','刷新窗口加速：每刷新最多一程'],['profit','周转增益及截止补救'],['race','同港抢先（领先时省针）'],['full','全程加速']],help:'同港抢先比较可见同盟船的预计到港时间。落后或并列时，用刚好能超过最早一艘的根数。全程加速按剩余航时尽快到港，针不足时可部分加速。这两种模式按到港时间决定用针。周转模式和刷新窗口模式会比较同盟船到港顺序与历史库存。能提前买到更赚钱的组合时才为抢货用针，到港重新核价。每刷新最多一程模式还会限制出航次数。'}),
+    configField('merchant.speedUpMode','跑船与加速策略','choice',{options:[['deadline','稳定模式：平时省针，最后一船加速卖货'],['refresh','刷新窗口加速'],['arrival','刷新窗口加速：每刷新最多一程'],['race','同港抢先（领先时省针）'],['full','全程加速']],help:'稳定模式在最后一个交易日收盘前的一段航程内（当前为两小时），按每日和每程剩余额度及可用库存核算。能一次到港且收盘前来得及逐批卖完时才用针。余针暂时不够就先自然航行，到点复查。其他交易日若次日仍能卖货会留针。同港抢先比较可见同盟船的预计到港时间。落后或并列时，用刚好能超过最早一艘的根数。全程加速按剩余航时尽快到港，针不足时可部分加速。这两种模式按到港时间决定用针。刷新窗口模式会比较同盟船到港顺序与历史库存。能提前买到更赚钱的组合时才为抢货用针，到港重新核价。每刷新最多一程模式还会限制出航次数。'}),
     configField('merchant.guardLastPointer','最后一根防抢','switch',{ parent: 'merchant.autoSpeedUp',when:d=>d.merchant?.autoSpeedUp,help:'默认关闭。开启后，每程进入一根指南针可直接到港的时间（当前 30 分钟），即使领先或未见同港船也尝试用一根。仍遵守保留量和用量上限，补购须单独开启。'}),
     configField('merchant.refreshWindowMinutes','刷新后加速窗口','number',{ parent: 'merchant.speedUpMode',unit:'分钟',when:d=>['refresh','arrival'].includes(d.merchant.speedUpMode),help:'仅在真实配置刷新时刻之后的此窗口内加速，窗口外等待；交易截止前仍可补救。'}),
     configField('merchant.dailyPointerLimit','每日指针使用上限','number',{ parent: 'merchant.autoSpeedUp',unit:'根',when:d=>d.merchant.autoSpeedUp,help:'默认28，0 禁止使用；跨重启保留已用和未确认用量。'}),
@@ -95,7 +95,6 @@ const merchantActivityFields = [
     configField('merchant.firstDepartureTime','首趟最早出发时间','time',{ parent: 'merchant.firstDepartureMode',when:d=>d.merchant.firstDepartureMode==='time',help:'北京时间。到点后仍需满足报价、舱位、交易时段和预计成交条件。'}),
     configField('merchant.firstDepartureWaitMinutes','首趟无盈利商情最多等待','number',{ parent: 'merchant.firstDepartureMode',unit:'分钟',when:d=>d.merchant.firstDepartureMode==='smart',help:'默认29分钟。灵活配货可在等待结束后换港寻价。满舱策略始终等待符合条件的双向航线。'}),
     configField('merchant.speedUpMaxPerLeg','每程最多使用指针','number',{ parent: 'merchant.autoSpeedUp',unit:'根',when:d=>d.merchant?.autoSpeedUp,help:'默认4，按整段航程累计，分轮执行也不能超过上限。'}),
-    configField('merchant.speedUpMinProfit','每根指针最低估算收益增量','number',{ parent: 'merchant.autoSpeedUp',unit:'商会币',when:d=>d.merchant?.autoSpeedUp && !['race','full'].includes(d.merchant.speedUpMode),help:'默认1000。最后一根防抢单独按剩余航时触发。逐批比较自然和加速到港能卖出的货，周转只计多出的完整航次。能补齐目标时优先用最少根数，其余按每根预计增加的利润选择。'}),
     configField('merchant.keepPointers','保留指针数量','number',{ parent: 'merchant.autoSpeedUp',unit:'根',when:d=>d.merchant?.autoSpeedUp,help:'自动加速后至少保留此数量，默认0。'}),
     configField('merchant.autoUpgrade','自动升级商船至满级','switch',{help:'贸易时段内商船到港后，累计利润达到下一船级门槛且钻石余额足够时，优先升级。船级随活动重置。'}),
 ];

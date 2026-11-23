@@ -2,7 +2,7 @@ import { exactAutomationId } from './automation-policy.mjs';
 import { claimOnce } from './extra-free-rewards.mjs';
 import { checkedAction, clock, dayOf, digest, hasReward, moduleOpen, natural, positive, read, table, waiting, windowOpen } from './activity-actions.mjs';
 import { claimPass } from './seasonal-activities.mjs';
-import { merchantActionSeconds, merchantSettings, merchantTiming, planMerchant } from './merchant-planner.mjs';
+import { merchantActionSeconds, merchantFinalCargoStart, merchantSettings, merchantTiming, planMerchant } from './merchant-planner.mjs';
 import { merchantSpeedMatches, runMerchantSpeed } from './merchant-speed.mjs';
 import { rewardData } from './missing-rewards.mjs';
 import { recordMerchantSnapshot, recordMerchantTrade, merchantJournalSummary, readMerchantJournal, knownMerchantMarkets } from './merchant-journal.mjs';
@@ -299,8 +299,7 @@ export async function merchantActivity(client, config, ctx) {
     return;
   }
   const onOutcome = data => recordMerchantTrade(ctx.ledger, { event, ...data, time: data.time ?? clock(client) });
-  ctx = Object.assign(Object.create(ctx), { onMerchantOutcome: onOutcome,
-    merchantMetrics: () => merchantJournalSummary(ctx.ledger, event, { time: clock(client) }) });
+  ctx = Object.assign(Object.create(ctx), { onMerchantOutcome: onOutcome });
   watchMerchant(client).observe({ event, state: info, time: clock(client), config, settings: ctx.settings?.() });
   // 已确认业务证据先持久化；统计写入失败或崩溃后仅补录，不重发游戏请求。
   for (const [key, record] of Object.entries(ctx.ledger?.keyRecords() ?? {})) {
@@ -328,10 +327,14 @@ export async function merchantActivity(client, config, ctx) {
   }
   if (info.cargo.moveToCityId && info.cargo.moveToCityId !== info.cargo.cityId)
     return waiting(ctx, '等待服务端确认到港');
-  if (!profitReached && await runMerchantUpgrade(client, config, Object.assign(Object.create(ctx), { enabled: allowed }), event, info)) return;
+  const policy = merchantSettings(ctx.settings?.()?.merchant);
+  const dockedAt = clock(client);
+  const finalStart = merchantFinalCargoStart(merchantTiming(config, event, dockedAt), event, policy, info.player.goods, info.cargo.cityId);
+  const unloading = finalStart !== null && dockedAt >= finalStart;
+  const upgrade = () => runMerchantUpgrade(client, config, Object.assign(Object.create(ctx), { enabled: allowed }), event, info);
+  if (!profitReached && !unloading && await upgrade()) return;
   const epoch = () => marketEpoch(config, clock(client));
   const currentEpoch = epoch();
-  const policy = merchantSettings(ctx.settings?.()?.merchant);
   const policyStamp = JSON.stringify(policy);
   const actionSeconds = () => positive(ctx.merchantCadenceSeconds)
     ? Math.max(60, ctx.merchantCadenceSeconds)
@@ -347,6 +350,7 @@ export async function merchantActivity(client, config, ctx) {
       }
     });
   const plan = await snapshot(info);
+  if (!profitReached && unloading && plan.kind !== 'sell' && await upgrade()) return;
   if (plan.marketSnapshot) await runMerchantReport(client, config,
     Object.assign(Object.create(ctx), { enabled: allowed }), event, info, { market: plan.marketSnapshot });
   if (!allowed()) return waiting(ctx, '开关、账号或活动状态已变化');
@@ -376,7 +380,13 @@ export async function merchantActivity(client, config, ctx) {
       ((plan.kind === 'sell' && verified.latestActionAt == null) || (positive(verified.latestActionAt) && clock(client) < verified.latestActionAt)) &&
       (plan.kind === 'sell' || clock(client) + merchantTiming(config, event, clock(client)).travelSeconds + actionInterval <
         Math.min(event.endTime, merchantTiming(config, event, clock(client)).tradeEndTime)),
-    inspect: async () => { const r = await getState(); return r.period === event.period ? fingerprint(r) : null; },
+    inspect: async () => {
+      const current = await getState();
+      if (current.period !== event.period) return null;
+      if (unloading && plan.kind === 'sell' && current.player?.goods?.some(g => g.cityId !== current.cargo?.cityId))
+        watchMerchant(client).observe({ event, state: current, time: clock(client), config, settings: ctx.settings?.(), expedite: true });
+      return fingerprint(current);
+    },
     matches: (e, s) => actionMatched(e, s, clock(client))
   };
   if (plan.kind === 'buy') {
@@ -407,9 +417,12 @@ export async function merchantActivity(client, config, ctx) {
     inspect: async () => {
       const current = await getState();
       if (current.period !== event.period) return null;
-      if (policy.autoSpeedUp && ['race', 'full'].includes(policy.speedUpMode) && current.cargo?.moveToCityId === plan.destination) {
+      if (policy.autoSpeedUp && current.cargo?.moveToCityId === plan.destination) {
         const now = clock(client);
-        watchMerchant(client).observe({ event, state: current, time: now, config, settings: ctx.settings?.(), expedite: true });
+        const finalStart = merchantFinalCargoStart(merchantTiming(config, event, now), event, policy, current.player?.goods, plan.destination);
+        const expedite = ['race', 'full'].includes(policy.speedUpMode) || (finalStart !== null && now >= finalStart);
+        if (expedite || finalStart !== null)
+          watchMerchant(client).observe({ event, state: current, time: now, config, settings: ctx.settings?.(), expedite });
       }
       return fingerprint(current);
     },

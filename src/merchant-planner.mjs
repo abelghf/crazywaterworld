@@ -17,20 +17,23 @@ export const MERCHANT_DEFAULTS = Object.freeze({
   maxLossPercent: 0,
   minExpectedProfit: 1,
   autoSpeedUp: false,
-  speedUpMinProfit: 1000,
   keepPointers: 0,
-  speedUpMode: 'profit', guardLastPointer: false, speedUpMaxPerLeg: 4, monitorSeconds: 60,
+  speedUpMode: 'deadline', guardLastPointer: false, speedUpMaxPerLeg: 4, monitorSeconds: 60,
   refreshWindowMinutes: 8, dailyPointerLimit: 28, autoBuyPointers: false, pointerDailyDiamondLimit: 0,
   profitLimit: 0, firstDepartureMode: 'smart', firstDepartureTime: '10:00', firstDepartureWaitMinutes: 29,
   autoUpgrade: false
 });
+
+export function merchantSpeedMode(value = MERCHANT_DEFAULTS.speedUpMode) {
+  return value === 'profit' ? 'deadline' : value;
+}
 
 export function merchantSettings(input = {}) {
   const output = { ...MERCHANT_DEFAULTS };
   for (const [key, fallback] of Object.entries(output)) {
     const value = input?.[key];
     if (typeof fallback === 'boolean') output[key] = typeof value === 'boolean' ? value : fallback;
-    else if (key === 'speedUpMode') output[key] = ['deadline', 'profit', 'refresh', 'arrival', 'race', 'full'].includes(value) ? value : fallback;
+    else if (key === 'speedUpMode') output[key] = ['deadline', 'refresh', 'arrival', 'race', 'full'].includes(value) ? value : fallback;
     else if (key === 'firstDepartureMode') output[key] = ['smart', 'time'].includes(value) ? value : fallback;
     else if (key === 'firstDepartureTime') output[key] = typeof value === 'string' && /^([01]\d|2[0-3]):[0-5]\d$/.test(value) ? value : fallback;
     else if (natural(value)) output[key] = value;
@@ -73,6 +76,14 @@ export function merchantTiming(config, event, time) {
     previousRefreshAt,
     marketEpoch: previousRefreshAt === null ? day + ':unknown' : dayOf(previousRefreshAt) + ':' + ((previousRefreshAt + 28800) % 86400) / 3600
   };
+}
+
+// 活动可能在夜间结束；最后一程从最后一个实际交易窗口的收盘向前推算。
+export function merchantFinalCargoStart(timing, event, policy, goods, destination) {
+  if (!policy?.autoSpeedUp || merchantSpeedMode(policy.speedUpMode) !== 'deadline' || !timing.tradingOpen || !positive(timing.travelSeconds) ||
+    !positive(event?.endTime) || event.endTime > timing.tradeStartTime + 86400 || !positive(destination) ||
+    !Array.isArray(goods) || !goods.some(g => positive(g?.num) && positive(g.cityId) && g.cityId !== destination)) return null;
+  return Math.max(timing.tradeStartTime, timing.tradeEndTime - timing.travelSeconds);
 }
 
 // 二元分组有界背包；两项资源同时做 Pareto 剪枝。小状态空间精确求解，
