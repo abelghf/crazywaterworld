@@ -4461,12 +4461,13 @@ export function createConsole({ host = '127.0.0.1', port = 17321, onLog, recover
           session.worldRead = null;
           context.enabled = () => session.client === client && client.connected && session.player === player
             && session.generation === generation && !session.paused && !session.productionSyncRequired;
+          let warning;
           try {
-            const message = await advanceFactoryInsertion(client, protocolFor(client), context, target.buildingId);
-            if (message) saved.label = message;
-          } catch (error) { saved.label += '，等待核对游戏队列：' + error.message; }
-          emit(session, 'info', saved.label, { worldUpdated:true });
-          return saved;
+            warning = await advanceFactoryInsertion(client, protocolFor(client), context, target.buildingId);
+          } catch (error) { warning = saved.label + '，等待核对游戏队列：' + error.message; }
+          const label = warning || saved.label;
+          emit(session, warning ? 'warn' : 'info', label, { worldUpdated:true });
+          return { ...saved, label, warning };
         }, '插入工厂排产');
         json(result);
         return;

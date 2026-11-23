@@ -337,7 +337,6 @@ function openConfirm(title, bodyNodes, onOk, okLabel = '确认') {
     try {
       await run();
     } catch (error) {
-      $('hint').textContent = '';
       reportError(error);
     }
   };
@@ -1052,7 +1051,6 @@ async function refreshOverview() {
     renderAccountSelect();
     if(!$('tab-overview').classList.contains('hidden'))maybeRefreshWorldMap();
     maybeRefreshSilicon();
-    $('hint').textContent = '';
     paintConnection();
   } catch (error) {
     reportError(error, '刷新总览');
@@ -1559,9 +1557,8 @@ function productionSpeedButton(target, stock, label) {
     pendingProductionSpeeds.add(key);
     updateProductionSpeedButton(button, now());
     try {
-      const result = await call('/api/world/production-speed', { method: 'POST',
+      await call('/api/world/production-speed', { method: 'POST',
         body: JSON.stringify({ ...target, maxUse, confirm: true }) });
-      if (current === account) $('hint').textContent = result.label;
     } catch (error) {
       if (current === account) reportError(error, '手动生产加速');
     } finally {
@@ -2808,7 +2805,6 @@ async function boot() {
     await loadAccounts(true, initialTab !== 'account'
       && !(initialTab === 'resources' && ['shops', 'chat', 'items'].includes(savedView?.resource)));
   } catch (error) {
-    $('hint').textContent = '';
     reportError(error);
     return;
   }

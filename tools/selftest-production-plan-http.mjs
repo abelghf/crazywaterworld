@@ -799,6 +799,7 @@ try {
       const outcome = await f.api('world/production-insert',{...target,planKey:final.insertKey,from:waiting.from,lane:waiting.lane,
         offset:waiting.quantity-2,productId:'面包',quantity:1,confirm:true});
       assert.match(outcome.label,/插单已撤回/);
+      assert.equal(outcome.warning, outcome.label);
       assert.equal(q.includes(promoted),true);
       assert.equal(pending(),1);
       assert.equal(writes.at(-1),'撤'+tail.idx);

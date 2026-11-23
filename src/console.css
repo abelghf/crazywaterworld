@@ -19,7 +19,6 @@ h1 { font-size:16px; font-weight:600; line-height:1.2; letter-spacing:-.01em; wh
 .mast:has(#console-version-open:not([hidden])) .brand-label { display:none }
 /* 页头按可用宽度换行，连接按钮显隐时由账号选择框伸缩。 */
 .connection { display:flex; align-items:center; justify-content:flex-end; gap:8px; min-width:0; max-width:100%; flex:1 1 52rem; margin-left:auto }
-.connection:has(#hint:not(:empty)) { flex-basis:100% }
 .account-picker { position:relative; width:320px; max-width:100%; min-width:0; flex:0 1 320px }
 #account-picker-list { position:absolute; inset-inline:0; top:calc(100% + 6px); z-index:50; max-height:min(60dvh,360px); overflow-y:auto; overscroll-behavior:contain; scrollbar-width:thin }
 .account-picker-option { grid-template-columns:minmax(0,1fr) 16px }
@@ -30,8 +29,6 @@ h1 { font-size:16px; font-weight:600; line-height:1.2; letter-spacing:-.01em; wh
 .hosting-controls,.hosting-interval { display:flex; align-items:center; gap:8px; flex-shrink:0 }
 .hosting-interval { gap:6px; font-size:13px; color:var(--muted-foreground); white-space:nowrap }
 #log-top-count { color:var(--muted-foreground); font-variant-numeric:tabular-nums }
-#hint:empty { display:none }
-#hint { font-size:12px; white-space:nowrap }
 
 #console-quick-dialog { gap:10px; padding:16px }
 #console-quick-results { display:grid; gap:2px; max-height:min(52dvh,420px); overflow:auto; overscroll-behavior:contain }
@@ -942,7 +939,6 @@ button.factory-empty:disabled { cursor:wait; opacity:.6 }
   #loop-every { appearance:textfield }
   #loop-every::-webkit-inner-spin-button,#loop-every::-webkit-outer-spin-button { appearance:none; margin:0 }
   #log-top-count { min-width:0; overflow:hidden; text-overflow:ellipsis }
-  #hint { grid-column:1 / -1; white-space:normal; overflow-wrap:anywhere }
   /* 底部导航按实际入口数量均分一行。 */
   #tabs { position:fixed; inset:auto 0 0; z-index:40; display:grid; grid-auto-flow:column; grid-auto-columns:minmax(0,1fr); gap:0; width:100%; margin:0; padding:4px calc(4px + env(safe-area-inset-right)) calc(4px + env(safe-area-inset-bottom)) calc(4px + env(safe-area-inset-left)); overflow:visible; background:var(--background); border-top:1px solid var(--border) }
   .nav-tab { flex-direction:column; justify-content:center; gap:2px; height:48px; padding:0; font-size:0.75rem; min-width:0 }

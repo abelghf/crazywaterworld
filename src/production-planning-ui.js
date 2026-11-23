@@ -314,8 +314,7 @@ async function openBatchInsertion(day, factory, run, status, panel) {
     const quantity = Number(qty.value);
     if (!valid() || !validPosition() || !validQuantity(quantity)) throw Error('库存或计划已变化，请重新选择');
     try {
-      const result = await post('', { ...target, offset: offset(), productId: select.value, quantity, confirm: true });
-      if (account === current) $('hint').textContent = result.label;
+      await post('', { ...target, offset: offset(), productId: select.value, quantity, confirm: true });
     } finally {
       if (current === account && productionAccountReady()) await refreshProductionPlan({ afterInsert:true });
     }

@@ -236,6 +236,27 @@ await test('插单立即弹窗，读取期间可关闭，旧请求不会覆盖�
   assert.deepEqual(env.calls, Array(3).fill('/api/world/production-insert-options'));
 });
 
+await test('插单成功和队列异常都刷新清单，顶栏不显示操作提示', async () => {
+  const env = fixture();
+  const plan = { forecast: { startAt:1000, endAt:87400, insertKey:'plan', completions:[],
+    factories:[{ id:'a', name:'水厂', runs:[] }] } };
+  env.render(plan);
+  for (const warning of [undefined, '工厂队列已变化，插单已撤回']) {
+    env.respond = async route => {
+      if (route.endsWith('-options')) return { products:[{ id:'淡水', name:'淡水', max:null }], count:1 };
+      if (route.endsWith('-insert')) return { label:warning || '已插入淡水 ×2', warning };
+      return plan;
+    };
+    const panel = env.node('production-day-result').querySelector('.plan-day-panel');
+    panel.isConnected = true;
+    await panel.querySelector('.production-batch-insert').onclick();
+    descendants(env.node('m-body')).find(node => node.tagName === 'input').value = '2';
+    await env.node('m-ok').onclick();
+    assert.equal(env.node('hint').textContent, '');
+    assert.deepEqual(env.calls.slice(-2), ['/api/world/production-insert', '/api/world/production-plan']);
+  }
+});
+
 await test('独立卡片只显示一家工厂，切换与刷新保留选中项，换账号清除', () => {
   const env = fixture(), startAt = Date.UTC(2026, 10, 23, 15, 59) / 1000;
   const one = { id:'a', name:'金属厂-1', runs:[
