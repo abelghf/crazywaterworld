@@ -292,7 +292,7 @@ const configGroups = [
     configField('factory.keepStock', '备货水位', 'number', { when: d => d.factory.strategy !== 'nativeSimulation', unit: '件 / 产品', help: '计入库存、待领取与在产数量，实际不超过游戏仓库上限。0 表示只为需求生产。' }),
     configField('factory.checkEverySeconds', '兜底检查间隔', 'number', { unit: '秒', help: '优先按服务端完工时间和建筑状态推送领取、补产；没有可靠完工时间、缺料、满仓或发生错误时，按此间隔复查。独立于主循环间隔；账号队列占用时等待。' }),
     configField('factory.demandFirst', '按需优先生产', 'switch', { help: '开启后先补所选需求来源。同级需求先选耗时短的产品，有效月卡开启双生产位时可调整同批顺序以缩短工期。关闭后按备货水位从短到长补库存。联盟募兵、红船的独立备料开关仍各自生效。' }),
-    configField('factory.demandPriority', '需求优先级', 'priority', { wide: true, help: '按列表顺序优先补料。开启按需优先生产并选择海兽进阶后，同轮进阶投喂、培育喂养和博物馆也按此顺序使用材料。勾选“工厂加速”后，会加速该来源仍缺少的在产物品；移除的来源不会自动补回。' }),
+    configField('factory.demandPriority', '需求优先级', 'sortableOrder', { wide: true, catalog: 'demandSources', help: '开启按需优先生产后，智能排产按列表顺序分配原料和生产位。「工厂补料」排在某项需求前时，优先补至备货水位。海兽进阶、培育喂养和博物馆也按相对顺序使用材料。勾选“工厂加速”后，会加速该来源仍缺少的在产物品。移除的来源不会自动补回。' }),
     configField('factory.speedUp', '自动加速生产', 'switch', { help: '与按来源加速独立；两种方式都遵守加速器保留量。' }),
     configField('factory.speedUpItems', '加速物品', 'multi', { parent: 'factory.speedUp', catalog: 'materials', empty: '未选择，允许全部在产物品', when: d => d.factory.speedUp }),
   ] },
@@ -607,6 +607,7 @@ function configSet(key, value) {
     draft.cityWar.defenceFleetIds = (draft.cityWar.defenceFleetIds ?? []).filter(id => value.includes(id));
   }
   if (key === 'heroes.heroIds' && value.length) draft.heroes.needsSelection = false;
+  if (key === 'factory.demandPriority') draft.factory.speedUpSources = draft.factory.speedUpSources.filter(source => value.includes(source));
   if (key === 'farm.autoPlant' && value) draft.farm.customPlant = false;
   if (key === 'farm.customPlant' && value) draft.farm.autoPlant = false;
   configEditor.draft = draft;
@@ -1257,14 +1258,21 @@ function configRenderField(spec) {
 function configSortableOrder(spec, id) {
   const root = el('div', 'config-dispatch-order'); root.id = id;
   root.setAttribute('role', 'group'); root.setAttribute('aria-label', spec.label);
+  const factory = spec.key === 'factory.demandPriority';
   const hint = el('p', 'config-help', '拖动左侧手柄调整顺序，也可使用上移、下移按钮。');
   const list = el('div'); list.setAttribute('role', 'list');
   const status = el('span', 'sr-only'); status.setAttribute('role', 'status');
+  const add = factory ? el('div', 'config-add') : null;
   const labels = new Map(spec.options ?? (configEditor.data.catalog?.[spec.catalog] ?? []).map(item => [item.value, item.label]));
   const owner = configEditor.owner;
   let drag = null;
-  const editable = () => owner === current && configEditor.owner === owner && !configEditor.busy && !configEditor.loading
+  const editable = () => owner === current && configEditor.owner === owner && (!configEditor.busy || factory && configEditor.saving) && !configEditor.loading
     && root.isConnected && root.getClientRects().length > 0;
+  const commit = (values, focusValue) => {
+    configSet(spec.key, values);
+    paint(focusValue);
+    if (factory) void configFlush();
+  };
   const clearDrop = () => { for (const row of list.children) delete row.dataset.drop; };
   const cancelDrag = () => {
     const previous = drag; drag = null; clearDrop();
@@ -1280,7 +1288,7 @@ function configSortableOrder(spec, id) {
     const values = [...configGet(spec.key)], from = values.indexOf(value);
     if (from < 0 || to < 0 || to >= values.length || from === to) return;
     values.splice(from, 1); values.splice(to, 0, value);
-    configSet(spec.key, values); paint(value);
+    commit(values, value);
     status.textContent = (labels.get(value) || value) + '已移至第' + (to + 1) + '位';
   };
   const startDrag = (event, value, row, handle) => {
@@ -1300,8 +1308,8 @@ function configSortableOrder(spec, id) {
       const before = others.findIndex(item => { const rect = item.getBoundingClientRect(); return event.clientY < rect.top + rect.height / 2; });
       drag.to = before < 0 ? others.length : before;
       clearDrop();
-      if (before < 0 && others.length) others.at(-1).dataset.drop = 'after';
-      else if (others[before]) others[before].dataset.drop = 'before';
+      if (others[drag.to]) others[drag.to].dataset.drop = 'before';
+      else if (others.length) others.at(-1).dataset.drop = 'after';
       if (event.clientY < 48) window.scrollBy(0, -16);
       else if (event.clientY > window.innerHeight - 48) window.scrollBy(0, 16);
     };
@@ -1318,8 +1326,10 @@ function configSortableOrder(spec, id) {
     cancelDrag(); clear(list);
     const values = configGet(spec.key);
     values.forEach((value, index) => {
-      const row = el('div', 'config-dispatch-row config-dispatch-sortable');
-      row.dataset.dispatch = value; row.setAttribute('role', 'listitem');
+      const row = el('div', (factory ? 'config-demand-row' : 'config-dispatch-row') + ' config-dispatch-sortable');
+      if (factory) row.dataset.demandSource = value;
+      else row.dataset.dispatch = value;
+      row.setAttribute('role', 'listitem');
       const label = labels.get(value) || value;
       const handle = configButton('⠿', () => {}); handle.classList.add('config-dispatch-handle');
       handle.setAttribute('aria-label', '拖动排序：' + label); handle.title = '拖动排序，或按上下方向键移动';
@@ -1330,17 +1340,43 @@ function configSortableOrder(spec, id) {
         if (to !== null) { event.preventDefault(); cancelDrag(); move(value, to); }
       };
       const actions = el('div', 'config-order-tools');
+      if (factory) {
+        const speed = el('label', 'config-option'), check = el('input');
+        check.type = 'checkbox'; check.checked = configGet('factory.speedUpSources').includes(value);
+        check.setAttribute('aria-label', label + '工厂加速');
+        check.onchange = () => {
+          const sources = configGet('factory.speedUpSources');
+          configSet('factory.speedUpSources', check.checked ? [...sources, value] : sources.filter(source => source !== value));
+        };
+        speed.append(check, el('span', '', '工厂加速')); actions.append(speed);
+      }
       for (const [offset, text] of [[-1, '上移'], [1, '下移']]) {
         const button = configButton(text, () => { cancelDrag(); move(value, index + offset); });
         button.disabled = index + offset < 0 || index + offset >= values.length;
         button.setAttribute('aria-label', label + text); actions.append(button);
       }
+      if (factory) {
+        const remove = configButton('移除', () => {
+          if (editable()) commit(configGet(spec.key).filter(source => source !== value));
+        }, 'remove');
+        remove.setAttribute('aria-label', '移除' + label); actions.append(remove);
+      }
       row.append(handle, el('span', 'config-order-num', String(index + 1)), el('span', 'config-order-name', label), actions);
       list.append(row);
       if (value === focusValue) handle.focus({ preventScroll: true });
     });
+    if (add) {
+      if (!values.length) list.append(el('p', 'config-empty', '尚未选择需求来源。当前只按备货水位生产。'));
+      configOrderAdd(add, labels, values, '需求来源', value => {
+        if (!editable()) return;
+        const values = configGet(spec.key);
+        if (!values.includes(value)) commit([...values, value]);
+      });
+    }
   }
-  root.append(hint, list, status); paint();
+  root.append(hint, list, status);
+  if (add) root.append(add);
+  paint();
   return root;
 }
 
@@ -2131,11 +2167,22 @@ function configMultiselect(spec, id, options = {}) {
   panel.append(search, list, more, foot); root.append(panel); paintSummary(); return root;
 }
 
+function configOrderAdd(add, labels, values, itemLabel, onAdd) {
+  clear(add);
+  const select = el('select', 'config-select'); select.setAttribute('aria-label', '添加' + itemLabel);
+  const available = [...labels].filter(([value]) => !values.includes(value));
+  const blank = el('option', '', available.length ? '选择要添加的' + itemLabel : '已添加全部' + itemLabel);
+  blank.value = ''; select.append(blank);
+  for (const [value, label] of available) { const option = el('option', '', label); option.value = value; select.append(option); }
+  const button = configButton('添加', () => { if (select.value) onAdd(select.value); });
+  button.setAttribute('aria-label', '添加所选' + itemLabel); button.disabled = true;
+  select.disabled = !available.length; select.onchange = () => { button.disabled = !select.value; };
+  add.append(select, button);
+}
+
 function configPriorityEditor(spec, id) {
   const root = el('div'); root.id = id; root.tabIndex = -1; root.setAttribute('role', 'group'); root.setAttribute('aria-label', spec.label);
-  const options = spec.options?.map(([value, label]) => ({ value, label })) ?? configEditor.data.catalog[spec.catalog || 'demandSources'] ?? [];
-  const factoryPriority = spec.key === 'factory.demandPriority';
-  const itemLabel = spec.itemLabel || '需求来源';
+  const labels = new Map(spec.options ?? (configEditor.data.catalog[spec.catalog] ?? []).map(item => [item.value, item.label]));
   const picker = spec.checkboxes ? configMultiselect(spec, id + '-picker', {
     write(values) { configSet(spec.key, values); paint(); },
   }) : null;
@@ -2146,20 +2193,14 @@ function configPriorityEditor(spec, id) {
   function paint(focusKey, direction) {
     clear(list); const values = configGet(spec.key); let focus;
     values.forEach((value, index) => {
-      const label = options.find(item => item.value === value)?.label || value;
+      const label = labels.get(value) || value;
       const row = el('li', 'config-order-row'); row.append(el('span', 'config-order-num', String(index + 1)), el('span', 'config-order-name', label));
       const tools = el('div', 'config-order-tools');
-      if (factoryPriority) {
-        const speed = el('label', 'config-option'); const check = el('input'); check.type = 'checkbox'; check.checked = configGet('factory.speedUpSources').includes(value); check.setAttribute('aria-label', label + '工厂加速');
-        check.onchange = () => { const current = configGet('factory.speedUpSources'); configSet('factory.speedUpSources', check.checked ? [...current, value] : current.filter(item => item !== value)); };
-        speed.append(check, el('span', '', '工厂加速')); tools.append(speed);
-      }
       const move = offset => { const next = [...values]; [next[index], next[index + offset]] = [next[index + offset], next[index]]; configSet(spec.key, next); picker?.refresh(); paint(value, offset); };
       const up = configButton('上移', () => move(-1)); up.disabled = index === 0; up.setAttribute('aria-label', label + '上移');
       const down = configButton('下移', () => move(1)); down.disabled = index === values.length - 1; down.setAttribute('aria-label', label + '下移');
       const remove = configButton('移除', () => {
         configSet(spec.key, values.filter(item => item !== value));
-        if (factoryPriority) configSet('factory.speedUpSources', configGet('factory.speedUpSources').filter(item => item !== value));
         picker?.refresh(); paint();
       }, 'remove'); remove.setAttribute('aria-label', '移除' + label);
       tools.append(up, down, remove); row.append(tools); list.append(row);
@@ -2168,13 +2209,9 @@ function configPriorityEditor(spec, id) {
     if (focus && !focus.disabled) focus.focus();
     if (!add) { list.hidden = !values.length; return; }
     if (!values.length) list.append(el('li', 'config-empty', spec.empty || '尚未选择需求来源。当前只按备货水位生产。'));
-    clear(add); const select = el('select', 'config-select'); select.setAttribute('aria-label', '添加' + itemLabel);
-    const available = options.filter(item => !values.includes(item.value));
-    const blank = el('option', '', available.length ? '选择要添加的' + itemLabel : '已添加全部' + itemLabel); blank.value = ''; select.append(blank);
-    for (const item of available) { const option = el('option', '', item.label); option.value = item.value; select.append(option); }
-    const button = configButton('添加', () => { if (select.value) { configSet(spec.key, [...values, select.value]); paint(); } }); button.setAttribute('aria-label', '添加所选' + itemLabel); button.disabled = true;
-    select.disabled = !available.length; select.onchange = () => { button.disabled = !select.value; };
-    add.append(select, button);
+    configOrderAdd(add, labels, values, spec.itemLabel, value => {
+      configSet(spec.key, [...configGet(spec.key), value]); paint();
+    });
   }
   paint(); return root;
 }
@@ -2386,14 +2423,18 @@ function configSave(event, { automatic = false } = {}) {
     configMessage('请修正标出的配置，填写完整后会自动保存。', 'error'); configUpdateState();
     return Promise.resolve(false);
   }
-  const account = current, serial = configEditor.serial, text = JSON.stringify(configEditor.draft);
+  const account = current, serial = configEditor.serial, draft = configEditor.draft, text = JSON.stringify(draft);
   const active = () => account === current && account === configEditor.owner && serial === configEditor.serial;
   configEditor.saving = true; configEditor.saveError = null;
   configBusy(true);
   if (!Object.keys(configEditor.errors).length) configMessage('');
   configUpdateState();
   const job = (async () => { try {
-    const data = await call('/api/settings', { method: 'POST', body: JSON.stringify({ settings: JSON.parse(text), revision: configEditor.data.revision, baseRevision: configEditor.data.baseRevision, recoveryToken: configEditor.data.recoveryToken }) });
+    const body = JSON.stringify({ settings: draft, revision: configEditor.data.revision, baseRevision: configEditor.data.baseRevision, recoveryToken: configEditor.data.recoveryToken });
+    const orderChanged = JSON.stringify(draft.factory.demandPriority) !== JSON.stringify(configEditor.baseline.factory.demandPriority);
+    // 刷新时让已发出的调序请求继续完成；超过浏览器 keepalive 字节上限的配置走常规保存。
+    const keepalive = orderChanged && new Blob([body]).size <= 65536;
+    const data = await call('/api/settings', { method: 'POST', body, keepalive });
     if (!active() || configPageStale()) return false;
     const edited = JSON.stringify(configEditor.draft) !== text;
     const normalized = !edited && JSON.stringify(data.settings) !== text;

@@ -547,9 +547,6 @@ function validateCurrentSettings(input, { partial = false, catalog = null } = {}
     if (output.farm.crops.some(v => !crops.has(v.id))) errors['farm.crops'] = '包含当前游戏中不存在的作物';
   }
   if (Object.keys(errors).length) throw new SettingsError(errors);
-  if (output.factory.demandPriority.includes('factory')) {
-    output.factory.demandPriority = [...output.factory.demandPriority.filter(source => source !== 'factory'), 'factory'];
-  }
   output.ads.noPrivilege = true;
   output.schedule = savedSchedule(nativeTaskValues(output, output.schedule));
   return output;

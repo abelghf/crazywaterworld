@@ -369,8 +369,8 @@ function renderProductionPlan(data) {
     box.appendChild(table(['需求来源', '所需物品', '预计备齐'], rows, 'plan-demand-table'));
   }
   for (const [title, jobs] of [
-    ['建议生产顺序', timeline.filter(job => job.kind !== 'existing' && job.kind !== 'restock')],
-    ['补至库存水位 · 每种 ' + data.stockTarget + ' 件', timeline.filter(job => job.kind === 'restock')],
+    ['建议生产顺序', timeline.filter(job => job.kind !== 'existing' && (job.kind !== 'restock' || job.priority != null))],
+    ['补至库存水位 · 每种 ' + data.stockTarget + ' 件', timeline.filter(job => job.kind === 'restock' && job.priority == null)],
     ['游戏内生产队列', timeline.filter(job => job.kind === 'existing')],
   ]) {
     if (!jobs.length) continue;
@@ -378,7 +378,8 @@ function renderProductionPlan(data) {
     details.appendChild(el('summary', null, title + '（' + jobs.length + ' 批）'));
     details.appendChild(table(['生产设施', '生产物品', '开始时间', '预计完成'], jobs.map(job => [
       job.machineName || job.machineId,
-      planMaterialList([{ id: job.itemId, name: job.productName, num: job.quantity }], recipes),
+      planMaterialList([{ id: job.itemId, name: job.kind === 'restock' && job.priority != null
+        ? (job.productName || job.itemId) + '（工厂补料）' : job.productName, num: job.quantity }], recipes),
       productionPlanTime(job.startAt),
       productionPlanTime(job.finishAt),
     ])));

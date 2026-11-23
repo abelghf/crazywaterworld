@@ -159,6 +159,20 @@ test('工厂加速跳过等待格，按服务器时钟计算零号位，只加�
   assert.deepEqual(speed(), [[0, 1], [2, 1]], '独立物品加速仍可使用保留量以上的两个加速器');
 });
 
+test('补料与订单都需要同一件在产货物时，按顺序归属来源加速', () => {
+  const f = fixture();
+  f.stock.set('加速器', 10);
+  f.factory.factory.factoryQ = [{ productId: '长时品', finishTime: 160 }];
+  f.survey.cargoOrder.set('长时品', 1);
+  Object.assign(f.settings.factory, { keepStock: 1, demandFirst: true, demandPriority: ['factory', 'cargo'], speedUpSources: ['factory'] });
+  const extraDemand = baseDemands({ world: f.survey, now: f.survey.now }, f.config, f.settings);
+  const speed = () => planWorld(f.survey, { config: f.config, settings: f.settings, extraDemand, allowSpeedUp: true })
+    .actions.filter(step => step.kind === 'speedUpProduce').map(step => step.demandSources);
+  assert.deepEqual(speed(), [['factory']]);
+  f.settings.factory.demandPriority.reverse();
+  assert.deepEqual(speed(), []);
+});
+
 {
   const f = fixture();
   const finishTime = Math.floor(Date.now() / 1000) + 55;
@@ -556,17 +570,40 @@ test('下游同轮占用现货后，先遍历过的上游也能补回备货缺�
   f.settings.factory.demandFirst = true;
   assert.deepEqual(products(f.plan()), ['电机', '短时品']);
 });
-test('实际工厂补料来源固定排最后，旧顺序不会让水位以订单名义突破目标', () => {
+test('工厂补料与订单竞争同一队列，按配置顺序生产且同一产物只补一次', () => {
   const f = fixture();
   f.stock.set('短时品', 0);
-  Object.assign(f.settings.factory, { keepStock: 1, demandFirst: true, demandPriority: ['factory', 'cargo'], checkEverySeconds: 180 });
+  Object.assign(f.settings.factory, { keepStock: 1, demandFirst: true, checkEverySeconds: 180 });
   f.survey.cargoOrder.set('长时品', 2);
   const extra = baseDemands({ world: f.survey, now: f.survey.now }, f.config, f.settings);
   assert(extra.some(record => record.source === 'factory'));
-  const result = planWorld(f.survey, { config: f.config, settings: f.settings, enabled: k => k === 'startProduce', extraDemand: extra });
-  const jobs = result.actions.filter(job => job.request === 'StartFactoryProduceRequest');
-  assert.deepEqual(jobs.map(job => [job.body.productId, job.demandDriven]), [['长时品', true], ['长时品', true], ['短时品', false]]);
-  assert.deepEqual(jobs[0].demandSources, ['cargo']);
+  for (const [order, expected] of [
+    [['factory', 'cargo'], [['短时品', false], ['长时品', false], ['长时品', true]]],
+    [['cargo', 'factory'], [['长时品', true], ['长时品', true], ['短时品', false]]],
+  ]) {
+    f.settings.factory.demandPriority = order;
+    const result = planWorld(f.survey, { config: f.config, settings: f.settings, enabled: k => k === 'startProduce', extraDemand: extra });
+    const jobs = result.actions.filter(job => job.request === 'StartFactoryProduceRequest');
+    assert.deepEqual(jobs.map(job => [job.body.productId, job.demandDriven]), expected);
+    assert.deepEqual(jobs.find(job => job.demandDriven).demandSources, ['cargo']);
+  }
+});
+
+test('补料排在两类订单之间，按水位计入现货、在产和待收，移除后回到兜底备货', () => {
+  const f = fixture();
+  f.config.tables.BuildingProduceCfg.data.push({ ...f.config.tables.BuildingProduceCfg.data[0], itemId: '备货品' });
+  f.stock.set('短时品', 1); f.stock.set('长时品', 1);
+  f.survey.cargoOrder.set('长时品', 2); f.survey.weekOrder.set('短时品', 2);
+  Object.assign(f.settings.factory, { keepStock: 1, demandFirst: true, demandPriority: ['cargo', 'factory', 'merchant'], checkEverySeconds: 180 });
+  assert.deepEqual(products(f.plan()), ['长时品', '备货品', '短时品']);
+  f.factory.factory.finishedProducts = [{ id: '备货品', num: 1 }];
+  assert.deepEqual(products(f.plan()), ['长时品', '短时品']);
+  f.factory.factory.finishedProducts = [];
+  f.factory.factory.factoryQ = [{ productId: '备货品', finishTime: 120 }];
+  assert.deepEqual(products(f.plan()), ['长时品', '短时品']);
+  f.factory.factory.factoryQ = [];
+  f.settings.factory.demandPriority = ['cargo', 'merchant'];
+  assert.deepEqual(products(f.plan()), ['长时品', '短时品', '备货品']);
 });
 test('满仓的优先品不占住空厂，两个空厂只为同一断货品补一件', () => {
   const f = fixture();

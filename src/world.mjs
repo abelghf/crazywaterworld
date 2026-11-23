@@ -1067,9 +1067,7 @@ export function planWorld(survey, {
     ...(settings.alliance.recruit && settings.alliance.recruitProduction ? ['guildRecruit'] : []),
     ...(settings.guildShip?.enabled && settings.guildShip.produceMissing ? ['guildShip'] : []),
   ] : [];
-  const demandPriority = settings ? [...new Set([...settings.factory.demandPriority.filter(source => source !== 'factory'),
-    ...independentSources])] : [];
-  if (settings?.factory.demandPriority.includes('factory')) demandPriority.push('factory');
+  const demandPriority = settings ? [...new Set([...settings.factory.demandPriority, ...independentSources])] : [];
   const speedQuota = new Map();
   const detailedNeeds = settings ? settingDemands(survey, config, [
     ...productionOrders,
@@ -1081,10 +1079,27 @@ export function planWorld(survey, {
     onSkip: (record, blockers) => notes.push(skipReason(blockers)) }) : null;
   const productionNeeded = id => (detailedNeeds?.get(id)?.num ?? 0) > 0 && (settings?.factory.demandFirst ||
     detailedNeeds.get(id).sources.some(source => independentSources.includes(source)));
+  const incoming = factoryIncomingStock(survey.factories);
+  const committedInputs = new Map();
+  // A forecast can hold completed demand in the warehouse; those units still take up space.
+  const warehouseCount = survey.warehouseCount ?? have;
+  const occupiedStock = id => warehouseCount(id) + (incoming.get(id) ?? 0) - (borrowedTotals.get(id) ?? 0);
+  const projectedStock = id => occupiedStock(id) - (committedInputs.get(id) ?? 0);
+  const roomForRecipe = row => Math.max(0, survey.stockCap - projectedStock(row.itemId));
+  const stockTarget = Math.min(settings?.factory.keepStock ?? survey.stockCap, survey.stockCap);
   // The factory source is a stock target, including its expanded ingredients.
   // It never grants the order-only exemption from the per-product waterline.
-  const orderNeedsProduction = id => productionNeeded(id) && demandPriority[detailedNeeds.get(id).priority] !== 'factory';
-  const recipeRank = row => orderNeedsProduction(row.itemId) ? detailedNeeds.get(row.itemId).priority : Infinity;
+  const itemOrderRank = id => {
+    if (!productionNeeded(id)) return Infinity;
+    const needs = detailedNeeds.get(id).productionBySource;
+    const rank = demandPriority.findIndex(source => source !== 'factory' && needs[source] > 0);
+    return rank < 0 ? Infinity : rank;
+  };
+  const orderNeedsProduction = id => Number.isFinite(itemOrderRank(id));
+  const stockIndex = demandPriority.indexOf('factory');
+  // With no lower tier, the existing spare-capacity pass already handles stock.
+  const stockRank = settings?.factory.demandFirst && stockIndex >= 0 && stockIndex < demandPriority.length - 1 ? stockIndex : Infinity;
+  const recipeRank = row => Math.min(itemOrderRank(row.itemId), projectedStock(row.itemId) < stockTarget ? stockRank : Infinity);
   // The factory phase runs before pet feeding. Keep complete feed batches out
   // of lower-priority recipes so stocking the factory cannot starve the pet.
   const petRank = demandPriority.indexOf('petAdvance');
@@ -1135,14 +1150,6 @@ export function planWorld(survey, {
       });
     }
   }
-  const incoming = factoryIncomingStock(survey.factories);
-  const committedInputs = new Map();
-  // A forecast can hold completed demand in the warehouse; those units still take up space.
-  const warehouseCount = survey.warehouseCount ?? have;
-  const occupiedStock = id => warehouseCount(id) + (incoming.get(id) ?? 0) - (borrowedTotals.get(id) ?? 0);
-  const projectedStock = id => occupiedStock(id) - (committedInputs.get(id) ?? 0);
-  const roomForRecipe = row => Math.max(0, survey.stockCap - projectedStock(row.itemId));
-  const stockTarget = Math.min(settings?.factory.keepStock ?? survey.stockCap, survey.stockCap);
   const replacementJobs = new Map();
   const factoryReasons = new Map();
   const timing = createProductionTiming({ config, ...survey.productionTiming, serverNow: survey.serverNow ?? now });
@@ -1151,10 +1158,9 @@ export function planWorld(survey, {
   const smart = !simulateNative && settings?.factory.demandFirst === true;
   const revisit = settings?.factory.checkEverySeconds ?? 30;
   const nextWaits = new Map();
-  // Source tiers allocate shared inputs across the whole island before any
-  // factory may commit them to a lower tier or to stock.
-  const priorities = demandPriority.map((_, i) => i).filter(i => demandPriority[i] !== 'factory' && [...(detailedNeeds?.values() ?? [])].some(need =>
-    (need.productionBySource[demandPriority[i]] ?? 0) > 0));
+  // Each source tier allocates shared inputs across all factories.
+  const priorities = demandPriority.map((_, i) => i).filter(i => demandPriority[i] === 'factory' ? i === stockRank && stockTarget > 0
+    : [...detailedNeeds.values()].some(need => (need.productionBySource[demandPriority[i]] ?? 0) > 0));
   const isNative = b => b.factory.autoProductId && (survey.autoProduceForever || survey.autoProduceEndTime > (survey.serverNow ?? now));
   const facilities = survey.factories.filter(b => b.level > 0 && !blockedFactory(b) && !survey.factoryInsertions?.[b.buildingId]);
   const usableRows = new Set(facilities.flatMap(b => produceRows.filter(r => r.buildType === b.type && r.unlockLevel <= b.level)));
@@ -1218,7 +1224,7 @@ export function planWorld(survey, {
       if (queue.lanes.count !== 1 || queue.missing.length || recipeFree(child, recipe.itemId) > 0
         || incoming.get(recipe.itemId) > jobs.filter(job => job.recipe === recipe).length) return;
       const count = (counts.get(child) ?? 0) + 1;
-      if (count > detailedNeeds.get(child.itemId).productionBySource[demandPriority[tier]]) return;
+      if (count > (detailedNeeds.get(child.itemId)?.productionBySource[demandPriority[tier]] ?? 0)) return;
       counts.set(child, count);
       for (const [id, amount] of child.costItem) {
         if (id === recipe.itemId) { if (amount !== 1) return; continue; }
@@ -1235,19 +1241,19 @@ export function planWorld(survey, {
   function planFactory(b, tier, stockouts, shortFeed = false) {
     if (isNative(b)) {
       const desired = !simulateNative && settings?.factory.cooperateNative ? produceRows.filter(row =>
-        row.buildType === b.type && row.unlockLevel <= b.level && productionNeeded(row.itemId)
+        row.buildType === b.type && row.unlockLevel <= b.level && (productionNeeded(row.itemId) || Number.isFinite(recipeRank(row)))
         && projectedStock(row.itemId) < (orderNeedsProduction(row.itemId) ? survey.stockCap : stockTarget)) : [];
       const choices = desired.filter(row => (row.costItem ?? []).every(([id,n]) => recipeFree(row, id) >= n));
       const shortages=desired.filter(row=>!choices.includes(row)).map(row=>name(row.itemId)+'：'+(row.costItem??[]).filter(([id,n])=>recipeFree(row,id)<n).map(([id,n])=>name(id)+'需'+n+'，可用'+recipeFree(row,id)+'，缺'+(n-recipeFree(row,id))).join('；'));
       if(shortages.length)notes.push(buildingName(b)+'原生协同等待原料：'+shortages.join('；'));
       const bFactoryTarget = b.factory.autoProductId;
-      choices.sort((a,b) => detailedNeeds.get(a.itemId).priority - detailedNeeds.get(b.itemId).priority ||
-        Number(b.itemId === bFactoryTarget) - Number(a.itemId === bFactoryTarget) || detailedNeeds.get(b.itemId).num - detailedNeeds.get(a.itemId).num);
+      choices.sort((a,b) => recipeRank(a) - recipeRank(b) ||
+        Number(b.itemId === bFactoryTarget) - Number(a.itemId === bFactoryTarget) || (detailedNeeds.get(b.itemId)?.num ?? 0) - (detailedNeeds.get(a.itemId)?.num ?? 0));
       const best = choices[0];
       if (best && best.itemId !== b.factory.autoProductId) {
         actions.push({kind:'startProduce',request:'SetFactoryAutoProduceRequest',response:null,
           body:{buildingId:b.buildingId,productId:best.itemId},previousProduct:b.factory.autoProductId,eligibilityKey:factoryRecipeAvailability(best,survey.festivals,survey.serverNow??now).signature+':'+b.level,
-          demandSources:detailedNeeds.get(best.itemId).sources,
+          demandSources:recipeRank(best) === stockIndex ? ['factory'] : detailedNeeds.get(best.itemId).sources,
           label:buildingName(b)+'：原生自动目标改为'+name(best.itemId)+'，保留当前生产队列',costs:[]});
         factoryReasons.set(b.buildingId,'按需求调整原生自动目标，当前队列继续完成');
       } else factoryReasons.set(b.buildingId, '游戏自动生产 '+name(b.factory.autoProductId)+(!simulateNative && settings?.factory.cooperateNative?(shortages.length?'；等待所需原料':'；当前目标无需调整或需求已在产'):'；需求协同未开启'));
@@ -1279,7 +1285,9 @@ export function planWorld(survey, {
           // being on hand do not establish a release time for that job.
           const room = stockouts ? roomForRecipe(row) : Infinity;
           const at = room ? dispatch.readyAt(row, recipeFree) : Infinity;
-          const wanted = detailedNeeds.get(row.itemId).productionBySource[demandPriority[recipeRank(row)]];
+          const rank = recipeRank(row);
+          const wanted = rank === stockRank && Number.isFinite(rank) ? Math.max(0, stockTarget - projectedStock(row.itemId))
+            : detailedNeeds.get(row.itemId)?.productionBySource[demandPriority[rank]] ?? 0;
           const quantity = Math.min(wanted, room || 1);
           let waited = 0;
           if (!Number.isFinite(at)) {
@@ -1357,7 +1365,7 @@ export function planWorld(survey, {
       const weeklyNeed = weeklyGap.get(best.itemId) ?? 0;
       const cargoNeed = cargoGap.get(best.itemId) ?? 0;
       const buildNeed = constructionGap(best.itemId);
-      const forDemand = !settings || orderNeedsProduction(best.itemId);
+      const forDemand = !settings || orderNeedsProduction(best.itemId) && tier !== stockIndex;
       const priority = settings ? recipeRank(best) : [weeklyNeed, cargoNeed, need, buildNeed].findIndex(gap => gap > 0);
       const demandSources = forDemand ? Object.entries(detailedNeeds?.get(best.itemId)?.productionBySource ?? {})
         .filter(([source, quantity]) => source !== 'factory' && quantity > 0).map(([source]) => source) : [];
@@ -1375,8 +1383,9 @@ export function planWorld(survey, {
       incoming.set(best.itemId, (incoming.get(best.itemId) ?? 0) + 1);
       if (detailedNeeds?.has(best.itemId)) {
         const need = detailedNeeds.get(best.itemId);
+        // A unit made for the waterline can also fill an outstanding order.
+        const source = demandPriority[itemOrderRank(best.itemId)] ?? demandPriority.find(source => (need.productionBySource[source] ?? 0) > 0);
         need.num = Math.max(0, need.num - 1);
-        const source = demandPriority.find(source => (need.productionBySource[source] ?? 0) > 0);
         if (source) need.productionBySource[source]--;
         need.priority = demandPriority.findIndex(source => (need.productionBySource[source] ?? 0) > 0);
         if (need.priority < 0) need.priority = Infinity;
@@ -1689,6 +1698,7 @@ export function settingDemands(survey, config, records, priority, {
     const crop = crops.get(b.farm?.productId);
     if (crop) incoming.set(crop.id, (incoming.get(crop.id) ?? 0) + crop.produceNum);
   }
+  const speedDemand = speedQuota && settings?.factory.speedUpSources.length ? new Map() : null;
   const add = (source, id, count, seen = new Set()) => {
     if (!id || !Number.isFinite(count) || count <= 0 || seen.has(id)) return;
     const previous = result.get(id);
@@ -1699,12 +1709,10 @@ export function settingDemands(survey, config, records, priority, {
     const immediate = Math.max(0, unfilled - (previous?.unfilled ?? 0));
     const productionBySource = { ...previous?.productionBySource };
     if (extra > 0) productionBySource[source] = (productionBySource[source] ?? 0) + extra;
-    // Stock and finished goods have already covered earlier demands. Only the
-    // part covered by the existing queue can justify speeding up a slot.
-    if (speedQuota && immediate > extra && settings?.factory.speedUpSources.includes(source)) {
-      const queued = speedQuota.get(id) ?? new Map();
-      queued.set(source, (queued.get(source) ?? 0) + immediate - extra);
-      speedQuota.set(id, queued);
+    if (speedDemand && incoming.has(id)) {
+      if (!speedDemand.has(id)) speedDemand.set(id, new Map());
+      const requested = speedDemand.get(id);
+      requested.set(source, (requested.get(source) ?? 0) + count);
     }
     result.set(id, { required, unfilled, num, priority: Math.min(previous?.priority ?? Infinity, extra > 0 ? priority.indexOf(source) : Infinity),
       sources: [...new Set([...(previous?.sources ?? []), ...(immediate > 0 ? [source] : [])])], productionBySource });
@@ -1713,7 +1721,10 @@ export function settingDemands(survey, config, records, priority, {
     if (crop?.produceNum > 0 && extra > 0) add(source, crop.material[0], Math.ceil(extra / crop.produceNum) * crop.material[1], new Set([...seen,id]));
   };
   const checkProduction = eligibility ?? (settings ? worldProductionEligibility(survey, config, settings) : null);
-  const orderedRecords = priority.flatMap(source => records.filter(row => row.source === source)).filter(record => {
+  // Attribute real shortages first. Stock is a target for the same goods, not
+  // another delivery. The dispatcher applies its configured rank at selection.
+  const stockLast = [...priority.filter(source => source !== 'factory'), ...priority.filter(source => source === 'factory')];
+  const orderedRecords = stockLast.flatMap(source => records.filter(row => row.source === source)).filter(record => {
     if (selectedOrders.has(record)) return true;
     const blockers = checkProduction?.(record.requirements ?? [], { reserve: true }) ?? [];
     if (blockers.length) onSkip(record, blockers);
@@ -1749,6 +1760,20 @@ export function settingDemands(survey, config, records, priority, {
       missingReserve.delete(item.id);
     }
     for (const [id, count] of missingReserve) add(record.source, id, count);
+  }
+  // Allocate already queued units once, in the user's order. Stock top-ups
+  // and orders can both request the same item with different speed-up flags.
+  for (const [id, requested] of speedDemand ?? []) {
+    let stock = survey.have(id) + (finished.get(id) ?? 0), queued = incoming.get(id);
+    for (const source of priority) {
+      const count = requested.get(source) ?? 0;
+      const fromStock = Math.min(stock, count), fromQueue = Math.min(queued, count - fromStock);
+      stock -= fromStock; queued -= fromQueue;
+      if (fromQueue > 0 && settings.factory.speedUpSources.includes(source)) {
+        if (!speedQuota.has(id)) speedQuota.set(id, new Map());
+        speedQuota.get(id).set(source, fromQueue);
+      }
+    }
   }
   return result;
 }

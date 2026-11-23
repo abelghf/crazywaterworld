@@ -393,4 +393,14 @@ await test('没有订单时单列本轮补货与实际水位', () => {
   assert.match(content, /补至库存水位 · 每种 65 件/);
   assert.doesNotMatch(content, /建议生产顺序/);
 });
+
+await test('参与排序的工厂补料按开工顺序和订单同表显示一次', () => {
+  const env = fixture();
+  env.render({ stockTarget: 2, timeline: [
+    { kind: 'restock', priority: 0, itemId: '铜锭', machineId: '金属厂', quantity: 1, startAt: 10, finishAt: 12 },
+    { kind: 'production', priority: 1, itemId: '螺母', machineId: '金属厂', quantity: 1, startAt: 12, finishAt: 20 },
+  ] });
+  assert.equal(env.tables.length, 1);
+  assert.deepEqual(env.tables[0].rows.map(row => row[1].textContent), ['铜锭（工厂补料） ×1', '螺母 ×1']);
+});
 console.log('排产界面测试通过 ' + passed + ' 项');

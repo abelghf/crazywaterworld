@@ -109,8 +109,8 @@
 
 .config-order-row { display:grid; grid-template-columns:20px minmax(90px,1fr) auto; align-items:center; gap:8px; border-bottom:1px solid var(--border); padding:8px 0 }
 .config-order-row:last-child { border-bottom:0 }
-.config-dispatch-row { display:grid; grid-template-columns:20px minmax(0,1fr) auto; align-items:center; gap:8px; padding:6px 0; border-bottom:1px solid var(--border) }
-.config-dispatch-row:last-child { border-bottom:0 }
+.config-dispatch-row, .config-demand-row { display:grid; grid-template-columns:20px minmax(0,1fr) auto; align-items:center; gap:8px; padding:6px 0; border-bottom:1px solid var(--border) }
+.config-dispatch-row:last-child, .config-demand-row:last-child { border-bottom:0 }
 .config-dispatch-sortable { grid-template-columns:30px 20px minmax(0,1fr) auto; position:relative }
 .config-dispatch-handle { width:30px; min-height:34px; padding:0; font-size:20px; cursor:grab; touch-action:none; user-select:none }
 .config-dispatch-sortable[data-dragging] { opacity:.55; background:var(--muted) }
@@ -239,6 +239,8 @@
   .config-children .config-label-line { flex-wrap:nowrap; align-items:flex-start }
   .config-order-row { grid-template-columns:22px minmax(0,1fr) }
   .config-order-tools { grid-column:2; justify-content:flex-start }
+  .config-demand-row { grid-template-columns:30px 20px minmax(0,1fr) }
+  .config-demand-row .config-order-tools { grid-column:2 / -1 }
 }
 @media (pointer:coarse) {
   .config-row { min-height:52px }

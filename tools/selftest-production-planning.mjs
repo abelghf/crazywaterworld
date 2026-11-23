@@ -565,6 +565,46 @@ test('同厂补货可用已知来料前的空档，仍为订单保留共享原�
   assert.equal(result.upperBound, 145);
   const restock = result.timeline.filter(job => job.kind === 'restock');
   assert.deepEqual(restock.map(job => [job.itemId, job.start, job.end]), [['面包', 0, 60]]);
+  settings.factory.demandPriority = ['factory', ...settings.factory.demandPriority.filter(source => source !== 'factory')];
+  const refillFirst = planProduction(snapshot, local, settings);
+  assert.deepEqual(refillFirst.timeline.filter(job => job.kind === 'restock').map(job => job.itemId), ['面包', '面包']);
+  assert.equal(refillFirst.orders[0].completionAt, null, '仅够两份的小麦已排给高优先级补料');
+});
+
+test('同一工厂的补料排首位、中间和末位时，订单齐套时刻随实际生产顺序变化', () => {
+  const { snapshot, settings } = fixture();
+  settings.factory.keepStock = 1;
+  const recipes = [['急件', 30], ['备货', 10], ['普通件', 20]].map(([itemId, produceTime]) =>
+    ({ itemId, produceTime, buildType: '食品厂', unlockLevel: 1, costItem: [['小麦', 1]] }));
+  const local = { ...config, tables: { ...config.tables, BuildingProduceCfg: table(recipes) } };
+  snapshot.recipes = recipes.map(r => ({ ...snapshot.recipes[0], id: r.itemId, productId: r.itemId, durationSeconds: r.produceTime }));
+  snapshot.inventory.push({ id: '急件', num: 1 }, { id: '普通件', num: 1 });
+  snapshot.orders = [['cargo', '急件'], ['resident', '普通件']].map(([source, id]) =>
+    ({ id: source, source, kind: 'order', requirements: [{ id, num: 2 }], metadata: { enabled: false } }));
+  for (const [order, timeline, completions] of [
+    [['factory', 'cargo', 'resident'], ['备货', '急件', '普通件'], [1040, 1060]],
+    [['cargo', 'factory', 'resident'], ['急件', '备货', '普通件'], [1030, 1060]],
+    [['cargo', 'resident', 'factory'], ['急件', '普通件', '备货'], [1030, 1050]],
+  ]) {
+    settings.factory.demandPriority = order;
+    const result = planProduction(snapshot, local, settings);
+    assert.deepEqual(result.timeline.map(job => job.itemId), timeline);
+    assert.deepEqual(result.orders.map(row => row.completionAt), completions);
+  }
+});
+
+test('先排的补货到货后可交低级订单，独立农田仍能同时开工', () => {
+  const { snapshot, settings, plan } = fixture();
+  settings.factory.demandPriority = ['factory', 'resident'];
+  settings.factory.keepStock = 2;
+  snapshot.inventory = [{ id: '小麦', num: 2 }, { id: '小麦种子', num: 1 }];
+  snapshot.orders[0].requirements.push({ id: '小麦', num: 5 });
+  const result = plan();
+  assert.deepEqual(result.timeline.filter(job => job.itemId === '面包').map(job => [job.kind, job.start]), [['restock', 0], ['restock', 60]]);
+  assert.equal(result.timeline.find(job => job.itemId === '小麦').start, 0);
+  assert.equal(result.orders[0].completionAt, 1120);
+  settings.factory.keepStock = 0;
+  assert(!plan().timeline.some(job => job.kind === 'restock'));
 });
 
 test('原生种植只限制依赖未知下一茬的需求，库存和确定收成可逐单估时', () => {

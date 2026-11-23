@@ -1,5 +1,5 @@
 import { optimizeProductionSchedule } from './production-optimizer.mjs';
-import { planStockRefills } from './production-restock.mjs';
+import { planStockRefills, scheduleRankedStock } from './production-restock.mjs';
 import { simulateNativeFactoryStarts } from './factory-native-simulation.mjs';
 import { createProductionTiming } from './production-timing.mjs';
 import { resourceReserve, worldPreferenceEnabled } from './automation-policy.mjs';
@@ -56,7 +56,7 @@ export function buildProductionModel(snapshot, config, settings, { pendingMateri
   const now = snapshot.serverNow;
   const relative = time => Math.max(0, (time ?? now) - now);
   const timing = createProductionTiming({ config, ...snapshot.timing, serverNow: now });
-  const prioritySources = unique(settings.factory?.demandPriority ?? []).filter(source => source !== 'factory');
+  const prioritySources = unique(settings.factory?.demandPriority ?? []);
   const orderRows = snapshot.orders.filter(order => activityProductionEnabled(settings, order.source)).filter(order => order.kind === 'order'
     || order.kind === 'consumption' && prioritySources.includes(order.source)
       && (order.source !== 'building' || settings.building?.supply && worldPreferenceEnabled(settings, 'buildSupply')))
@@ -65,6 +65,8 @@ export function buildProductionModel(snapshot, config, settings, { pendingMateri
     .sort((a, b) => a.priority - b.priority || a.id.localeCompare(b.id));
   const priorityLabels = new Map([...new Set(orderRows.map(order => order.priority))].map(priority => [priority,
     unique(orderRows.filter(order => order.priority === priority).map(order => sourceNames[order.source] || order.source)).join('、')]));
+  const stockPriority = settings.factory?.demandFirst ? prioritySources.indexOf('factory') : -1;
+  if (stockPriority >= 0) priorityLabels.set(stockPriority, '工厂补料');
   const missingReads = snapshot.missingReads.map(read => read.request + ' · ' + read.reason);
   const notes = [];
   const timingByJob = new Map();
@@ -210,7 +212,7 @@ export function buildProductionModel(snapshot, config, settings, { pendingMateri
   return {
     input: { snapshotTime: now, complete: snapshot.complete && !missingReads.length, missingReads: unique(missingReads),
       inventory, orders, recipes, machines, incoming, stockCaps, stockCapMode: 'start-projected' },
-    orderRows, activeOrderRows, skippedOrders, waitingSupply, timingByJob, machineNames, fixedTimeline, notes, capacityEstimated, priorityLabels,
+    orderRows, activeOrderRows, skippedOrders, waitingSupply, timingByJob, machineNames, fixedTimeline, notes, capacityEstimated, priorityLabels, stockPriority,
   };
 }
 
@@ -271,21 +273,23 @@ export function planProduction(snapshot, config, settings, options = {}) {
       recipes: materialTreeRecipes(model.orderRows, snapshot.recipes, timeline.map(job => job.itemId), name),
     };
   }
-  const result = optimizeProductionSchedule(model.input, options.search);
+  const stockTarget = Math.min(settings.factory?.keepStock ?? 0, snapshot.stockCap ?? 0);
+  const higherWaiting = model.orderRows.some(order => order.priority < model.stockPriority && model.waitingSupply.has(order.id));
+  const ranked = !higherWaiting && scheduleRankedStock(snapshot, model.input, stockTarget, model.stockPriority, options.search);
+  const result = ranked || optimizeProductionSchedule(model.input, options.search);
   const name = id => config?.materialName?.(id) || id;
   const completions = new Map(result.orderCompletions.map(order => [order.orderId, order]));
   const refreshUncertain = new Set(model.orderRows.filter(order => order.metadata?.refreshAt
     && completions.has(order.id) && snapshot.serverNow + completions.get(order.id).completedAt >= order.metadata.refreshAt).map(order => order.id));
-  const stockTarget = Math.min(settings.factory?.keepStock ?? 0, snapshot.stockCap ?? 0);
   const uncertainCompletion = refreshUncertain.size > 0 || waitingSupplyCount > 0;
-  const refills = uncertainCompletion ? [] : planStockRefills(snapshot, model.input, result, stockTarget);
+  const refills = ranked || uncertainCompletion ? [] : planStockRefills(snapshot, model.input, result, stockTarget);
   const planned = [...result.timeline, ...refills].map(job => {
     const basis = model.timingByJob.get(job.machineId + '\0' + job.itemId);
     return { ...job, startAt: snapshot.serverNow + job.start, finishAt: snapshot.serverNow + job.end,
       estimated: basis?.estimated !== false, timingLabel: timingNames[basis?.source] ?? '耗时待确认' };
   });
   const timeline = [...model.fixedTimeline, ...planned].map(job => ({ ...job, machineName: model.machineNames.get(job.machineId), productName: name(job.itemId),
-    priorityLabel: job.kind === 'existing' ? '已排队' : job.kind === 'restock' ? '补至库存水位' : job.priority == null ? '腾仓辅助'
+    priorityLabel: job.kind === 'existing' ? '已排队' : job.priority == null ? (job.kind === 'restock' ? '补至库存水位' : '腾仓辅助')
       : '第' + (job.priority + 1) + '级 · ' + (model.priorityLabels.get(job.priority) || '需求备料'),
     inheritedPriority: job.kind === 'production' && job.priority != null
       && !model.activeOrderRows.some(order => order.priority === job.priority && order.requirements.some(item => item.id === job.itemId)),
@@ -335,13 +339,12 @@ export function planProduction(snapshot, config, settings, options = {}) {
     assumptions: [
       '以需求优先级列表为顺序，先优化高级需求及其上游材料，再逐级优化后续需求的齐套时间',
       '范围包括活动总开关允许的当前订单与已开启来源的消费备料，未列入优先级列表的当前订单置于最后一级',
-      '建筑等消费备料齐套后独占保留。常规备货排在所有需求之后，每种加工品最多补至账号仓容与设置水位中的较小值',
-      '补水位使用订单排程剩余的原料和生产空档，每座工厂预览最多一轮队列，订单最优性和齐套时间仅统计正式需求',
+      '建筑等消费备料齐套后独占保留。按需优先生产时，工厂补料按其配置位置参与排产，每种加工品最多补至账号仓容与设置水位中的较小值',
+      '每座工厂预览最多一轮补货队列。已安排的补货占用对应原料和生产位，产物完工后可供后续需求使用',
       '固定当前生产加成、现有设施等级和已排队任务，新增任务按原料到齐立即开工估算',
       '生产、收获和已启用订单提交按零操作延迟计算，关闭提交的订单材料独占保留',
       '外部采集、购买、广告与道具加速、未来建筑升级收益需在新快照中确认后计算',
       '开工时检查库存、待收与在途总量，加工品上限来自当前配置，农产上限为其五倍',
-      '方案按订单生产独占可用资源计算，其他消费和备货任务需让出相应材料与产能',
     ],
     orders: model.orderRows.map(order => ({ ...order, label: (sourceNames[order.source] || order.source)
       + (order.source === 'building' && order.metadata?.buildingId ? ' · ' + order.metadata.buildingId + ' ' + order.metadata.level + '级' : ''),
