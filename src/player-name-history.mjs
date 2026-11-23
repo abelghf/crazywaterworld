@@ -4,8 +4,33 @@ import { createHash } from 'node:crypto';
 import { atomicJson, readJson, withFileLock } from './json-store.mjs';
 import { accountKey, dataDirectory } from './usage-ledger.mjs';
 import { validPlayerIdText } from './extended-settings.mjs';
+import { exactAutomationId } from './automation-policy.mjs';
 
 const historyFile = account => path.join(dataDirectory(), 'player-names', createHash('sha256').update(accountKey(account)).digest('hex') + '.json');
+
+export async function readWorldListPlayers(client, player, check) {
+  const ownId = exactAutomationId(player.playerId), members = new Map(), unavailable = [];
+  if (!ownId) throw Error('当前角色身份未同步');
+  async function read(source, request, args, rows) {
+    check();
+    try {
+      const reply = await client.request(request, args, request.replace(/Request$/, 'Response'), 8000, check);
+      for (const row of rows(reply)) {
+        const id = exactAutomationId(row?.playerId), name = row?.nickname;
+        if (!id || id === ownId || members.has(id) || typeof name !== 'string' || !name.trim() || name.length > 120) continue;
+        members.set(id, { id, name, source, guildIdx: row.guildIdx > 0 ? row.guildIdx : null });
+      }
+    } catch { unavailable.push(source); }
+    check();
+  }
+  await read('世界舰队', 'WorldInfoRequest', { screenCenter: { x: 0, y: 0 } }, reply => reply.fleets.map(fleet => fleet.owner));
+  await read('黑名单', 'BlackListRequest', {}, reply => reply.list);
+  await read('世界聊天', 'ChatRecordRequest', { channel: 1 }, reply => reply.message
+    .filter(message => message.content && !message.content.systemMsgId)
+    .sort((a, b) => b.timestamp - a.timestamp).map(message => message.sender));
+  return { members: [...members.values()].sort((a, b) => a.name.localeCompare(b.name, 'zh-CN') || a.id.localeCompare(b.id)),
+    reason: unavailable.length ? unavailable.join('、') + '未同步，可稍后刷新' : '' };
+}
 
 function listRules(settings) {
   const treasure = settings?.treasure ?? {}, alliance = settings?.alliance ?? {}, fleets = settings?.silicon?.fleets ?? [];

@@ -494,7 +494,7 @@ function validateCurrentSettings(input, { partial = false, catalog = null } = {}
   if (output.treasure.enabled && !output.treasure.fleetIds.length) errors['treasure.fleetIds'] = '请明确选择参与巨轮的舰队，空名单不会派遣';
   if (output.treasure.fallbackEnabled && !output.treasure.fallbackQualities.length) errors['treasure.fallbackQualities'] = '开启兜底前，请至少选择一种货轮';
   if (output.treasure.follow && !output.treasure.followNames.length && !output.treasure.followPlayerIds.length && !errors['treasure.followNames'] && !errors['treasure.followPlayerIds']) errors['treasure.followNames'] = '开启跟随前，请添加玩家完整昵称或角色ID';
-  if (output.treasure.chase && !output.treasure.chaseNames.length && !output.treasure.chasePlayerIds.length && !errors['treasure.chaseNames'] && !errors['treasure.chasePlayerIds']) errors['treasure.chasePlayerIds'] = '开启追杀前，请填写对手的角色 ID 或完整昵称';
+  if (output.treasure.chase && !output.treasure.chaseNames.length && !output.treasure.chasePlayerIds.length && !errors['treasure.chaseNames'] && !errors['treasure.chasePlayerIds']) errors['treasure.chasePlayerIds'] = '开启追杀前，请选择对手或填写完整昵称';
   for (const field of ['followNames', 'avoidNames', 'chaseNames']) if (output.treasure[field].some(value => value !== value.trim() || value.length > 40 || /[\r\n\u0000-\u001f]/.test(value))) errors['treasure.' + field] = '请输入不重复的完整昵称，每项不超过40字符，不含首尾空格或换行';
   for (const field of ['followPlayerIds', 'avoidPlayerIds', 'chasePlayerIds']) if (!output.treasure[field].every(validPlayerIdText)) errors['treasure.' + field] = '角色ID必须为完整的正整数文本，不能使用科学计数法';
   if (!output.alliance.memberIds.every(validPlayerIdText)) errors['alliance.memberIds'] = '请填写完整的正整数角色 ID';

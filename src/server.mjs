@@ -110,7 +110,7 @@ import { operationLabels } from './operation-labels.mjs';
 import { automationTasks, retiredAutomationTasks, migratedAutomationTasks, defaultCompassSpinCount, maxCompassSpinCount, taskSettings, worldTaskKey, dailyTaskKey } from './automation.mjs';
 import { rewardSchedule } from './reward-schedule.mjs';
 import { beijingDay, loadAutomationSettings, loadRecoverableAutomationSettings, settingsFile, defaultSettings, saveAutomationSettings, validateSettings, settingsCatalog, settingsFromNative, settingsFromLegacyNative, nativeTaskValues, applyNativeTask, hasExtraWork, createUsageLedger, exportAutomationSettings, importAutomationSettings, SettingsError, settingsUiRules } from './automation-settings.mjs';
-import { listedPlayerNames, knownListPlayerIds, rememberPlayerNames, prunePlayerNames } from './player-name-history.mjs';
+import { listedPlayerNames, knownListPlayerIds, rememberPlayerNames, prunePlayerNames, readWorldListPlayers } from './player-name-history.mjs';
 import { budgetPreview, exactAutomationId, createActionGuard, nativePreferenceEnabled, needsCargoDemand, AutomationSkip } from './automation-policy.mjs';
 import { guardRuntimeActions, validateRuntimeSettings } from './settings-runtime.mjs';
 import { assertResourcesReady, resourceReadiness } from './resource-store.mjs';
@@ -1153,6 +1153,7 @@ export function createConsole({ host = '127.0.0.1', port = 17321, onLog, recover
     return path.join(DATA_DIR, 'factory-report-' + encodeURIComponent(id) + '.json');
   }
 
+  const playerPickerLists = new WeakMap();
   function recordListNames(session, settings, rows, initialOnly = false) {
     const playerNames = rememberPlayerNames(session.id, settings, rows, { initialOnly });
     if (!playerNames) return;
@@ -2467,13 +2468,25 @@ export function createConsole({ host = '127.0.0.1', port = 17321, onLog, recover
       }
       if (route === 'GET /api/settings/players') {
         const { session } = scoped_(parsed);
-        if (!session.client?.connected || session.paused) throw new Error('请先连接当前账号，再读取盟友名单');
-        const client = session.client;
-        const members = await enqueue(session, async () => {
-          if (session.client !== client || !client.connected || session.paused) throw new Error('账号连接已变化，请重新读取盟友名单');
-          return readGuildMembers(client, loadConfigSafe(), session.player);
-        });
-        json(members);
+        const { client, player, generation } = session;
+        if (!client?.connected || !player || session.paused) throw new Error('请先连接当前账号，再读取玩家名单');
+        const check = () => {
+          if (session.client !== client || session.player !== player || session.generation !== generation || !client.connected || session.paused)
+            throw new Error('角色连接已变化，请重新读取名单');
+        };
+        const world = parsed.searchParams.get('scope') === 'world';
+        const result = await readJob(session, () => {
+          check();
+          return world ? readWorldListPlayers(client, player, check) : readGuildMembers(client, loadConfigSafe(), player);
+        }, { recoverFormation: false });
+        check();
+        const cached = playerPickerLists.get(client);
+        const lists = cached?.player === player ? cached : { player };
+        lists[world ? 'world' : 'guild'] = result.members;
+        playerPickerLists.set(client, lists);
+        try { recordListNames(session, effectiveSettings(session), result.members, true); }
+        catch (error) { emit(session, 'warn', '名单昵称记录失败：' + error.message); }
+        json(result);
         return;
       }
       if (route === 'GET /api/settings/guild-fort-materials') {
@@ -2539,7 +2552,11 @@ export function createConsole({ host = '127.0.0.1', port = 17321, onLog, recover
         if (!current.revision && payload.baseRevision !== current.baseRevision) throw new SettingsError({ revision: '现有挂机开关已变化，请重新载入后再保存' });
         const entry = saveAutomationSettings(session.id, payload.settings, { revision: payload.revision, catalog: settingsCatalog(loadConfigSafe({ allowStale: true })), expectedRecoveryId: current.recovery?.id });
         adoptPreferences(session, entry);
-        try { prunePlayerNames(session.id, entry.settings); }
+        try {
+          const lists = playerPickerLists.get(session.client);
+          if (lists && lists.player === session.player) recordListNames(session, entry.settings, [...(lists.guild ?? []), ...(lists.world ?? [])], true);
+          prunePlayerNames(session.id, entry.settings);
+        }
         catch (error) { emit(session, 'warn', '配置已保存，名单昵称记录清理失败：' + error.message); }
         if (session.client) for (const task of automationTasks) rewardSchedule(session.client).clearTask(task.key);
         emit(session, 'info', '游戏配置已保存。正在运行的任务从下次检查开始使用新配置。');

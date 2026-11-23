@@ -65,7 +65,7 @@ export function validateSiliconFleets(value, errors, catalog) {
       const values = row[key];
       if (!Array.isArray(values) || values.length > 30 || new Set(values).size !== values.length || !values.every(validPlayerIdText)) errors[prefix + '.' + key] = '请填写最多30个不重复的完整角色 ID，每行一个正整数';
     }
-    if (row.huntEnabled && Array.isArray(row.huntPlayers) && !row.huntPlayers.length && !row.huntPlayerIds?.length) errors[prefix + '.huntPlayerIds'] = '开启追杀前，请填写角色 ID 或完整昵称';
+    if (row.huntEnabled && Array.isArray(row.huntPlayers) && !row.huntPlayers.length && !row.huntPlayerIds?.length) errors[prefix + '.huntPlayerIds'] = '开启追杀前，请选择玩家或填写完整昵称';
     if (Array.isArray(row.huntPlayers) && row.huntPlayers.every(v => typeof v === 'string') && new Set(row.huntPlayers.map(v => v.trim().toLocaleLowerCase())).size !== row.huntPlayers.length) errors[prefix + '.huntPlayers'] = '追杀名单不能包含重复昵称（忽略大小写）';
     if (Array.isArray(row.safeGuilds) && row.safeGuilds.some(v => !/^[1-9]\d{0,2}$/.test(v))) errors[prefix + '.safeGuilds'] = '请输入1–999的联盟数字编号，每行一个';
     output.push(structuredClone(row));
