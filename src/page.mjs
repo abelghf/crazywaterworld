@@ -695,6 +695,9 @@ function subscribe() {
   if (stream) return;
   stream = new EventSource('/api/events?scope=all' + (compactLogs ? '&compact=1' : ''));
   stream.addEventListener('logs-cleared', event => clearLogBefore(JSON.parse(event.data)));
+  stream.addEventListener('fleets-changed', event => {
+    if (JSON.parse(event.data).account === current) worldMapRefreshRequested = true;
+  });
   stream.addEventListener('chat-changed', event => {
     const detail = JSON.parse(event.data);
     if (detail.account === current) window.dispatchEvent(new CustomEvent('cw-chat-update', { detail }));

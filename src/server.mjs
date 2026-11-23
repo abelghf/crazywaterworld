@@ -10,7 +10,7 @@ import { createConsoleVersion, renderVersionedPage, consoleVersionError } from '
 import { createTraceLog, traceJson, redactLog } from './trace-log.mjs';
 import { createProtocolDiagnostics } from './protocol-diagnostics.mjs';
 import { createResourceUpdater } from './resource-updater.mjs';
-import {checkFleetSettlement,invalidateFleetReports} from './fleet-settlement.mjs';
+import {checkFleetSettlement,invalidateFleetReports,outstandingFleets} from './fleet-settlement.mjs';
 import {recoverFleetLineups, isFleetLineupRecord} from './fleet-lineups.mjs';
 import { recoverPirateHunts } from './pirate-recovery.mjs';
 import {readGuildTech,upgradeGuildTech} from './guild-tech.mjs';
@@ -1150,14 +1150,21 @@ export function createConsole({ host = '127.0.0.1', port = 17321, onLog, recover
   }
 
   function wire(session, instance) {
+    session.mapIdleFleetIds = [];
+    function notifyFleetMap() {
+      const payload = `event: fleets-changed\ndata: ${JSON.stringify({ account: session.id })}\n\n`;
+      for (const stream of streams) if (stream.allAccounts || stream.account === session.id) writeStream(stream, payload);
+    }
     watchBasePushes(instance);
     watchProductionTimings(instance, loadConfigSafe);
     watchGuildShipPushes(instance);
     watchHeroRaidPushes(instance);
     watchSiliconMining(instance);
     instance.on('message', ({name,body}) => {
-      if (session.client===instance && ['MyFleetsResponse','SCMyFleetUpdate'].includes(name))
+      if (session.client===instance && ['MyFleetsResponse','SCMyFleetUpdate'].includes(name)) {
         observeOwnedFleets(session,body?.fleets,{complete:name==='MyFleetsResponse'});
+        if (name === 'SCMyFleetUpdate' && body?.fleets?.length) notifyFleetMap();
+      }
       if(name==='RecruitInfoResponse')instance.freeRecruitTimes={hero:body.hero?.freeEndTimeSeconds,antique:body.antique?.freeEndTimeSeconds};
       if(name==='RecruitStartResponse'||name==='AntiqueRecruitResponse'){
         instance.freeRecruitTimes??={};instance.freeRecruitTimes[name==='RecruitStartResponse'?'hero':'antique']=body.recruitData?.freeEndTimeSeconds;
@@ -1185,7 +1192,8 @@ export function createConsole({ host = '127.0.0.1', port = 17321, onLog, recover
           settlementDirty=false;
           if(current()){const changes=await checkFleetSettlement(instance,session.player,usageFor(session),{afterPush:true});
             for(const change of changes)if(change.repairRecovery)emit(session,'info','战后维修 · '+change.buildingId+' · '+change.reason+'（已确认）');
-            await recoverFleetLineups(instance,session.player,usageFor(session),{enabled:current,report:entry=>emit(session,entry.ok?'info':'warn',entry.label+' · '+(entry.reason||entry.error||''))});}
+            const lineups=await recoverFleetLineups(instance,session.player,usageFor(session),{enabled:current,report:entry=>emit(session,entry.ok?'info':'warn',entry.label+' · '+(entry.reason||entry.error||''))});
+            if(current() && (changes.length || lineups.restored.length))notifyFleetMap();}
         }).catch(error=>{if(current())emit(session,'warn','舰队归队状态待核对：'+error.message);}).finally(()=>{
           settlementBusy=false;
           if(settlementDirty&&current())scheduleSettlement();
@@ -1209,13 +1217,19 @@ export function createConsole({ host = '127.0.0.1', port = 17321, onLog, recover
       }
       if(['SCNewCampaignReport','SCMyFleetUpdate','SCWorldBossCampaignEnd','SCRadarEventState','SCPirateCampaignEnd','SCPirateKillRecordUpdate'].includes(name))scheduleSettlement();
     });
-    const lineupRecoveryTimer=setInterval(()=>{
+    const fleetRecoveryTimer=setInterval(()=>{
       if(!current())return;
-      try{if(Object.values(usageFor(session).keyRecords()).some(isFleetLineupRecord))scheduleSettlement();}
-      catch(error){emit(session,'warn','舰队阵容恢复记录待核对：'+error.message);}
+      try{
+        const ids=session.mapIdleFleetIds,records=usageFor(session).keyRecords();
+        session.mapIdleFleetIds=[];
+        // 地图已经读到归队但可能漏收了推送。交由原任务按业务证据核对，避免每次刷新重复检查。
+        if(Object.values(records).some(isFleetLineupRecord) || (ids.length &&
+          outstandingFleets(records,exactAutomationId(session.player.worldId)).some(([,r])=>ids.includes(r.details.buildingId))))scheduleSettlement();
+      }
+      catch(error){emit(session,'warn','舰队历史记录待核对：'+error.message);}
     },15000);
-    lineupRecoveryTimer.unref?.();
-    instance.on('close',()=>{clearInterval(lineupRecoveryTimer);clearTimeout(settlementTimer);settlementTimer=null;settlementDirty=false;});
+    fleetRecoveryTimer.unref?.();
+    instance.on('close',()=>{clearInterval(fleetRecoveryTimer);clearTimeout(settlementTimer);settlementTimer=null;settlementDirty=false;});
     instance.on('message', ({ name, body }) => {
       if (session.client === instance && session.player && name === 'SCVipUpdate' && Number.isSafeInteger(body.vipLevel)) {
         session.player.vip = { ...session.player.vip, vipLevel: body.vipLevel, vipExp: body.vipExp };
@@ -4267,7 +4281,18 @@ export function createConsole({ host = '127.0.0.1', port = 17321, onLog, recover
       if (route === 'GET /api/world/overview') {
         const {session}=scoped_(parsed);
         if(!session.client?.connected||session.paused)throw new Error('请先连接当前账号，再读取世界概览');
-        if(!session.mapRead) { const job=readJob(session,()=>readWorldOverview(session.client,loadConfigSafe(),session.player,settingsView(session).settings,usageFor(session),{pirateSpent:pirateRunState(session).spent??0})).finally(()=>{if(session.mapRead===job)session.mapRead=null;});session.mapRead=job; }
+        if(!session.mapRead) {
+          const client=session.client,player=session.player,generation=session.generation;
+          const current=()=>session.client===client && client.connected && !session.paused && session.player===player && session.generation===generation;
+          const job=readJob(session,async()=>{
+            if(!current())throw Error('账号连接已变化，请重新读取地图');
+            const view=await readWorldOverview(client,loadConfigSafe(),player,settingsView(session).settings,usageFor(session),{pirateSpent:pirateRunState(session).spent??0});
+            if(!current())throw Error('账号连接已变化，请重新读取地图');
+            session.mapIdleFleetIds=view.fleets.filter(f=>f.dispatchNote).map(f=>f.id);
+            return view;
+          }).finally(()=>{if(session.mapRead===job)session.mapRead=null;});
+          session.mapRead=job;
+        }
         json(await session.mapRead);return;
       }
       if (route === 'GET /api/world/production-plan') {
