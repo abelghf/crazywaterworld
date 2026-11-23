@@ -155,7 +155,8 @@ const configGroups = [
     configField('alliance.autoHelp','自动送出物料','switch',{ parent: 'alliance.mutual',when:d=>d.alliance.mutual,help:'响应盟友的求助，从自己的库存中送出物料，遵守下方赠送限制。关闭只停止送出，自动求助和已收到援助的领取仍独立执行。'}),
     configField('alliance.allowedMaterials','允许赠送物料','multi',{ parent: 'alliance.autoHelp',catalog:'materials',empty:'未选择，按库存与禁用物料筛选',when:d=>d.alliance.mutual&&d.alliance.mutualMode==='custom'}),
     configField('alliance.blockedMaterials','禁止赠送物料','multi',{ parent: 'alliance.autoHelp',catalog:'materials',when:d=>d.alliance.mutual}),
-    configField('alliance.memberKeywords','盟友昵称筛选','names',{ parent: 'alliance.autoHelp',when:d=>d.alliance.mutual,help:'每行一个关键词，忽略大小写；空表示不限制。每次赠送均遵守筛选。'}),
+    configField('alliance.memberIds','指定帮助的盟友','players',{ parent:'alliance.autoHelp',when:d=>d.alliance.mutual, nameList:'alliance.memberKeywords', help:'勾选盟友或填写完整角色 ID。角色改名后仍可匹配。ID 与下方昵称关键词命中任一项即可，两项均空时可帮助所有盟友。'}),
+    configField('alliance.memberKeywords','补充盟友昵称关键词','names',{ parent: 'alliance.autoHelp',when:d=>d.alliance.mutual,help:'每行一个关键词，忽略大小写；与角色 ID 同时留空表示不限制。'}),
     configField('alliance.stockReserve','赠送后物料保留','number',{ parent: 'alliance.autoHelp',unit:'件',when:d=>d.alliance.mutual}),
     configField('alliance.helpDailyLimit','每日赠送上限','number',{ parent: 'alliance.autoHelp',unit:'次',when:d=>d.alliance.mutual,help:'连续处理符合物料、昵称和库存限制的盟友求助，直到达到本工具每日赠送上限；暂无可赠送求助时等待后续检查。0 表示不赠送。'}),
     configField('alliance.autoAsk','自动求助物料','switch',{ parent: 'alliance.mutual',when:d=>d.alliance.mutual,help:'向盟友发布物料求助，等待盟友赠送。与自动送出物料独立；收到的援助由联盟互助总开关控制自动领取。'}),
@@ -209,10 +210,12 @@ const configGroups = [
         configField(key+'maxPowerRatio',label+'敌我最高战力比例','number',{unit:'%',parent:key+'enabled',when}),
         configField(key+'failureLimit',label+'同一对手每日失败上限','number',{parent:key+'enabled',when}),configField(key+'dailyAttackLimit',label+'每日进攻上限','number',{parent:key+'enabled',when,help:'0 表示不额外限制，仍受服务器每日抢占次数及失败限制。'}),
         configField(key+'pursuit',label+'追击已击败对手','switch',{parent:key+'enabled',when,help:'仅在三日奖励重置窗口追击已击败且在游戏黑名单中的对手。开启指定玩家追杀后，优先使用追杀名单。'}),
-        configField(key+'huntEnabled',label+'追杀指定玩家','switch',{parent:key+'enabled',when,help:'优先攻击追杀名单中的完整昵称，不需要先击败或添加游戏黑名单；没有合规目标时可占空位，不攻击名单外玩家。仍遵守只占空位、矿级、安全名单、战力、次数和实际汽油库存。'}),
-        configField(key+'huntPlayers',label+'追杀名单','names',{parent:key+'huntEnabled',when:d=>when(d)&&d.silicon.fleets[i].huntEnabled,help:'每行一个完整昵称，忽略大小写，不做包含匹配。矿位没有玩家ID，同名玩家无法进一步区分；安全名单与同盟保护优先。'}),
+        configField(key+'huntEnabled',label+'追杀指定玩家','switch',{parent:key+'enabled',when,help:'优先攻击名单中的合规玩家。没有合规目标时可占空位。安全玩家、同盟、战力和次数限制继续生效。'}),
+        configField(key+'huntPlayerIds',label+'追杀角色 ID','names',{nameList:key+'huntPlayers',parent:key+'huntEnabled',when:d=>when(d)&&d.silicon.fleets[i].huntEnabled,placeholder:'每行一个完整角色 ID',help:'可从聊天玩家资料复制 ID。每次按 ID 读取当前区服、昵称和联盟，核对矿位。发现重名歧义时跳过该 ID。'}),
+        configField(key+'huntPlayers',label+'补充追杀昵称','names',{parent:key+'huntEnabled',when:d=>when(d)&&d.silicon.fleets[i].huntEnabled,help:'每行一个完整昵称，忽略大小写。昵称独立生效，换用角色 ID 后请移除对应旧昵称，以免匹配到接用旧名的玩家。'}),
         configField(key+'huntRetreat',label+'追杀撤退策略','choice',{parent:key+'huntEnabled',options:[['never','持续采集'],['afterReward','采一次矿就撤回'],['onTarget','发现名单目标先撤再打']],when:d=>when(d)&&d.silicon.fleets[i].huntEnabled,help:'采一次后撤回：每次占矿首次产奖后撤回，下轮重新寻找名单目标或空位。发现目标后撤回：仅有符合限制的名单目标时撤回，回港确认后重新核对再攻打。游戏要求首轮15分钟产矿完成后才能撤回；返航期间不强行出征。'}),
-        configField(key+'safePlayers',label+'安全玩家','names',{parent:key+'enabled',when,help:'完整昵称，每行一个，忽略大小写；不主动攻击这些玩家。'}),configField(key+'safeGuilds',label+'安全联盟编号','names',{parent:key+'enabled',when,help:'游戏显示的联盟数字编号，每行一个；矿位协议不包含联盟名称。'}),
+        configField(key+'safePlayerIds',label+'安全角色 ID','names',{nameList:key+'safePlayers',parent:key+'enabled',when,placeholder:'每行一个完整角色 ID',help:'自动与手动抢占均按当前角色资料避让。安全 ID 资料读取失败时，该队暂缓抢占，仍可占空位。'}),
+        configField(key+'safePlayers',label+'补充安全玩家昵称','names',{parent:key+'enabled',when,help:'完整昵称，每行一个，忽略大小写；不主动攻击这些玩家。'}),configField(key+'safeGuilds',label+'安全联盟编号','names',{parent:key+'enabled',when,help:'游戏显示的联盟数字编号，每行一个；矿位协议不包含联盟名称。'}),
         configField(key+'minDurabilityPercent',label+'最低耐久','number',{unit:'%',parent:key+'enabled',when}),configField(key+'autoRepair',label+'自动维修','switch',{parent:key+'enabled',when}),
         ...[['march','去程'],['return','回城']].flatMap(([mode,title])=>{
           const toggle = mode+'SpeedUp', parent = key+toggle;
@@ -390,10 +393,11 @@ const configGroups = [
     configField('treasure.follow', '跟随指定玩家', 'switch', { help: '识别名单中正在前往货轮的舰队，也兼容当前守军。开启反复攻占后，可选择首次跟随后自主攻占或每次重新跟随。收到可识别的出发推送后会提前唤醒检查，每次发送前仍核对目标、汽油库存、避战和舰队占用。历史排名、已返航或过期行军不会触发跟随；不能保证同时抵达或必得奖励。' }),
     configField('treasure.followMode', '跟随后续出征方式', 'radio', { parent: 'treasure.follow', when: d => d.treasure.follow && d.treasure.repeatAttack, options: [['trigger', '首次跟随后自主攻占'], ['eachTime', '每次重新跟随']], help: '默认首次跟随后自主攻占：同一舰队对同一货轮首次跟随确认后，可在跟随玩家离开后继续攻占，重启和换日保留确认。每次重新跟随：每次出征前都重新匹配名单玩家的有效行军或当前守军，没有匹配就等待，历史确认不再放行。两种方式都需要开启反复攻占才能再次参与同一货轮；另行开启的中小货轮兜底仍可独立派遣。' }),
     configField('treasure.fleetIds', '参与舰队', 'multi', { catalog: 'expeditionFleets', empty: '请选择参与舰队，空选不派遣', help: '只使用已建成、有英雄编队且实际空闲的舰队；行军、战斗、维修和驻外等占用会跳过。游戏自动作战开关开启不等于正在作战。' }),
-    configField('treasure.followPlayerIds', '跟随名单', 'players', { parent: 'treasure.follow', when: d => d.treasure.follow, help: '从当前账号的盟友名单搜索多选，按选择顺序优先跟随。使用完整角色 ID 区分同名玩家；也可补充未列出的角色 ID。未列出的已选 ID 仍保留，需要时手动移除。' }),
+    configField('treasure.followPlayerIds', '跟随名单', 'players', { nameList:'treasure.followNames', parent: 'treasure.follow', when: d => d.treasure.follow, help: '从当前账号的盟友名单搜索多选，按选择顺序优先跟随。使用完整角色 ID 区分同名玩家；也可补充未列出的角色 ID。未列出的已选 ID 仍保留，需要时手动移除。' }),
     configField('treasure.followNames', '补充跟随昵称（可选）', 'names', { parent: 'treasure.follow', when: d => d.treasure.follow, help: '保留原有手填名单。每行一个完整昵称，角色 ID 名单优先；同名无法确认身份时跳过。', placeholder: '每行输入一位其他玩家的完整昵称' }),
     configField('treasure.chase', '是否开启追杀', 'switch', { help: '名单对手正在前往、驻守或交战的货轮优先出征。追杀跳过货轮类型、奖励、进度、避战、外盟、反复攻占、每日出征上限和最低耐久比例。只用所选可用舰队，服从其他挂机项目的占用和预留。' }),
-    configField('treasure.chaseNames', '追杀名单', 'names', { parent: 'treasure.chase', when: d => d.treasure.chase, placeholder: '每行一位对手的完整昵称', help: '按填写顺序优先追击。每次派遣前重新核对对手位置。对手离开后停止追击，单独开启追杀时会等待下次出现。' }),
+    configField('treasure.chasePlayerIds', '追杀角色 ID', 'names', { nameList:'treasure.chaseNames', parent: 'treasure.chase', when: d => d.treasure.chase, placeholder: '每行一个完整角色 ID', help: '可从聊天玩家资料复制 ID。按填写顺序优先追击，改名后仍按同一个 ID 识别。守军或交战者需能核对身份。' }),
+    configField('treasure.chaseNames', '补充追杀昵称', 'names', { parent: 'treasure.chase', when: d => d.treasure.chase, placeholder: '每行一位对手的完整昵称', help: '角色 ID 名单优先。这里的昵称也独立生效，换用角色 ID 后请移除对应旧昵称。' }),
     configField('treasure.chaseWindows', '追杀时间范围', 'names', { parent: 'treasure.chase', when: d => d.treasure.chase, placeholder: '08:00-12:00\n22:00-02:00', help: '在巨轮参与时间内进一步限定追杀。每行一个北京时间 HH:mm-HH:mm 时段，可跨午夜。留空或起止相同表示沿用全部参与时间。' }),
     configField('treasure.chaseSpeedUp', '追杀去程钻石加速', 'switch', { parent: 'treasure.chase', when: d => d.treasure.chase, help: '仅加速已确认的追杀去程。对手离开后停止花钻。回城可单独使用下方的回城加速。' }),
     configField('treasure.chaseTargetSeconds', '追杀去程剩余目标', 'number', { parent: 'treasure.chaseSpeedUp', when: d => d.treasure.chase && d.treasure.chaseSpeedUp, unit: '秒', help: '剩余时间超过此值时才加速。' }),
@@ -412,7 +416,7 @@ const configGroups = [
     configField('treasure.fallbackSmallRewardMatchMode', '小型兜底奖励筛选方式', 'radio', { parent: 'treasure.fallbackQualities', when: smallFallbackVisible, options: treasureMatchOptions }),
     configField('treasure.fallbackSmallRewardMinHits', '小型兜底至少命中', 'number', { parent: 'treasure.fallbackQualities', when: d => smallFallbackVisible(d) && d.treasure.fallbackSmallRewardMatchMode === 'multiple', unit: '项', help: treasureMinHitsHelp }),
     configField('treasure.avoidNames', '避战玩家名称', 'names', { help: '每行填写一位玩家的完整昵称，按名称完全匹配，同名玩家都会避开。只判断货轮当前守军和战斗者；历史排名中已离开的玩家不会单独触发。避战优先于跟随。', placeholder: '每行输入一位玩家的完整昵称' }),
-    configField('treasure.avoidPlayerIds', '已有避战角色 ID', 'names', { when: d => d.treasure.avoidPlayerIds.length > 0, help: '保留此前保存的精确角色 ID，每行一个。可删除不再需要的条目；新玩家请在上方填写名称。', placeholder: '每行一个已有的完整角色 ID' }),
+    configField('treasure.avoidPlayerIds', '避战角色 ID', 'names', { nameList:'treasure.avoidNames', help: '每行一个完整角色 ID。当前守军或交战者与货轮排名中的身份相符时避战。追杀模式仍按追杀名单执行。', placeholder: '每行一个完整角色 ID' }),
     configField('treasure.allowHostile', '允许争夺其他联盟货轮', 'switch', { help: '默认关闭，只参与无人占领或本联盟货轮。开启后可能与其他联盟交战，跟随名单也受此开关约束。' }),
     configField('treasure.minDurabilityPercent', '最低舰队耐久', 'number', { unit: '%', help: '低于此比例时先维修；关闭自动维修则跳过。0 不设比例阈值，但零耐久仍需维修。未知耐久上限不会自动维修或出征。' }),
     configField('treasure.autoRepair', '耐久不足自动维修', 'switch', { help: '有符合条件的货轮时，按服务器报价普通维修至满耐久，完成后重新检查目标再派。不会使用钻石或加速维修。' }),
@@ -904,6 +908,7 @@ function configUpdateVisibility() {
       widget.moduleNote.hidden = !widget.moduleNote.textContent;
     }
     if (['lineup', 'trialLineups', 'fleetLineups'].includes(widget.spec.kind)) widget.control?.refresh?.();
+    widget.nameHistory?.paint();
     if (widget.childPanel) {
       if (hasError) configCollapsed.delete(key);
       const available = children.some(child => !child.node.hidden);
@@ -1025,6 +1030,7 @@ function configRender() {
   closeHelpTip(false);
   configEditor.previewSummary = null;
   clear($('config-preview-result'));
+  for (const widget of configEditor.widgets.values()) widget.nameHistory?.dispose();
   configEditor.fields.clear(); configEditor.widgets.clear(); configEditor.groups.clear(); configEditor.playerWidgets = [];
   const root = clear($('config-fields'));
   const groups = configGroups.map(group => ({ ...group, fields: [...group.fields] }));
@@ -1235,6 +1241,7 @@ function configRenderField(spec) {
   }
   box.append(error); row.append(name, box);
   const widget = { row, node: row, control, error, spec, clearError() { error.hidden = true; error.textContent = ''; control?.removeAttribute('aria-invalid'); } };
+  if (spec.nameList) widget.nameHistory = configListNameHistory(widget, box);
   if (spec.moduleControl) {
     widget.moduleNote = el('span', 'config-help'); widget.moduleNote.hidden = true;
     widget.moduleNote.id = id + '-note'; widget.moduleNote.setAttribute('role', 'status');
@@ -1623,12 +1630,12 @@ async function configLoad(force = false) {
       }
       configEditor.runtime=runtime;configEditor.data={...configEditor.data,usage:data.usage,pendingUsage:data.pendingUsage};
       const displayChanged=JSON.stringify(data.rules)!==JSON.stringify(configEditor.data.rules)||JSON.stringify(data.tasks)!==JSON.stringify(configEditor.data.tasks);
-      configEditor.data={...configEditor.data,rules:data.rules,tasks:data.tasks,compatibility:data.compatibility,
+      configEditor.data={...configEditor.data,rules:data.rules,tasks:data.tasks,compatibility:data.compatibility,playerNames:data.playerNames,
         recovery:configEditor.recoveryBlocked ? data.recovery ?? configEditor.data.recovery : data.recovery,recoveryToken:data.recoveryToken};
       configEditor.recoveryNotice = null;
       configCompatibilityMessage(data);
       // 活动开放状态独立于保存版本；更新入口时保留草稿和原基线，避免覆盖编辑或绕过版本冲突。
-      if(displayChanged){configEditor.previewSummary=null;configRender();}else configRenderUsage();
+      if(displayChanged){configEditor.previewSummary=null;configRender();}else {configRenderUsage();configUpdateVisibility();}
       return data;
     }
     configEditor.runtime=runtime;configEditor.previewSummary=null;
@@ -1663,6 +1670,7 @@ async function configMayChangeAccount(next) {
 function configAccountChanged() {
   resetWorldMap();
   if (configEditor.owner === current) return;
+  for (const widget of configEditor.widgets.values()) widget.nameHistory?.dispose();
   if ($('config-history-dialog')?.open) $('config-history-dialog').close();
   configWeeklyRankingReset();
   configCancelSaveTimer(); configEditor.savePromise = null; configEditor.saving = false; configEditor.saveError = null; configEditor.saveRetries = 0; configEditor.busy = false;
@@ -1730,6 +1738,117 @@ async function configRefreshPlayers() {
     }
   })();
   return job.promise;
+}
+
+function configListNameHistory(widget, box) {
+  const { spec } = widget, namesKey = spec.nameList, idKey = spec.key;
+  const root = el('div', 'config-list-history'), list = el('div', 'config-player-tags'), status = el('small', 'config-help');
+  const refresh = configButton('刷新昵称', () => { void sync(true); });
+  refresh.setAttribute('aria-label', '刷新' + spec.label + '昵称');
+  root.append(list, refresh, status); box.append(root);
+  let visible = false, pending = false, disposed = false, painted = '', checked = new Set();
+  const fold = value => idKey.startsWith('treasure.') ? value : value.toLocaleLowerCase();
+  function entries() {
+    const ids = configGet(idKey) ?? [], names = configGet(namesKey) ?? [], history = configEditor.data?.playerNames ?? {};
+    const relevant = name => names.some(value => fold(value) === fold(name));
+    return [...new Set([...ids, ...Object.keys(history).filter(id => [history[id].name, ...history[id].previous].some(relevant))])];
+  }
+  function change(key, values) {
+    configSet(key, values);
+    const control = configEditor.widgets.get(key)?.control;
+    if (control?.tagName === 'TEXTAREA') control.value = values.join('\n');
+    for (const repaint of configEditor.playerWidgets) repaint();
+  }
+  function lastGate(key) {
+    const ids = configGet(idKey) ?? [], names = configGet(namesKey) ?? [];
+    const last = (key === idKey ? ids.length === 1 && !names.length : names.length === 1 && !ids.length);
+    let gate = '';
+    if (last && idKey.endsWith('.huntPlayerIds')) gate = idKey.replace(/huntPlayerIds$/, 'huntEnabled');
+    if (last && idKey === 'treasure.chasePlayerIds') gate = 'treasure.chase';
+    if (last && idKey === 'treasure.followPlayerIds') gate = 'treasure.follow';
+    if (last && idKey === 'alliance.memberIds') gate = 'alliance.autoHelp';
+    return gate && configGet(gate) ? gate : '';
+  }
+  function removeButton(text, key, value) {
+    const gate = lastGate(key), gateLabel = gate === 'alliance.autoHelp' ? '自动帮助' : gate === 'treasure.follow' ? '跟随' : '追杀';
+    const closeModule = gate.startsWith('treasure.') && configGet('treasure.enabled') && !configGet('treasure.autoJoin')
+      && !configGet(gate === 'treasure.chase' ? 'treasure.follow' : 'treasure.chase');
+    return configButton(text + (gate ? '并关闭' + (closeModule ? '巨轮自动化' : gateLabel) : ''), () => {
+      if (gate) configSet(gate, false);
+      if (closeModule) configSet('treasure.enabled', false);
+      change(key, configGet(key).filter(item => item !== value));
+    }, 'remove');
+  }
+  function paint() {
+    if (disposed || !configEditor.draft) return;
+    const ids = configGet(idKey) ?? [], names = configGet(namesKey) ?? [], history = configEditor.data?.playerNames ?? {};
+    const rows = entries();
+    const signature = JSON.stringify([ids, names, lastGate(idKey), lastGate(namesKey), configGet('treasure.autoJoin'), configGet('treasure.chase'), configGet('treasure.follow'), configGet('treasure.enabled'), rows.map(id => [id, history[id]])]);
+    if (signature !== painted) {
+      painted = signature; clear(list);
+      for (const id of rows) {
+        const record = history[id], aliases = record?.previous ?? [];
+        const tag = el('div', 'config-player-tag');
+        const caption = record ? record.name + ' · ID ' + id + (ids.includes(id) ? '' : '（昵称匹配）') : 'ID ' + id + ' · 尚未同步昵称';
+        tag.append(el('span', '', caption));
+        if (aliases.length) tag.append(el('strong', 'config-name-changed', '已改名 · 曾用名 ' + aliases.join('、')));
+        if (ids.includes(id)) {
+          const button = removeButton('移除 ID', idKey, id);
+          button.setAttribute('aria-label', button.textContent + '（' + id + '）'); tag.append(button);
+        }
+        for (const value of names.filter(name => record && [record.name, ...aliases].some(alias => fold(alias) === fold(name)))) {
+          if (!ids.includes(id)) {
+            const bind = configButton('将“' + value + '”改用此 ID', () => {
+              change(idKey, [...new Set([...configGet(idKey), id])]); change(namesKey, configGet(namesKey).filter(item => item !== value));
+            });
+            bind.disabled = ids.length >= (idKey === 'treasure.avoidPlayerIds' || idKey === 'alliance.memberIds' ? 100 : 30);
+            tag.append(bind);
+          }
+          if (record.name !== value && aliases.some(alias => fold(alias) === fold(value))) tag.append(removeButton('删除旧昵称“' + value + '”', namesKey, value));
+        }
+        list.append(tag);
+      }
+      root.hidden = !rows.length;
+    }
+    if (visible && !pending) void sync(false);
+  }
+  async function sync(force) {
+    if (disposed || pending || !configEditor.draft || configEditor.owner !== current) return;
+    const saved = idKey.split('.').reduce((value, part) => value?.[part], configEditor.baseline) ?? [];
+    const ids = entries().filter(id => (saved.includes(id) || configEditor.data?.playerNames?.[id]) && (force || !checked.has(id)));
+    if (!ids.length) return;
+    const owner = current, serial = configEditor.serial;
+    const active = () => !disposed && current === owner && configEditor.owner === owner && configEditor.serial === serial;
+    pending = true; refresh.disabled = true; status.textContent = '正在读取角色资料…';
+    ids.forEach(id => checked.add(id));
+    let count = 0;
+    try {
+      for (let i = 0; i < ids.length; i += 100) {
+        const batch = ids.slice(i, i + 100);
+        const data = await call('/api/settings/player-names?ids=' + batch.join(','));
+        if (!active()) return;
+        const history = { ...configEditor.data.playerNames };
+        for (const id of batch) if (data.playerNames[id]) history[id] = data.playerNames[id];
+        configEditor.data.playerNames = history;
+        count += data.synced.length;
+        status.textContent = !data.online ? '账号离线，显示上次记录' : count < Math.min(i + 100, ids.length) ? '部分昵称未同步，显示上次记录' : '';
+      }
+    } catch (error) { if (active()) status.textContent = error.message; }
+    finally {
+      pending = false; refresh.disabled = false;
+      if (!disposed && configEditor.owner === owner && current === owner) {
+        if (!active()) { ids.forEach(id => checked.delete(id)); status.textContent = ''; }
+        for (const field of configEditor.widgets.values()) field.nameHistory?.paint();
+      }
+    }
+  }
+  const observer = typeof IntersectionObserver === 'function' ? new IntersectionObserver(([entry]) => {
+    visible = entry.isIntersecting;
+    if (visible) paint();
+  }) : null;
+  observer?.observe(widget.row);
+  paint();
+  return { paint, dispose() { disposed = true; observer?.disconnect(); } };
 }
 
 function configPlayerPicker(spec, id) {

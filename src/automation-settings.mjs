@@ -6,7 +6,7 @@ import { atomicJson, readJson, withFileLock } from './json-store.mjs';
 import { accountKey, dataDirectory } from './usage-ledger.mjs';
 export { beijingDay, createUsageLedger, usageFile } from './usage-ledger.mjs';
 import { taskSettings, retiredAutomationTasks, migratedAutomationTasks, removedScheduleKeys } from './automation.mjs';
-import { EXTENDED_DEFAULTS, EXTENDED_CONSTRAINTS, SILICON_FLEET_NUMBERS, siliconTierLabels, validateSiliconFleets } from './extended-settings.mjs';
+import { EXTENDED_DEFAULTS, EXTENDED_CONSTRAINTS, SILICON_FLEET_NUMBERS, siliconTierLabels, validateSiliconFleets, validPlayerIdText } from './extended-settings.mjs';
 import { treasureRewardOptions } from './treasure-reward-filter.mjs';
 import { dailyWindowPattern } from './daily-time-windows.mjs';
 import { activityAutomationDefaults, activityAutomationFields } from './activity-automation.mjs';
@@ -22,11 +22,11 @@ export const settingsFile = () => path.join(dataDirectory(), 'automation-setting
 export const SETTINGS_FORMAT = 'crazywaterworld-automation';
 // 文件 version / 账号 settingsVersion 是格式编号，只随结构迁移调整；
 // revision 是每次保存递增的修订号，仅用于并发冲突检查，不能用作格式版本。
-export const SETTINGS_SCHEMA_VERSION = 53;
+export const SETTINGS_SCHEMA_VERSION = 55;
 const LEGACY_SETTINGS_FORMAT = 'crazywaterword-automation';
 const treasureQualityLabels = { ORANGE: '万吨货轮', PURPLE: '中型货轮', BLUE: '小型货轮' };
 const treasureChaseDefaults = {
-  chase: false, chaseNames: [], chaseWindows: [], chaseSpeedUp: false, chaseTargetSeconds: 60, chaseDailyDiamondLimit: 0,
+  chase: false, chasePlayerIds: [], chaseNames: [], chaseWindows: [], chaseSpeedUp: false, chaseTargetSeconds: 60, chaseDailyDiamondLimit: 0,
 };
 const treasureRewardFilterDefaults = {
   rewardMatchMode: 'any', rewardMinHits: 2,
@@ -180,7 +180,7 @@ const constraints = {
   'pirateHunt.fleetIds': strings(10),
   'pirateHunt.minDurabilityPercent': int(100), 'pirateHunt.checkEverySeconds': int(60, 5),
   'treasure.fleetIds': strings(10), 'treasure.followNames': strings(30), 'treasure.followPlayerIds': strings(30),
-  'treasure.chaseNames': strings(30), 'treasure.chaseTargetSeconds': int(3600), 'treasure.chaseDailyDiamondLimit': int(100000000),
+  'treasure.chasePlayerIds': strings(30), 'treasure.chaseNames': strings(30), 'treasure.chaseTargetSeconds': int(3600), 'treasure.chaseDailyDiamondLimit': int(100000000),
   'treasure.windows': strings(10), 'treasure.chaseWindows': strings(10),
   'treasure.qualities': { ...strings(3), values: Object.keys(treasureQualityLabels) },
   'treasure.rewardItems': strings(100), 'treasure.avoidNames': strings(30),
@@ -368,6 +368,8 @@ function validateCurrentSettings(input, { partial = false, catalog = null } = {}
   input = migrateVersion49Settings(input);
   input = migrateVersion51Settings(input);
   input = migrateVersion52Settings(input);
+  input = migrateVersion53Settings(input);
+  input = migrateVersion54Settings(input);
   if (plain(input?.resourceFields) && !Object.hasOwn(input.resourceFields, 'refillAfterLoss')) {
     input = { ...input, resourceFields: { ...input.resourceFields, refillAfterLoss: false } };
   }
@@ -492,9 +494,10 @@ function validateCurrentSettings(input, { partial = false, catalog = null } = {}
   if (output.treasure.enabled && !output.treasure.fleetIds.length) errors['treasure.fleetIds'] = '请明确选择参与巨轮的舰队，空名单不会派遣';
   if (output.treasure.fallbackEnabled && !output.treasure.fallbackQualities.length) errors['treasure.fallbackQualities'] = '开启兜底前，请至少选择一种货轮';
   if (output.treasure.follow && !output.treasure.followNames.length && !output.treasure.followPlayerIds.length && !errors['treasure.followNames'] && !errors['treasure.followPlayerIds']) errors['treasure.followNames'] = '开启跟随前，请添加玩家完整昵称或角色ID';
-  if (output.treasure.chase && !output.treasure.chaseNames.length && !errors['treasure.chaseNames']) errors['treasure.chaseNames'] = '开启追杀前，请填写对手的完整昵称';
+  if (output.treasure.chase && !output.treasure.chaseNames.length && !output.treasure.chasePlayerIds.length && !errors['treasure.chaseNames'] && !errors['treasure.chasePlayerIds']) errors['treasure.chasePlayerIds'] = '开启追杀前，请填写对手的角色 ID 或完整昵称';
   for (const field of ['followNames', 'avoidNames', 'chaseNames']) if (output.treasure[field].some(value => value !== value.trim() || value.length > 40 || /[\r\n\u0000-\u001f]/.test(value))) errors['treasure.' + field] = '请输入不重复的完整昵称，每项不超过40字符，不含首尾空格或换行';
-  for (const field of ['followPlayerIds', 'avoidPlayerIds']) if (output.treasure[field].some(value => !/^[1-9]\d{0,18}$/.test(value) || BigInt(value) > (1n << 63n) - 1n)) errors['treasure.' + field] = '角色ID必须为完整的正整数文本，不能使用科学计数法';
+  for (const field of ['followPlayerIds', 'avoidPlayerIds', 'chasePlayerIds']) if (!output.treasure[field].every(validPlayerIdText)) errors['treasure.' + field] = '角色ID必须为完整的正整数文本，不能使用科学计数法';
+  if (!output.alliance.memberIds.every(validPlayerIdText)) errors['alliance.memberIds'] = '请填写完整的正整数角色 ID';
   if (output.treasure.fleetIds.some(value => !/^[1-9]\d*远征船$/.test(value))) errors['treasure.fleetIds'] = '请选择有效的远征舰队';
   if (output.cityWar.enabled && !output.cityWar.fleetIds.length) errors['cityWar.fleetIds'] = '请明确选择参与城战接续的舰队';
   if (output.cityWar.fleetIds.some(value => !/^[1-9]\d*远征船$/.test(value))) errors['cityWar.fleetIds'] = '请选择有效的远征舰队';
@@ -540,6 +543,9 @@ function validateCurrentSettings(input, { partial = false, catalog = null } = {}
     if (output.farm.crops.some(v => !crops.has(v.id))) errors['farm.crops'] = '包含当前游戏中不存在的作物';
   }
   if (Object.keys(errors).length) throw new SettingsError(errors);
+  if (output.factory.demandPriority.includes('factory')) {
+    output.factory.demandPriority = [...output.factory.demandPriority.filter(source => source !== 'factory'), 'factory'];
+  }
   output.ads.noPrivilege = true;
   output.schedule = savedSchedule(nativeTaskValues(output, output.schedule));
   return output;
@@ -722,7 +728,7 @@ export function importAutomationSettings(document, options) {
   return validateSettings(migrateSettingsVersion(document.settings, document.version), { ...options, partial: false });
 }
 
-const settingsMigrations = new Map([[1, migrateVersion1Settings], [2, migrateVersion2Settings], [3, migrateVersion3Settings], [4, migrateVersion4Settings], [5, migrateVersion5Settings], [6, migrateVersion6Settings], [7, migrateVersion7Settings], [8, migrateVersion8Settings], [9, migrateVersion9Settings], [10, migrateVersion10Settings], [11, migrateVersion11Settings], [12, migrateVersion12Settings], [13, migrateVersion13Settings], [14, migrateVersion14Settings], [15, migrateVersion15Settings], [16, migrateVersion16Settings], [17, migrateVersion17Settings], [18, migrateVersion18Settings], [19, migrateVersion19Settings], [20, migrateVersion20Settings], [21, migrateVersion21Settings], [22, migrateVersion22Settings], [23, migrateVersion23Settings], [24, migrateVersion24Settings], [25, migrateVersion25Settings], [26, migrateVersion26Settings], [27, migrateVersion27Settings], [28, migrateVersion28Settings], [29, migrateVersion29Settings], [30, migrateVersion30Settings], [31, migrateVersion31Settings], [32, migrateVersion32Settings], [33, migrateVersion33Settings], [34, migrateVersion34Settings], [35, migrateVersion35Settings], [36, migrateVersion36Settings], [37, migrateVersion37Settings], [38, migrateVersion38Settings], [39, migrateVersion39Settings], [40, migrateVersion40Settings], [41, migrateVersion41Settings], [42, migrateVersion42Settings], [43, migrateVersion43Settings], [44, migrateVersion44Settings], [45, migrateVersion45Settings], [46, migrateVersion46Settings], [47, migrateVersion47Settings], [48, migrateVersion48Settings], [49, migrateVersion49Settings], [50, migrateVersion50Settings], [51, migrateVersion51Settings], [52, migrateVersion52Settings]]);
+const settingsMigrations = new Map([[1, migrateVersion1Settings], [2, migrateVersion2Settings], [3, migrateVersion3Settings], [4, migrateVersion4Settings], [5, migrateVersion5Settings], [6, migrateVersion6Settings], [7, migrateVersion7Settings], [8, migrateVersion8Settings], [9, migrateVersion9Settings], [10, migrateVersion10Settings], [11, migrateVersion11Settings], [12, migrateVersion12Settings], [13, migrateVersion13Settings], [14, migrateVersion14Settings], [15, migrateVersion15Settings], [16, migrateVersion16Settings], [17, migrateVersion17Settings], [18, migrateVersion18Settings], [19, migrateVersion19Settings], [20, migrateVersion20Settings], [21, migrateVersion21Settings], [22, migrateVersion22Settings], [23, migrateVersion23Settings], [24, migrateVersion24Settings], [25, migrateVersion25Settings], [26, migrateVersion26Settings], [27, migrateVersion27Settings], [28, migrateVersion28Settings], [29, migrateVersion29Settings], [30, migrateVersion30Settings], [31, migrateVersion31Settings], [32, migrateVersion32Settings], [33, migrateVersion33Settings], [34, migrateVersion34Settings], [35, migrateVersion35Settings], [36, migrateVersion36Settings], [37, migrateVersion37Settings], [38, migrateVersion38Settings], [39, migrateVersion39Settings], [40, migrateVersion40Settings], [41, migrateVersion41Settings], [42, migrateVersion42Settings], [43, migrateVersion43Settings], [44, migrateVersion44Settings], [45, migrateVersion45Settings], [46, migrateVersion46Settings], [47, migrateVersion47Settings], [48, migrateVersion48Settings], [49, migrateVersion49Settings], [50, migrateVersion50Settings], [51, migrateVersion51Settings], [52, migrateVersion52Settings], [53, migrateVersion53Settings], [54, migrateVersion54Settings]]);
 const supportedSettingsVersion = version => Number.isSafeInteger(version) && version >= 1;
 const entrySettingsVersion = entry => Object.hasOwn(entry, 'settingsVersion') ? entry.settingsVersion : 1;
 function newestSettingsVersion(store) {
@@ -1134,6 +1140,20 @@ function migrateVersion22Settings(settings) {
   for (const group of ['arena', 'league']) {
     if (plain(next[group])) next[group] = { maxPowerRatio: 0, ...next[group] };
   }
+  return next;
+}
+
+function migrateVersion54Settings(settings) {
+  if (!plain(settings?.alliance) || Object.hasOwn(settings.alliance, 'memberIds')) return settings;
+  return { ...settings, alliance: { ...settings.alliance, memberIds: [] } };
+}
+
+function migrateVersion53Settings(settings) {
+  if (!plain(settings)) return settings;
+  const next = { ...settings };
+  if (plain(settings.treasure)) next.treasure = { chasePlayerIds: [], ...settings.treasure };
+  if (Array.isArray(settings.silicon?.fleets)) next.silicon = { ...settings.silicon,
+    fleets: settings.silicon.fleets.map(fleet => plain(fleet) ? { huntPlayerIds: [], safePlayerIds: [], ...fleet } : fleet) };
   return next;
 }
 

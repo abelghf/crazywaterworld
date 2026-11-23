@@ -99,6 +99,9 @@
 .config-player-tags { display:flex; flex-wrap:wrap; gap:6px; margin-bottom:8px }
 .config-player-tag { display:inline-flex; align-items:center; gap:4px; max-width:100%; border:1px solid var(--border); border-radius:8px; padding:2px 4px 2px 8px; background:var(--muted) }
 .config-player-tag>span { min-width:0; overflow-wrap:anywhere }
+.config-list-history .config-player-tag { flex-wrap:wrap; overflow-wrap:anywhere }
+.config-list-history .config-name-changed { color:var(--foreground); font-weight:600 }
+.config-list-history>small { margin-inline-start:6px }
 .config-player-name { display:block }
 .config-player-picker .config-add input { min-width:0; flex:1; width:100% }
 .config-select-foot { display:flex; flex-wrap:wrap; align-items:center; gap:8px; margin-top:8px; font-size:12px; color:var(--muted-foreground) }

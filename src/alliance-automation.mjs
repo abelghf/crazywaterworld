@@ -181,9 +181,9 @@ async function runMutual(client, protocol, config, player, { getSettings, ledger
   state = await aidState(client, protocol, config, player, getSettings(), current);
   p = getSettings().alliance;
   const chosen = state.candidates.find(row => allianceMaterialAllowed(row.itemId, getSettings(), player) &&
-    (!p.memberKeywords?.length || p.memberKeywords.some(word => row.name.toLocaleLowerCase().includes(word.toLocaleLowerCase()))) &&
+    ((!p.memberIds?.length && !p.memberKeywords?.length) || p.memberIds?.includes(row.memberId) || p.memberKeywords?.some(word => row.name.toLocaleLowerCase().includes(word.toLocaleLowerCase()))) &&
     (state.available.get(row.itemId) ?? 0) - p.stockReserve >= 1 && !ledger.hasKey('guildAidGift:' + state.worldId + ':' + state.playerId + ':' + row.id));
-  if (!chosen) return report({ key: 'allianceHelp', label: '联盟自动帮助', skipped: true, reason: '没有符合材料、昵称、库存保留和订单预留的求助' });
+  if (!chosen) return report({ key: 'allianceHelp', label: '联盟自动帮助', skipped: true, reason: '没有符合材料、盟友筛选、库存保留和订单预留的求助' });
   if (!current() || !p.autoHelp || chosen.endTime <= nowOf(client)) return;
   const key = 'guildAidGift:' + state.worldId + ':' + state.playerId + ':' + chosen.id;
   const details = { kind: 'guildAidGift', day, worldId: state.worldId, playerId: state.playerId, guildId: state.guildId, reqId: chosen.id, memberId: chosen.memberId, itemId: chosen.itemId };

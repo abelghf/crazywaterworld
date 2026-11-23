@@ -110,6 +110,7 @@ import { operationLabels } from './operation-labels.mjs';
 import { automationTasks, retiredAutomationTasks, migratedAutomationTasks, defaultCompassSpinCount, maxCompassSpinCount, taskSettings, worldTaskKey, dailyTaskKey } from './automation.mjs';
 import { rewardSchedule } from './reward-schedule.mjs';
 import { beijingDay, loadAutomationSettings, loadRecoverableAutomationSettings, settingsFile, defaultSettings, saveAutomationSettings, validateSettings, settingsCatalog, settingsFromNative, settingsFromLegacyNative, nativeTaskValues, applyNativeTask, hasExtraWork, createUsageLedger, exportAutomationSettings, importAutomationSettings, SettingsError, settingsUiRules } from './automation-settings.mjs';
+import { listedPlayerNames, knownListPlayerIds, rememberPlayerNames, prunePlayerNames } from './player-name-history.mjs';
 import { budgetPreview, exactAutomationId, createActionGuard, nativePreferenceEnabled, needsCargoDemand, AutomationSkip } from './automation-policy.mjs';
 import { guardRuntimeActions, validateRuntimeSettings } from './settings-runtime.mjs';
 import { assertResourcesReady, resourceReadiness } from './resource-store.mjs';
@@ -907,7 +908,10 @@ export function createConsole({ host = '127.0.0.1', port = 17321, onLog, recover
     try { loadConfigSafe(); validateRuntimeSettings(settings, config); }
     catch (error) { compatibility = { error: error.message, fields: error.fields ?? {} }; }
     const recoveryToken = session.settingsRecovery ? createHash('sha256').update(JSON.stringify([saved.revision, saved.savedAt, session.settingsRecovery])).digest('hex') : null;
-    return { settings, revision: saved.revision, savedAt: saved.savedAt, baseRevision, compatibility, recovery: session.settingsRecovery, recoveryToken, catalog: ownedFleetCatalog(session,settingsCatalog(config)),
+    let playerNames = {};
+    try { playerNames = listedPlayerNames(session.id, settings); }
+    catch (error) { emit(session, 'warn', '名单昵称记录暂不可读：' + error.message); }
+    return { settings, playerNames, revision: saved.revision, savedAt: saved.savedAt, baseRevision, compatibility, recovery: session.settingsRecovery, recoveryToken, catalog: ownedFleetCatalog(session,settingsCatalog(config)),
       tasks: automationTasks.filter(task => !retiredAutomationTasks.has(task.key) && !availability.hiddenTasks.includes(task.key)), rules: { ...settingsUiRules(), hiddenFields: availability.hiddenFields },
       usage: usageFor(session).snapshot(), pendingUsage: usageFor(session).pendingCounters(), running: session.loop.running };
   }
@@ -1149,6 +1153,13 @@ export function createConsole({ host = '127.0.0.1', port = 17321, onLog, recover
     return path.join(DATA_DIR, 'factory-report-' + encodeURIComponent(id) + '.json');
   }
 
+  function recordListNames(session, settings, rows, initialOnly = false) {
+    const playerNames = rememberPlayerNames(session.id, settings, rows, { initialOnly });
+    if (!playerNames) return;
+    const event = 'event: player-names-changed\ndata: ' + JSON.stringify({ account: session.id, playerNames }) + '\n\n';
+    for (const stream of streams) if (stream.allAccounts || stream.account === session.id) writeStream(stream, event);
+  }
+
   function wire(session, instance) {
     session.mapIdleFleetIds = [];
     function notifyFleetMap() {
@@ -1160,7 +1171,18 @@ export function createConsole({ host = '127.0.0.1', port = 17321, onLog, recover
     watchGuildShipPushes(instance);
     watchHeroRaidPushes(instance);
     watchSiliconMining(instance);
+    function noteNames(rows, initialOnly = false) {
+      if (session.client !== instance || !session.player || session.paused || !session.preferences) return;
+      try { recordListNames(session, session.preferences, rows, initialOnly); }
+      catch (error) { emit(session, 'warn', '名单昵称记录失败：' + error.message); }
+    }
+    instance.on('list-player-profiles', rows => noteNames(rows));
     instance.on('message', ({name,body}) => {
+      if (name === 'GuildMemberResponse' || name === 'BlackListResponse' || name === 'WorldInfoResponse' || name === 'SCFleet') {
+        const members = name === 'GuildMemberResponse' ? (body.titleList ?? []).flatMap(group => group.members ?? []) :
+          name === 'BlackListResponse' ? body.list ?? [] : (body.fleets ?? []).map(fleet => fleet.owner).filter(Boolean);
+        noteNames(members.map(member => ({ id: exactAutomationId(member.playerId), name: member.nickname })), name !== 'GuildMemberResponse');
+      }
       if (session.client===instance && ['MyFleetsResponse','SCMyFleetUpdate'].includes(name)) {
         observeOwnedFleets(session,body?.fleets,{complete:name==='MyFleetsResponse'});
         if (name === 'SCMyFleetUpdate' && body?.fleets?.length) notifyFleetMap();
@@ -2418,6 +2440,31 @@ export function createConsole({ host = '127.0.0.1', port = 17321, onLog, recover
         json(loginSettingsView(session));
         return;
       }
+      if (route === 'GET /api/settings/player-names') {
+        const { session } = scoped_(parsed);
+        const settings = effectiveSettings(session), history = listedPlayerNames(session.id, settings);
+        const allowed = knownListPlayerIds(settings, history);
+        const ids = [...new Set((parsed.searchParams.get('ids') ?? '').split(',').filter(Boolean))];
+        if (ids.length > 100 || ids.some(id => !allowed.has(id))) throw new SettingsError({ ids: '请选择已保存名单中的角色' });
+        const { client, generation, player } = session;
+        const current = () => client?.connected && session.client === client && session.generation === generation && session.player === player && player && !session.paused;
+        const synced = [];
+        for (const id of ids) {
+          if (!current()) break;
+          try {
+            const profile = await readJob(session, () => {
+              if (!current()) throw Error('角色连接已变化');
+              return client.request('OtherPlayerInfoRequest', { playerId: id }, 'OtherPlayerInfoResponse', 8000);
+            }, { recoverFormation: false });
+            if (!current()) break;
+            if (typeof profile?.nickname !== 'string' || !profile.nickname.trim()) continue;
+            recordListNames(session, effectiveSettings(session), [{ id, name: profile.nickname }]);
+            synced.push(id);
+          } catch (error) { if (!error.prompt) break; }
+        }
+        json({ playerNames: listedPlayerNames(session.id, effectiveSettings(session)), synced, online: !!current() });
+        return;
+      }
       if (route === 'GET /api/settings/players') {
         const { session } = scoped_(parsed);
         if (!session.client?.connected || session.paused) throw new Error('请先连接当前账号，再读取盟友名单');
@@ -2492,6 +2539,8 @@ export function createConsole({ host = '127.0.0.1', port = 17321, onLog, recover
         if (!current.revision && payload.baseRevision !== current.baseRevision) throw new SettingsError({ revision: '现有挂机开关已变化，请重新载入后再保存' });
         const entry = saveAutomationSettings(session.id, payload.settings, { revision: payload.revision, catalog: settingsCatalog(loadConfigSafe({ allowStale: true })), expectedRecoveryId: current.recovery?.id });
         adoptPreferences(session, entry);
+        try { prunePlayerNames(session.id, entry.settings); }
+        catch (error) { emit(session, 'warn', '配置已保存，名单昵称记录清理失败：' + error.message); }
         if (session.client) for (const task of automationTasks) rewardSchedule(session.client).clearTask(task.key);
         emit(session, 'info', '游戏配置已保存。正在运行的任务从下次检查开始使用新配置。');
         json(settingsView(session));
@@ -2955,6 +3004,7 @@ export function createConsole({ host = '127.0.0.1', port = 17321, onLog, recover
         sessions.get(account.id)?.operations.clear();
         flushBatch(sessions.get(account.id));
         sessions.delete(account.id);
+        try { prunePlayerNames(account.id, null); } catch (error) { emit(null, 'warn', '账号已删除，昵称记录清理失败：' + error.message); }
         try { publicGiftCodes.removeAccount(account.id); }
         catch (error) { emit(null, 'warn', '账号已删除，礼包自动兑换设置清理失败：' + error.message); }
         emit(null, 'info', `已删除账号 ${describeAccount(account).title}`);

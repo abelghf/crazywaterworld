@@ -698,6 +698,12 @@ function subscribe() {
   stream.addEventListener('fleets-changed', event => {
     if (JSON.parse(event.data).account === current) worldMapRefreshRequested = true;
   });
+  stream.addEventListener('player-names-changed', event => {
+    const { account, playerNames } = JSON.parse(event.data);
+    if (account !== current || account !== configEditor.owner || !configEditor.data) return;
+    configEditor.data.playerNames = { ...configEditor.data.playerNames, ...playerNames };
+    for (const widget of configEditor.widgets.values()) widget.nameHistory?.paint();
+  });
   stream.addEventListener('chat-changed', event => {
     const detail = JSON.parse(event.data);
     if (detail.account === current) window.dispatchEvent(new CustomEvent('cw-chat-update', { detail }));

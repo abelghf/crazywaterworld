@@ -245,6 +245,22 @@ try {
       const saved = await api('cycle-a', '/api/settings', { settings: s, revision: initial.revision, baseRevision: initial.baseRevision }); assert.equal(saved.status, 200);
       assert.equal((await api('cycle-b', '/api/settings')).body.settings.treasure.participationMode, 'untilFull');
       assert.deepEqual(importAutomationSettings(exportAutomationSettings(saved.body.settings)).treasure, s.treasure);
+      const id = s.treasure.followPlayerIds[0], refresh = account => fetch(base + '/api/settings/player-names?account=' + account + '&ids=' + id);
+      const previousRequest = a.client.request;
+      let name = '原名';
+      a.client.request = (request, body, ...rest) => {
+        if (request !== 'OtherPlayerInfoRequest') return previousRequest(request, body, ...rest);
+        assert.equal(body.playerId, id);
+        return { nickname: name };
+      };
+      assert.deepEqual((await (await refresh('cycle-a')).json()).playerNames[id], { name, previous: [] });
+      name = '新名';
+      assert.deepEqual((await (await refresh('cycle-a')).json()).playerNames[id], { name, previous: ['原名'] });
+      assert.equal((await refresh('cycle-b')).status, 400);
+      name = '';
+      const failed = await (await refresh('cycle-a')).json();
+      assert.deepEqual(failed.synced, []); assert.equal(failed.playerNames[id].name, '新名');
+      a.client.request = previousRequest;
       assert.equal((await api('cycle-a', '/api/settings/preview', {category:'world',settings:s})).body.actions.length,0,'没有跟随对象时不为其他货轮维修');
       a.state.members.titleList[0].members[1].nickname='指定盟友';
       a.state.targets[0].ownerGuildIdx=7;a.state.targets[0].ownerFleetNum=1;

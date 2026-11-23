@@ -265,7 +265,7 @@ export async function runLoop(client, protocol, {
     if (name === 'SCTreasureLootUpdate') {
       const p = getSettings()?.treasure;
       if (treasureChaseActive(p, serverNowSeconds()) && body?.treasure?.some(target => [target.battlePoint?.leftFighter, target.battlePoint?.rightFighter]
-        .some(member => member && !member.isNpc && p.chaseNames.includes(member.name)))) treasureScan.invalidate();
+        .some(member => member && !member.isNpc && (p.chasePlayerIds?.length || p.chaseNames.includes(member.name))))) treasureScan.invalidate();
     }
     if (name === 'SCWarDeclaration' || name === 'SCCityWarTime') { recallStarts.cityWar = null; cityWarScan.invalidate(); }
     const now = serverNowSeconds();

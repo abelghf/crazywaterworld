@@ -80,6 +80,14 @@ try {
     f.settings.alliance.blockedMaterials = []; await f.run(); assert.equal(f.gifts().length, 1);
     assert.equal(f.gifts()[0].id, '9007199254750000'); assert.equal(f.ledger.snapshot().counters.guildAidGifts, 1);
   });
+  await test('自动帮助按角色 ID 区分同名盟友，改名后继续赠送', async () => {
+    const f = fixture();
+    f.settings.alliance.autoHelp = true;
+    f.settings.alliance.memberIds = [f.other]; await f.run(); assert.deepEqual(f.gifts(), []);
+    f.settings.alliance.memberIds = [f.friend];
+    f.state.members.find(row => row.playerId === f.friend).nickname = '新昵称';
+    await f.run(); assert.equal(f.gifts().length, 1);
+  });
   await test('居民订单的同材料需求优先保留，不挪用帮助盟友', async () => {
     const f = fixture(); f.settings.alliance.autoHelp = true;
     f.state.workerOrder = [{ index: 1, requirements: [{ type: 0, id: '橡胶圈', num: 1 }] }];

@@ -14,6 +14,7 @@ const { saveStore } = await import('../src/accounts.mjs');
 const { GameClient } = await import('../src/client.mjs');
 const { createConsole } = await import('../src/server.mjs');
 const { loadAutomationSettings } = await import('../src/automation-settings.mjs');
+const { rememberPlayerNames, listedPlayerNames } = await import('../src/player-name-history.mjs');
 let connections = 0;
 GameClient.prototype.connect = async () => { connections++; throw new Error('名单测试禁止连接游戏'); };
 saveStore({ activeId: 'player-picker', accounts: [{
@@ -91,11 +92,59 @@ try {
     await activate(page.locator('#config-field-treasure-follow'));
     await page.locator('#config-state').filter({ hasText: '配置已同步' }).waitFor();
     assert.deepEqual(loadAutomationSettings('player-picker').settings.treasure.followPlayerIds, []);
+    const chase = page.locator('#config-field-treasure-chase');
+    await activate(chase);
+    const chaseDisclosure = page.getByRole('button', { name: '是否开启追杀，展开下级设置', exact: true });
+    if (await chaseDisclosure.isVisible()) await activate(chaseDisclosure);
+    const chaseIds = page.locator('#config-field-treasure-chasePlayerIds'), avoidIds = page.locator('#config-field-treasure-avoidPlayerIds');
+    await chaseIds.fill('9007199254740995');
+    await avoidIds.fill('9007199254740994');
+    await page.locator('#config-state').filter({ hasText: '配置已同步' }).waitFor();
+    const saved = loadAutomationSettings('player-picker').settings.treasure;
+    assert.deepEqual(saved.chasePlayerIds, ['9007199254740995']);
+    assert.deepEqual(saved.avoidPlayerIds, ['9007199254740994']);
+    const id = saved.chasePlayerIds[0], old = mobile ? '旧船长乙' : '旧船长甲', name = mobile ? '新船长乙' : '新船长甲';
+    const aliases = page.locator('#config-field-treasure-chaseNames');
+    await aliases.fill(old);
+    await page.locator('#config-state').filter({ hasText: '配置已同步' }).waitFor();
+    const settings = loadAutomationSettings('player-picker').settings;
+    rememberPlayerNames('player-picker', settings, [{ id, name: old }]);
+    rememberPlayerNames('player-picker', settings, [{ id, name }]);
+    // 迟到的行军快照不能把已核实的新昵称改回去。
+    rememberPlayerNames('player-picker', settings, [{ id, name: old }], { initialOnly: true });
+    assert.deepEqual(listedPlayerNames('另一个账号', settings), {});
+    const history = chaseIds.locator('..').locator('.config-list-history');
+    await activate(history.getByRole('button', { name: /刷新.*昵称/ }));
+    await history.getByText('已改名 · 曾用名 ' + old, { exact: true }).waitFor();
+    await activate(history.getByRole('button', { name: '删除旧昵称“' + old + '”', exact: true }));
+    assert.equal(await aliases.inputValue(), '');
+    await page.locator('#config-state').filter({ hasText: '配置已同步' }).waitFor();
+    assert.deepEqual(loadAutomationSettings('player-picker').settings.treasure.chasePlayerIds, [id]);
+    // 旧昵称可由用户明确换绑。仅删除 ID 时已有昵称继续生效。
+    await aliases.fill(old);
+    await activate(history.getByRole('button', { name: '移除 ID（' + id + '）', exact: true }));
+    await activate(history.getByRole('button', { name: '将“' + old + '”改用此 ID', exact: true }));
+    assert.equal(await chaseIds.inputValue(), id); assert.equal(await aliases.inputValue(), '');
+    await activate(history.getByRole('button', { name: /移除 ID并关闭/ }));
+    assert.equal(await chase.getAttribute('aria-checked'), 'false');
+    await avoidIds.fill('');
+    await page.locator('#config-state').filter({ hasText: '配置已同步' }).waitFor();
+    assert.deepEqual(loadAutomationSettings('player-picker').settings.treasure.chasePlayerIds, []);
+    assert.deepEqual(listedPlayerNames('player-picker', settings), {});
     await page.close();
-    console.log('通过：' + (mobile ? '手机触屏' : '桌面鼠标') + '点击姓名/角色 ID 可选择及取消，自动保存、键盘操作和移出关闭正常');
+    console.log('通过：' + (mobile ? '手机触屏' : '桌面鼠标') + '盟友选择、改名标记、删除旧昵称、按 ID 换绑和移除均可保存');
   }
   assert.deepEqual(errors, []);
   assert.equal(connections, 0);
+  // 纯昵称规则只能在见过 ID 后提示换绑。同名角色互不覆盖，也不自动修改名单。
+  const legacy = { silicon: { fleets: [{ huntPlayers: ['Captain'] }] } };
+  const first = '9007199254740995', second = '9007199254740994';
+  rememberPlayerNames('legacy', legacy, [{ id: first, name: 'CAPTAIN' }, { id: second, name: 'Captain' }], { initialOnly: true });
+  rememberPlayerNames('legacy', legacy, [{ id: first, name: '船长甲' }, { id: second, name: '船长乙' }]);
+  assert.deepEqual(listedPlayerNames('legacy', legacy), {
+    [first]: { name: '船长甲', previous: ['CAPTAIN'] }, [second]: { name: '船长乙', previous: ['Captain'] },
+  });
+  assert.deepEqual(legacy.silicon.fleets[0], { huntPlayers: ['Captain'] });
 } catch (error) {
   const page = browser?.contexts()[0]?.pages()[0];
   if (page) await page.screenshot({ path: path.join(output, 'failure.png'), animations: 'disabled' });
