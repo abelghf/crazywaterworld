@@ -115,7 +115,7 @@ function fixture() {
     const resetInventory = () => {};
     const call = (...args) => env.call ? env.call(...args) : new Promise(() => {});
     const openConfirm = (title, body, confirm, label) => { env.dialog = { title, body, confirm, label }; };
-    const snapshot = { paused: false }, disconnected = new Set();
+    const snapshot = { paused: false, connected: true }, disconnected = new Set();
     let current = 'account-a';
     let orderClockOffset = 0;
     ${script.slice(script.indexOf('function orderState('), script.indexOf('const pendingResidentOrders'))}
@@ -407,9 +407,52 @@ test('自动生产按实际开关显示，缺少状态时显示未同步', () =>
   for (const [autoEnabled, expected] of [[true, '已开启'], [false, '未开启'], [undefined, '未同步']]) {
     const env = fixture();
     env.render(worldData(env, { factories: [factory([], { autoEnabled })] }));
-    assert.equal(cellText(env.tables[0].rows[0][4]), expected);
+    const cell = env.tables[0].rows[0][4];
+    assert.equal(cell.children[1].textContent, expected);
+    assert.equal(cell.children[0].attributes['aria-checked'], String(autoEnabled === true));
+    assert(cell.children[0].disabled);
   }
 });
+
+{
+  const env = fixture(), building = factory([], {autoControl:{on:false,key:'off',productId:'面包',name:'面包'}});
+  const data = worldData(env,{factories:[building]});
+  const cell = () => env.tables.at(-1).rows[0][4];
+  const writes = [];
+  let resolveWrite;
+  env.call = (url,options) => {
+    if (url === '/api/world') return Promise.resolve(data);
+    assert.equal(url,'/api/world/production-auto');
+    writes.push(JSON.parse(options.body));
+    return new Promise(resolve=>{resolveWrite=resolve;});
+  };
+  await env.refresh(true);
+  const button = cell().children[0];
+  assert(!button.disabled);
+  assert.match(button.title,/开启.*面包/);
+  const operation = button.onclick();
+  await button.onclick();
+  assert(button.disabled);
+  assert.equal(button.attributes['aria-checked'],'false');
+  assert.equal(writes.length,1);
+  assert.deepEqual(writes[0],{buildingId:'1食品厂',on:true,productId:'面包',key:'off',confirm:true});
+  const active = {...building.autoControl, on:true,key:'on'};
+  resolveWrite({confirmed:true,control:active});
+  await operation;
+  assert.equal(cell().children[0].attributes['aria-checked'],'true');
+  const closing = cell().children[0].onclick();
+  assert.equal(writes[1].on,false);
+  resolveWrite({confirmed:false,control:active,label:'切换已提交，游戏状态待同步'});
+  await closing;
+  assert.equal(cell().children[0].attributes['aria-checked'],'true');
+  assert.match(cell().children[1].textContent,/待同步/);
+  assert(!cell().children[0].disabled);
+  building.autoControl.reason = '权益已到期';
+  env.render(data);
+  assert(cell().children[0].disabled);
+  passed++;
+  console.log('通过：在自动生产列直接切换，等待回读、防重复点击，权益过期禁用');
+}
 
 test('生产格容量变化或缺失时仍完整显示全部已排产项目', () => {
   const jobs = Array.from({ length: 7 }, (_, index) => ({ index: 100 + index, productId: '物品' + index, name: '物品' + index, finishTime: null }));

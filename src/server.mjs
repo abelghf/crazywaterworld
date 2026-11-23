@@ -98,7 +98,7 @@ import { appointments } from './appointments.mjs';
 import { surveyDailies, runDailies, formatSurvey, canClaimDailyReward } from './dailies.mjs';
 import { dailySingleState, addDailyOptions, runDailySingle } from './daily-single.mjs';
 import { surveyTasks, runTasks, formatTaskPlan, selectTaskSettings } from './tasks.mjs';
-import { makeTypeResolver, displayBuilding, weekFactoryInfo, surveyWorld, inventoryStockRows, factoryIncomingStock, manualFactoryProducts, startManualFactoryProduction, planWorld, runWorldRound, speedUpProduction, SPEED_UP_ITEM, manualResidentOrderDecision, submitResidentOrder, rerollResidentOrder, watchResidentRefreshes, formatWorldPlan, formatFieldReport, loadMapAsset } from './world.mjs';
+import { makeTypeResolver, displayBuilding, weekFactoryInfo, surveyWorld, inventoryStockRows, factoryIncomingStock, manualFactoryProducts, startManualFactoryProduction, nativeFactoryControl, toggleNativeFactory, planWorld, runWorldRound, speedUpProduction, SPEED_UP_ITEM, manualResidentOrderDecision, submitResidentOrder, rerollResidentOrder, watchResidentRefreshes, formatWorldPlan, formatFieldReport, loadMapAsset } from './world.mjs';
 import { runLoop, formatLoopRound, formatLoopStep } from './loop.mjs';
 import { foldBusinessEntry, createOperationJournal } from './business-journal.mjs';
 import { upgradeChanges } from './building-upgrade-log.mjs';
@@ -125,6 +125,9 @@ import { watchBasePushes, surveyBaseAutomation, planBaseAutomation, baseDemands,
 import { reconcileManualProduction } from './manual-production-sync.mjs';
 import { configuredMaterialRecipes, readProductionSnapshot } from './production-snapshot.mjs';
 import { materialTreeRecipes, planProduction } from './production-planning.mjs';
+import { forecastProductionDay } from './production-day.mjs';
+import { factoryInsertions } from './factory-insert-store.mjs';
+import { advanceFactoryInsertion, prepareFactoryInsertion } from './factory-insertion.mjs';
 import { createProductionTiming, watchProductionTimings } from './production-timing.mjs';
 import { captureManualProductionMaterialState, refreshOrderMaterialSpends } from './order-reservations.mjs';
 import { createStageTask } from './stages.mjs';
@@ -1205,6 +1208,27 @@ export function createConsole({ host = '127.0.0.1', port = 17321, onLog, recover
     // 任务已停或关闭自动派遣时也处理返航。合并同一批推送，进入账号原有的串行队列。
     let settlementTimer=null, settlementBusy=false, settlementDirty=false;
     const current=()=>session.client===instance && instance.connected && session.player && !session.paused && !session.productionSyncRequired;
+    let servicingInserts = false;
+    const insertTimer = setInterval(async () => {
+      if (servicingInserts || !current() || closing) return;
+      const player = session.player, generation = session.generation;
+      const enabled = () => current() && !closing && session.player === player && session.generation === generation;
+      servicingInserts = true;
+      try {
+        const ids = Object.keys(factoryInsertions(player));
+        if (ids.length) await enqueue(session, async () => {
+          for (const id of ids) {
+            if (!enabled()) return;
+            const message = await advanceFactoryInsertion(instance, protocolFor(instance),
+              { player, enabled, config:loadConfigSafe(), settings:session.preferences }, id);
+            if (message) emit(session,'warn',message,{ worldUpdated:true });
+          }
+        }, '执行排产插单');
+      } catch (error) { if (enabled()) emit(session,'warn','排产插单待核对：' + error.message); }
+      finally { servicingInserts = false; }
+    }, 10000);
+    insertTimer.unref?.();
+    instance.once('close', () => clearInterval(insertTimer));
     function scheduleSettlement(){
       if(!current())return;
       settlementDirty=true;
@@ -2007,13 +2031,14 @@ export function createConsole({ host = '127.0.0.1', port = 17321, onLog, recover
           return { productId, name: step.displayProduct || displayMaterial(config, productId),
             estimatedFinishTime: canEstimate ? finishes.get(step.body) : null };
         }) : null;
+        const autoControl = nativeFactoryControl(instance, b, survey, config);
         return {
           buildingId: b.buildingId, displayName: displayBuilding(config, b), type: b.type, typeName: typeNames.get(b.type), level: b.level,
           queue: jobs.length, queueKnown, jobs, plannedJobs,
           manualProducts: manualFactoryProducts(b, survey, config, incoming).map(product => ({ ...product, icon: materialIcon(product.productId) })),
           capacity: Number.isSafeInteger(survey.factorySlots) && survey.factorySlots > 0 ? survey.factorySlots : null,
           auto: b.factory.autoProductId ? displayMaterial(config, b.factory.autoProductId) : null,
-          autoEnabled: !!b.factory.autoProductId && (survey.autoProduceForever || survey.autoProduceEndTime > survey.serverNow),
+          autoEnabled: autoControl.on, autoControl,
           icon: buildingIcon(b.type),
         };
       }),
@@ -4370,9 +4395,11 @@ export function createConsole({ host = '127.0.0.1', port = 17321, onLog, recover
         if (!session.productionPlanRead) {
           const client = session.client, generation = session.generation, player = session.player;
           const view = settingsView(session), settingsKey = JSON.stringify(view.settings);
-          const enabled = () => session.client === client && client.connected && !session.paused
+          const insertEpoch = session.factoryInsertEpoch ?? 0;
+          const accountCurrent = () => session.client === client && client.connected && !session.paused
             && session.player === player
-            && session.generation === generation && !session.productionSyncRequired
+            && session.generation === generation && !session.productionSyncRequired;
+          const enabled = () => accountCurrent() && (session.factoryInsertEpoch ?? 0) === insertEpoch
             && JSON.stringify(settingsView(session).settings) === settingsKey;
           const job = readJob(session, async () => {
             if (!enabled()) throw new Error('账号或排产设置已变化，请重新计算');
@@ -4384,14 +4411,60 @@ export function createConsole({ host = '127.0.0.1', port = 17321, onLog, recover
             if (!enabled()) throw new Error('账号或排产设置已变化，请重新计算');
             if (loadConfigSafe() !== config) throw new Error('游戏配置已更新，请重新计算');
             snapshot.timing.observedDurations = timing.snapshot();
-            const result = planProduction(snapshot, config, view.settings,
-              { pendingMaterials: captureManualProductionMaterialState(session.player).all });
+            const pendingMaterials = captureManualProductionMaterialState(session.player).all;
+            return { snapshot, config, pendingMaterials, insertions:factoryInsertions(player) };
+          }).then(async ({ snapshot, config, pendingMaterials, insertions }) => {
             if (!enabled()) throw new Error('账号或排产设置已变化，请重新计算');
+            const result = planProduction(snapshot, config, view.settings, { pendingMaterials });
+            const anchors = new Map();
+            result.forecast = await forecastProductionDay(snapshot, config, view.settings, result.orders, {
+              anchors, insertions, pendingMaterials, checkCurrent() { if (!accountCurrent()) throw new Error('账号已变化，请重新计算'); },
+            });
+            if (result.strategy === 'nativeSimulation' && !result.forecast.partial) {
+              const ready = new Map(result.forecast.completions.map(order => [order.id, order.at]));
+              for (const order of result.orders) if (!order.reason) order.completionAt = ready.get(order.id) ?? null;
+            }
+            if (!enabled() || loadConfigSafe() !== config) throw new Error('账号或排产配置已变化，请重新计算');
+            if (!result.forecast.unavailable) {
+              result.forecast.insertKey = randomUUID();
+              session.factoryInsertPlan = { anchors, forecast:result.forecast, config, enabled };
+            }
             return result;
           }).finally(() => { if (session.productionPlanRead === job) session.productionPlanRead = null; });
           session.productionPlanRead = job;
         }
         json(await session.productionPlanRead);
+        return;
+      }
+      if (route === 'POST /api/world/production-insert-options' || route === 'POST /api/world/production-insert') {
+        const target = jsonBody(), submit = route.endsWith('/production-insert');
+        if (submit) needConfirm(target);
+        const { session } = scoped_(parsed);
+        const quote = session.factoryInsertPlan;
+        const enabled = () => quote && session.factoryInsertPlan === quote && quote.enabled()
+          && quote.config === loadConfigSafe() && target.planKey === quote.forecast.insertKey;
+        if (!enabled()) throw new Error('请重新生成当前账号的排产计划后插单');
+        const result = await enqueue(session, async () => {
+          if (!enabled()) throw new Error('请重新生成当前账号的排产计划后插单');
+          const { client, player, generation } = session;
+          const context = { config:quote.config, player, enabled, settings:session.preferences };
+          const saved = await prepareFactoryInsertion(client, protocolFor(client), context, quote, target, submit);
+          if (submit) {
+            session.factoryInsertEpoch = (session.factoryInsertEpoch ?? 0) + 1;
+            session.factoryInsertPlan = null;
+            session.productionPlanRead = null;
+            session.worldRead = null;
+            context.enabled = () => session.client === client && client.connected && session.player === player
+              && session.generation === generation && !session.paused && !session.productionSyncRequired;
+            try {
+              const message = await advanceFactoryInsertion(client, protocolFor(client), context, target.buildingId);
+              if (message) saved.label = message;
+            } catch (error) { saved.label += '，等待核对游戏队列：' + error.message; }
+            emit(session, 'info', saved.label, { worldUpdated:true });
+          }
+          return saved;
+        }, submit ? '插入工厂排产' : '读取可插单数量', { recoverFormation:submit });
+        json(result);
         return;
       }
       if (route === 'GET /api/world') {
@@ -4404,9 +4477,10 @@ export function createConsole({ host = '127.0.0.1', port = 17321, onLog, recover
         json(await session.worldRead);
         return;
       }
-      if (route === 'POST /api/world/production-speed' || route === 'POST /api/world/production-start') {
+      if (['POST /api/world/production-speed', 'POST /api/world/production-start', 'POST /api/world/production-auto'].includes(route)) {
         const start = route.endsWith('/production-start');
-        const label = start ? '手动工厂排产' : '手动生产加速';
+        const auto = route.endsWith('/production-auto');
+        const label = auto ? '切换工厂原生自动生产' : start ? '手动工厂排产' : '手动生产加速';
         const payload = jsonBody();
         needConfirm(payload);
         const { session } = scoped_(parsed);
@@ -4414,10 +4488,12 @@ export function createConsole({ host = '127.0.0.1', port = 17321, onLog, recover
         const enabled = () => client?.connected && session.client === client && session.player === player
           && session.generation === generation && !session.paused && !session.productionSyncRequired;
         const result = await enqueue(session, async () => {
-          if (!enabled()) throw new Error('请先连接并同步当前账号，再' + (start ? '手动排产' : '使用加速器'));
-          const result = start
-            ? await startManualFactoryProduction(client, protocolFor(client), payload, { player, enabled, config: loadConfigSafe(), settings: session.preferences })
-            : await speedUpProduction(client, protocolFor(client), payload, { player, enabled, config: loadConfigSafe(), getSettings: () => session.preferences });
+          if (!enabled()) throw new Error('请先连接并同步当前账号，再' + (auto ? '切换自动生产' : start ? '手动排产' : '使用加速器'));
+          const context = { player, enabled, config: loadConfigSafe() };
+          let result;
+          if (auto) result = await toggleNativeFactory(client, protocolFor(client), payload, context);
+          else if (start) result = await startManualFactoryProduction(client, protocolFor(client), payload, { ...context, settings: session.preferences });
+          else result = await speedUpProduction(client, protocolFor(client), payload, { ...context, getSettings: () => session.preferences });
           session.worldRead = null;
           emit(session, result.confirmed ? 'info' : 'warn', result.label, { worldUpdated: true });
           return result;

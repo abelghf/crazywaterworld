@@ -285,9 +285,11 @@ const configGroups = [
     configField('factory.enabled', '总开关'), configField('factory.gain', '自动领取产品'),
     configField('factory.blockedCollectionTypes', '禁止自动领取', 'multi', { catalog: 'collectionBuildings', empty: '未禁止任何建筑类型', help: '按类型选择要保留产物的建筑。挂机会跳过该类型所有建筑的产出、工厂成品或成熟作物。' }),
     configField('factory.produce', '自动生产', 'switch', { help: '按原料、库存、在产和待收数量填充空余队列格。已建成的工厂升级时仍可生产当前等级的配方。' }),
-    configField('factory.cooperateNative', '按需求调整游戏自动生产目标', 'switch', { help:'只控制游戏中已开启的原生自动生产目标；关闭后，普通排产仍由“自动生产”和“按需优先生产”控制。开启时补齐种子及上游需求，保留正在生产队列，目标调整后回读确认并间隔至少60秒，不购买材料。' }),
+    configField('factory.strategy', '排产策略', 'choice', { options: [['smart','新版智能排产（推荐）'],['nativeSimulation','模拟游戏原生自动生产']], help: '智能排产使用账号加成、需求和备货水位。模拟原生按空闲生产位逐件选品，最多补到游戏仓容。' }),
+    configField('factory.simulatedTargets', '模拟原生主产物', 'multi', { catalog: 'factoryProducts', empty: '使用工厂已设目标或首个解锁配方', when: d => d.factory.strategy === 'nativeSimulation', help: '每类工厂可选一个主产物。缺料或满仓时优先选实际耗时小于 5 秒的候补，再选库存最少的。' }),
+    configField('factory.cooperateNative', '按需求调整游戏自动生产目标', 'switch', { when: d => d.factory.strategy !== 'nativeSimulation', help:'只控制游戏中已开启的原生自动生产目标；关闭后，普通排产仍由“自动生产”和“按需优先生产”控制。开启时补齐种子及上游需求，保留正在生产队列，目标调整后回读确认并间隔至少60秒，不购买材料。' }),
     configField('factory.disabledTypes', '禁用工厂', 'multi', { catalog: 'factories', empty: '未选择，允许全部工厂', help: '控制台不再新增生产或加速，已完成产品仍按领取开关处理。游戏内已有的原生自动生产设置保持原状。' }),
-    configField('factory.keepStock', '备货水位', 'number', { unit: '件 / 产品', help: '计入库存、待领取与在产数量，实际不超过游戏仓库上限。0 表示只为需求生产。' }),
+    configField('factory.keepStock', '备货水位', 'number', { when: d => d.factory.strategy !== 'nativeSimulation', unit: '件 / 产品', help: '计入库存、待领取与在产数量，实际不超过游戏仓库上限。0 表示只为需求生产。' }),
     configField('factory.checkEverySeconds', '兜底检查间隔', 'number', { unit: '秒', help: '优先按服务端完工时间和建筑状态推送领取、补产；没有可靠完工时间、缺料、满仓或发生错误时，按此间隔复查。独立于主循环间隔；账号队列占用时等待。' }),
     configField('factory.demandFirst', '按需优先生产', 'switch', { help: '开启后先补所选需求来源。同级需求先选耗时短的产品，有效月卡开启双生产位时可调整同批顺序以缩短工期。关闭后按备货水位从短到长补库存。联盟募兵、红船的独立备料开关仍各自生效。' }),
     configField('factory.demandPriority', '需求优先级', 'priority', { wide: true, help: '按列表顺序优先补料。开启按需优先生产并选择海兽进阶后，同轮进阶投喂、培育喂养和博物馆也按此顺序使用材料。勾选“工厂加速”后，会加速该来源仍缺少的在产物品；移除的来源不会自动补回。' }),
@@ -2086,6 +2088,11 @@ function configMultiselect(spec, id, options = {}) {
       input.onchange = () => {
         if (disabled) return;
         const values = read();
+        if (input.checked && spec.catalog === 'factoryProducts') {
+          const sameType = new Set(available.filter(row => row.factoryType === item.factoryType).map(row => row.value));
+          write([...values.filter(value => !sameType.has(value)), item.value]);
+          paintSummary(); paintList(); return;
+        }
         write(input.checked ? [...values, item.value] : values.filter(value => value !== item.value));
         if (spec.key === 'heroes.heroIds' && item.hidden && !input.checked) { paintSummary(); paintList(); return; }
         paintSummary(); paintFooter(available, matches.length, new Set(read()));
@@ -2391,6 +2398,8 @@ function configSave(event, { automatic = false } = {}) {
     const edited = JSON.stringify(configEditor.draft) !== text;
     const normalized = !edited && JSON.stringify(data.settings) !== text;
     const displayChanged=JSON.stringify(data.rules)!==JSON.stringify(configEditor.data.rules)||JSON.stringify(data.tasks)!==JSON.stringify(configEditor.data.tasks);
+    if (typeof productionPlanOwner !== 'undefined' && productionPlanOwner === account
+      && JSON.stringify(configEditor.baseline?.factory) !== JSON.stringify(data.settings.factory)) resetProductionPlan();
     configEditor.data = data; configEditor.baseline = structuredClone(data.settings);
     configEditor.saveRetries = 0; loopSettingsRevision = data.revision;
     // 在途请求成功只确认它提交的草稿；后续编辑仍需等自己的校验结果。

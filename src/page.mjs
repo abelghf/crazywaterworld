@@ -868,9 +868,13 @@ function renderAccountSelect() {
   if(worldMapOwner!==null&&worldMapOwner!==current)resetWorldMap();
   siliconAccountChanged();
   resourceFieldsAccountChanged();
-  if (productionPlanOwner !== null && (productionPlanOwner !== current || !snapshot.connected || snapshot.paused || disconnected.has(current))) resetProductionPlan();
-  $('production-plan-refresh').disabled = productionPlanBusy || !snapshot.connected || snapshot.paused || disconnected.has(current);
-  if (productionPlanOwner === null) $('production-plan-status').textContent = $('production-plan-refresh').disabled ? '连接账号后可生成计划' : '';
+  const planReady = current && snapshot.connected && !snapshot.syncingProduction && !snapshot.paused && !disconnected.has(current);
+  if (productionPlanOwner !== null && (productionPlanOwner !== current || !planReady)) resetProductionPlan();
+  $('production-plan-refresh').disabled = productionPlanBusy || !planReady;
+  if (productionPlanOwner === null) {
+    $('production-plan-status').textContent = snapshot.syncingProduction ? '正在同步生产状态' : planReady ? '' : '连接账号后自动加载';
+    if (consoleStore.getState().view.page === 'manual') void refreshProductionPlan();
+  }
   renderHostingControl();
   paintConnection();
   $('connect').disabled = snapshot.paused || snapshot.reconnecting || snapshot.connected || connectingAccounts.has(current) || !accounts.length;
@@ -1797,6 +1801,60 @@ function factoryCurrentProduction(factory, recipes) {
   return current;
 }
 
+const pendingNativeFactorySwitches = new Set();
+
+function factoryAutoSwitch(factory) {
+  const account = current, key = JSON.stringify([account, factory.buildingId]);
+  const name = factory.displayName || factory.buildingId;
+  const cell = el('span', 'factory-auto-control');
+  cell.dataset.factoryAuto = key;
+  const button = component('config-switch-template');
+  const status = el('small', 'dim');
+  status.setAttribute('role', 'status');
+  cell.append(button, status);
+  const connected = () => current === account && !!account && snapshot.connected && !snapshot.paused && !disconnected.has(account);
+  cell.updateAutoSwitch = (message = '') => {
+    const control = factory.autoControl, on = factory.autoEnabled;
+    const busy = pendingNativeFactorySwitches.has(key);
+    button.setAttribute('aria-checked', String(on === true));
+    button.dataset.state = on ? 'checked' : 'unchecked';
+    button.setAttribute('aria-label', name + '原生自动生产');
+    button.title = control?.reason || (!control ? '请刷新工厂状态' : (on ? '关闭' : '开启') + name + '原生自动生产 · ' + control.name);
+    cell.title = button.title;
+    button.disabled = busy || !connected() || !control?.key || !!control.reason || on == null;
+    status.textContent = message || (busy ? '切换中…' : on == null ? '未同步' : on ? '已开启' : '未开启');
+  };
+  cell.updateAutoSwitch();
+  button.onclick = async () => {
+    if (button.disabled || !connected() || pendingNativeFactorySwitches.has(key)) return;
+    pendingNativeFactorySwitches.add(key);
+    cell.updateAutoSwitch();
+    let message = '';
+    try {
+      const control = factory.autoControl;
+      const result = await call('/api/world/production-auto', { method:'POST', body:JSON.stringify({
+        buildingId:factory.buildingId, on:!factory.autoEnabled, productId:control.productId, key:control.key, confirm:true,
+      }) });
+      if (result.control) {
+        factory.autoControl = result.control;
+        factory.autoEnabled = result.control.on;
+      }
+      if (!result.confirmed) message = result.label;
+    } catch (error) {
+      message = error.message;
+    } finally {
+      try { if (connected()) await refreshManualWorld(true); }
+      finally {
+        pendingNativeFactorySwitches.delete(key);
+        if (current === account) for (const visible of document.querySelectorAll('[data-factory-auto]')) {
+          if (visible.dataset.factoryAuto === key) visible.updateAutoSwitch(message);
+        }
+      }
+    }
+  };
+  return cell;
+}
+
 function factoryProductionSection(factories, expanded, recipes, accelerators) {
   const headers = ['建筑', '类型', '等级', '当前产物', '自动生产', '游戏排队'];
   const result = table(headers, factories.map(b => {
@@ -1811,7 +1869,7 @@ function factoryProductionSection(factories, expanded, recipes, accelerators) {
     if (first) preview.appendChild(factoryProduct(first, recipes));
     if (queued?.length > 1) preview.appendChild(el('small', 'dim', '共 ' + queued.length + ' 件'));
     return [button, b.typeName || b.type, 'lv' + b.level, factoryCurrentProduction(b, recipes),
-      chip(b.autoEnabled ? 'ready' : 'unknown', b.autoEnabled == null ? '未同步' : b.autoEnabled ? '已开启' : '未开启'), preview];
+      factoryAutoSwitch(b), preview];
   }), 'sea-records');
   const toggleAll = component('ui-button');
   toggleAll.type = 'button';
@@ -2712,7 +2770,10 @@ function activateConsolePage(button, resource = selectedResource) {
       refreshAccountCards();
       pollCapture();
     }
-    if (button.dataset.tab === 'manual') refreshManualWorld();
+    if (target === 'manual') {
+      refreshManualWorld();
+      void refreshProductionPlan();
+    }
     if (button.dataset.tab === 'settings') {
       if (!location.hash.startsWith('#config-group-')) configActivate(configEditor.category);
       void configLoad(); void refreshLoop();
@@ -2782,7 +2843,11 @@ consoleStore.subscribe((state, previous) => {
 boot();
 setInterval(refreshOverview, 20000);
 setInterval(() => { if (!document.hidden && accounts.some(account => account.status?.reconnecting)) paintConnection(); }, 1000);
-document.addEventListener('visibilitychange',()=>{if(!document.hidden){void refreshAccountStatuses();refreshLoop();refreshStages();}});
+document.addEventListener('visibilitychange',()=>{
+  if (document.hidden) return;
+  void refreshAccountStatuses(); refreshLoop(); refreshStages();
+  if (consoleStore.getState().view.page === 'manual') void refreshProductionPlan();
+});
 setInterval(() => { void refreshAccountStatuses(); if (!loopReads) refreshLoop(); }, 3000);
 setInterval(refreshStages, 3000);
 </script>

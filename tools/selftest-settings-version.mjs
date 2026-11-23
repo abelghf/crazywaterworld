@@ -723,6 +723,17 @@ try {
       }
     }
   });
+  test('旧账号默认新版排产，模拟原生策略及主产物可完整导入导出', () => {
+    const old = defaultSettings();
+    delete old.factory.strategy;
+    delete old.factory.simulatedTargets;
+    const updated = importAutomationSettings({format:SETTINGS_FORMAT,version:55,settings:old});
+    assert.equal(updated.factory.strategy,'smart');
+    Object.assign(updated.factory,{strategy:'nativeSimulation',simulatedTargets:['氧气瓶','铜锭']});
+    assert.deepEqual(importAutomationSettings(exportAutomationSettings(updated)).factory,updated.factory);
+    updated.factory.strategy='invalid';
+    assert.throws(()=>validateSettings(updated),error=>!!error.fields?.['factory.strategy']);
+  });
   test('第50版旧存档可读取、导入和保存，满舱航线只在缺项时补齐', () => {
     // 固定旧版导出样本。用当前默认值构造旧存档会掩盖下次新增必填项时遗漏的迁移。
     const legacy = JSON.parse(fs.readFileSync(new URL('./fixtures/automation-settings-v50.json', import.meta.url), 'utf8'));
@@ -735,6 +746,7 @@ try {
       expected.merchant.fullCargoRoutes = value ?? defaultSettings().merchant.fullCargoRoutes;
       expected.treasure.chasePlayerIds = [];
       expected.alliance.memberIds = [];
+      Object.assign(expected.factory,{strategy:'smart',simulatedTargets:[]});
       for (const fleet of expected.silicon.fleets) Object.assign(fleet, { huntPlayerIds: [], safePlayerIds: [] });
       const entry = { settingsVersion: document.version, revision: 7, settings: document.settings };
       fs.writeFileSync(file, JSON.stringify({ version: document.version, accounts: { merchant: entry, other: entry } }));
@@ -828,7 +840,7 @@ try {
     assert.throws(() => validateSettings(settings), error => !!error.fields['alliance.memberIds']);
   });
   test('版本1升级后重复迁移保持一致，保留有效的用户值', () => {
-    assert.equal(SETTINGS_SCHEMA_VERSION, 55);
+    assert.equal(SETTINGS_SCHEMA_VERSION, 56);
     const settings = legacySettings();
     settings.factory.checkEverySeconds = 270;
     settings.resources.diamondDailyLimit = 1234;

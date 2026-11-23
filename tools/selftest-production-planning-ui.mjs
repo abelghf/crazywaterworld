@@ -16,10 +16,13 @@ function fixture() {
   function element(tag = 'div', className = '', value = '') {
     let text = String(value ?? '');
     return {
-      tagName: tag, className, disabled: false, children: [],
+      tagName: tag, className, disabled: false, children: [], attributes: {},
+      style: { setProperty(name, value) { this[name] = value; } },
+      querySelector(selector) { return descendants(this).find(node => '.' + node.className === selector); },
+      setAttribute(name, value) { this.attributes[name] = String(value); },
       get textContent() { return text + this.children.map(child => child.textContent).join(''); },
       set textContent(value) { text = String(value ?? ''); this.children = []; },
-      appendChild(child) { this.children.push(child); return child; },
+      appendChild(child) { this.children.push(child); child.parentElement = this; return child; },
     };
   }
   env.node = id => {
@@ -48,6 +51,7 @@ function fixture() {
     let current = env.current, snapshot = env.snapshot;
     ${script}
     env.reset = resetProductionPlan;
+    env.enter = refreshProductionPlan;
     env.time = productionPlanTime;
     env.duration = productionPlanDuration;
     env.render = renderProductionPlan;
@@ -132,6 +136,35 @@ await test('无需求、读取不全和条件不足时给出对应提示', () =>
   assert.equal(env.duration(3661), '1小时1分1秒');
 });
 
+await test('进页立即展示加载状态，切号时新账号清单不受旧请求影响', async () => {
+  const env = fixture(), first = deferred(), second = deferred();
+  const card = env.node('production-day-card'), body = env.node('production-day-result');
+  card.hidden = true;
+  env.snapshot.syncingProduction = true;
+  await env.enter();
+  assert.equal(card.hidden,false);
+  assert.match(body.textContent,/同步后自动显示/);
+  assert.deepEqual(env.calls,[]);
+  env.snapshot.syncingProduction = false;
+  env.respond = () => first.promise;
+  const older = env.enter();
+  await env.enter();
+  assert.equal(env.calls.length,1);
+  assert.equal(body.attributes['aria-busy'],'true');
+  assert.match(body.textContent,/正在读取/);
+  env.setCurrent('account-b');
+  env.respond = () => second.promise;
+  const newer = env.enter();
+  assert.equal(env.calls.length,2);
+  const reply = name => ({forecast:{startAt:1000,endAt:87400,completions:[],factories:[{id:name,name,runs:[]}]}});
+  second.resolve(reply('乙工厂'));
+  await newer;
+  first.resolve(reply('甲工厂'));
+  await older;
+  assert.equal(env.node('production-day-factory').value,'乙工厂');
+  assert.equal(body.attributes['aria-busy'],'false');
+});
+
 await test('各需求保留状态与备齐时间，跳过的需求不计入完成时间', () => {
   const env = fixture();
   const now = 1767225600;
@@ -149,6 +182,119 @@ await test('各需求保留状态与备齐时间，跳过的需求不计入完�
   ]);
   env.render({ orders: [skipped] });
   assert.match(env.node('production-plan-result').textContent, /本次需求均已跳过/);
+});
+
+function descendants(node) {
+  return [node, ...node.children.flatMap(descendants)];
+}
+
+await test('独立卡片只显示一家工厂，切换与刷新保留选中项，换账号清除', () => {
+  const env = fixture(), startAt = Date.UTC(2026, 10, 23, 15, 59) / 1000;
+  const one = { id:'a', name:'金属厂-1', runs:[
+    {name:'铜锭', from:startAt, to:startAt+2, status:'running', quantity:1, lane:1},
+    {name:'电线', from:startAt+120, to:startAt+180, status:'planned', quantity:1, lane:1},
+  ] };
+  const two = { id:'b', name:'食品厂-1', unknown:'游戏原生接管', runs:[] };
+  const forecast = {startAt, endAt:startAt+86400, strategy:'nativeSimulation', factories:[one,two], completions:[]};
+  const main = env.node('production-plan-result'), card = env.node('production-day-card'), box = env.node('production-day-result');
+  const picker = env.node('production-day-factory'), action = env.node('production-day-picker');
+  env.render({orders:[{label:'居民订单'}], forecast});
+  assert.equal(card.hidden, false);
+  assert.equal(action.hidden, false);
+  assert.deepEqual(picker.children.map(n => [n.value, n.textContent]), [['a', '金属厂-1'], ['b', '食品厂-1']]);
+  assert.equal(picker.value, 'a');
+  assert.match(env.node('production-day-preview').textContent,/金属厂-1.*生产中 · 铜锭 ×1.*计划排队中 · 电线 ×1/);
+  assert.match(main.textContent, /居民订单/);
+  assert.match(box.textContent, /模拟游戏原生 · 北京时间 23:59 起.*预计备齐 0 \/ 1/);
+  assert.match(box.querySelector('.plan-day-totals').textContent, /运行 1分.*空闲 23小时58分/);
+  const [copper, gap, wire] = box.querySelector('.production-batches').children;
+  assert.match(copper.textContent, /铜锭×1.*23:59:00 – 23:59:02.*2秒.*生产中/);
+  assert.match(gap.textContent, /空闲.*23:59 – 次日 00:01/);
+  assert.match(wire.textContent, /电线×1.*次日 00:01 – 次日 00:02.*计划排队中/);
+  assert.equal(box.querySelector('.plan-day-track'), undefined);
+  picker.selectedIndex = 1;
+  picker.onchange();
+  assert.match(env.node('production-day-preview').textContent,/食品厂-1.*游戏原生接管/);
+  assert.match(box.textContent, /待定 24小时.*游戏原生接管/);
+  assert.doesNotMatch(box.textContent, /铜锭|空闲/);
+  picker.selectedIndex = 0;
+  picker.onchange();
+  env.render({forecast:{...forecast, factories:[two,one]}});
+  assert.equal(picker.value, 'a');
+  assert.equal(picker.children.length, 2);
+  assert.deepEqual(env.calls, []);
+  env.changeAccount('account-b');
+  assert.equal(card.hidden, true);
+  assert.equal(action.hidden, true);
+  assert.equal(picker.children.length, 0);
+  assert.equal(box.textContent, '');
+  env.render({forecast:{...forecast, factories:[two,one]}});
+  assert.equal(picker.value, 'b');
+  env.render({forecast:{unavailable:'库存读取失败'}});
+  assert.equal(box.textContent, '库存读取失败');
+  assert.equal(action.hidden, true);
+  env.render({forecast:{...forecast, factories:[]}});
+  assert.match(box.textContent, /没有已建工厂/);
+  assert.equal(picker.onchange, null);
+  env.render({});
+  assert.equal(card.hidden, true);
+  assert.equal(box.textContent, '');
+});
+
+await test('并行的一秒产物完整列出，长任务只列一次，翻页覆盖全部批次', () => {
+  const env = fixture(), startAt = 1767225600;
+  const runs = Array.from({length:25}, (_, i) => ({
+    name:'任务' + i, from:startAt+i, to:startAt+i+1, quantity:1, lane:2, status:['running','queued'][i] ?? 'planned'
+  }));
+  runs.unshift({name:'长任务', from:startAt, to:startAt+86400, quantity:1, lane:1, status:'running', continues:true});
+  env.render({forecast:{startAt,endAt:startAt+86400,completions:[],factories:[{id:'a',name:'材料厂',runs}]}});
+  const box = env.node('production-day-result'), list = box.querySelector('.production-batches');
+  assert.equal(list.children.length, 24);
+  assert.match(list.children[0].textContent, /长任务×1.*24小时以上.*生产中/);
+  assert.match(list.children[1].textContent, /任务0×1.*08:00:00 – 08:00:01.*1秒生产中/);
+  assert.match(list.children[2].textContent, /1秒游戏内排队中/);
+  assert.match(list.children[3].textContent, /1秒计划排队中/);
+  assert.equal(list.children.filter(r => r.textContent.includes('长任务')).length, 1);
+  assert.match(box.querySelector('.plan-day-totals').textContent, /运行 24小时.*空闲 0秒/);
+  box.querySelector('.production-batches-nav').children.at(-1).onclick();
+  assert.equal(list.children.length, 2);
+  assert.match(list.children[1].textContent, /任务24×1.*1秒/);
+});
+
+await test('两个生产位错峰时每批独立，空闲只计共同空档', () => {
+  const env = fixture(), startAt = 1767225600;
+  const runs = [[1,3600,10800],[2,7200,14400]].map(([lane,from,to]) => ({
+    lane, from:startAt+from, to:startAt+to, name:'铜锭', quantity:1, status:'queued'
+  }));
+  env.render({forecast:{startAt,endAt:startAt+86400,completions:[],factories:[{id:'a',name:'金属厂',runs}]}});
+  const box = env.node('production-day-result');
+  assert.deepEqual(box.querySelector('.production-batches').children.map(r => r.className), [
+    'production-batch gap','production-batch queued','production-batch queued','production-batch gap'
+  ]);
+  assert.match(box.querySelector('.plan-day-totals').textContent, /运行 3小时.*空闲 21小时/);
+});
+
+await test('旧版合并批次保留游戏内状态待确认', () => {
+  const env = fixture(), startAt = 1767225600;
+  const runs = [{name:'铜锭', from:startAt, to:startAt+3600, quantity:3, lane:1, existing:true}];
+  env.render({forecast:{startAt,endAt:startAt+86400,completions:[],factories:[{id:'a',name:'金属厂',runs}]}});
+  const first = env.node('production-day-result').querySelector('.production-batches').children[0];
+  assert.match(first.textContent, /游戏内状态待确认/);
+  assert.doesNotMatch(first.textContent, /生产中|游戏内排队中/);
+});
+
+await test('部分订单等待原生工厂时显示已知备齐时间和具体缺口', () => {
+  const env = fixture(), now = 1767225600;
+  env.render({ snapshotTime:now, waitingSupplyCount:1, missingReads:[], orders:[
+    {id:'known',label:'居民订单',completionAt:now+90}, {id:'wait',label:'贸易港',waitingForSupply:true,
+      statusLabel:'等待原生工厂',reason:'等待金属厂-1确认后续产出（铜锭还差 2 件）'},
+  ] });
+  const box = env.node('production-plan-result');
+  assert.match(box.children[0].textContent, /1 笔需求已有备齐时间，1 笔需求等待原生来料/);
+  assert.doesNotMatch(box.textContent, /生产数据还不完整/);
+  assert.equal(env.tables[0].rows[0][2].textContent, env.time(now+90));
+  assert.equal(env.tables[0].rows[1][2].textContent, '等待原生工厂');
+  assert.match(box.textContent, /铜锭还差 2 件/);
 });
 
 await test('展开材料树按每批产量逐级换算，共用材料和循环配方可安全查看', () => {
@@ -237,4 +383,14 @@ await test('读取期间暂停、网络或主动断开后丢弃旧结果', async
   }
 });
 
+await test('没有订单时单列本轮补货与实际水位', () => {
+  const env = fixture();
+  env.render({ orders: [], stockTarget: 65, status: 'optimal', timeline: [
+    { kind: 'restock', itemId: '铜锭', machineName: '金属厂', quantity: 1, startAt: 10, finishAt: 12 },
+  ] });
+  const content = env.node('production-plan-result').textContent;
+  assert.match(content, /当前按水位备货，每种加工品目标 65 件/);
+  assert.match(content, /补至库存水位 · 每种 65 件/);
+  assert.doesNotMatch(content, /建议生产顺序/);
+});
 console.log('排产界面测试通过 ' + passed + ' 项');

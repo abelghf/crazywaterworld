@@ -14,7 +14,7 @@ function amounts(entries) {
 }
 
 /** Check factory unlocks and disabled facilities against the current snapshot. */
-export function createProductionEligibility(config, { buildings, settings, stock, incoming = new Map() }) {
+export function createProductionEligibility(config, { buildings, settings, stock, incoming = new Map(), uncertainSupply }) {
   const factories = new Map(rows(config, 'BuildingProduceCfg').map(recipe => [recipe.itemId, recipe]));
   const crops = new Map(rows(config, 'FarmlandPlantCfg').map(recipe => [recipe.id, recipe]));
   const types = [...new Set([...factories.values()].map(recipe => recipe.buildType).filter(Boolean))]
@@ -71,6 +71,13 @@ export function createProductionEligibility(config, { buildings, settings, stock
       const factory = factories.get(id);
       const crop = crops.get(id);
       if (!factory && !crop) return;
+      // The planner supplies these only for products whose next batch it cannot schedule.
+      // Stock and confirmed incoming have already covered their share of this requirement.
+      const uncertain = uncertainSupply?.get(id);
+      if (uncertain) {
+        blockers.set(id, { ...uncertain, itemId: id, missingQuantity: missing + (blockers.get(id)?.missingQuantity ?? 0) });
+        return;
+      }
       if (factory) {
         const reason = factoryBlocker(factory);
         if (reason === null) { complete = false; return; }
