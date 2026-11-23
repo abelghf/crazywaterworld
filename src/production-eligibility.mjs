@@ -1,6 +1,36 @@
 const rows = (config, name) => config?.tables?.[name]?.data ?? [];
 const quantity = value => Number.isSafeInteger(value) && value >= 0;
 
+// 与客户端FactoryUtil一致：活动工坊只使用服务器limitTimeItem开放窗口。
+export function factoryRecipeAvailability(recipe, festivals, now) {
+  if (!recipe) return {allowed:false,reason:'配方未确认',signature:'missing'};
+  if (!recipe.limitType && recipe.buildType!=='活动工厂') return {allowed:true,signature:'ordinary'};
+  if (!Array.isArray(festivals)) return {allowed:false,reason:'活动配方开放状态未同步',signature:'unknown'};
+  const windows=festivals.flatMap(event=>(event.festivalData?.limitTimeItem??[]).filter(row=>row.item===recipe.limitType).map(row=>({item:row.item,openTime:row.openTime,closeTime:row.closeTime})));
+  const valid=windows.filter(w=>Number.isSafeInteger(w.openTime)&&Number.isSafeInteger(w.closeTime)&&w.openTime>0&&w.closeTime>=w.openTime);
+  const allowed=valid.some(w=>w.openTime<=now&&now<=w.closeTime);
+  return {allowed,reason:allowed?'':'当前活动未开放此配方',signature:JSON.stringify(valid)};
+}
+
+export function factoryRecipeCosts(recipe) {
+  if (!Array.isArray(recipe?.costItem)) return null;
+  const costs = new Map();
+  for (const pair of recipe.costItem) {
+    if (!Array.isArray(pair)) return null;
+    const [id, num] = pair;
+    if (typeof id !== 'string' || !id || !Number.isSafeInteger(num) || num < 0) return null;
+    const total = (costs.get(id) ?? 0) + num;
+    if (!Number.isSafeInteger(total)) return null;
+    if (total) costs.set(id, total);
+  }
+  return Array.from(costs, ([id, num]) => ({ id, num }));
+}
+
+export function insertionRecipeReady(recipe, level, festivals, now, available) {
+  return Number.isSafeInteger(recipe?.unlockLevel) && recipe.unlockLevel <= level && factoryRecipeAvailability(recipe, festivals, now).allowed
+    && factoryRecipeCosts(recipe)?.every(cost => available(cost.id) >= cost.num);
+}
+
 function amounts(entries) {
   if (!Array.isArray(entries)) return null;
   const result = [];

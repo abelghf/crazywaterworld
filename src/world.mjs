@@ -28,22 +28,14 @@ import { captureFarmMaterialState, farmInventory, settleFarmMaterialState } from
 import { runFactoryProductionBatch, confirmFactoryProductionBeforeHarvest } from './factory-production.mjs';
 import { readOrderReservedStock } from './order-reservations.mjs';
 import { activityProductionEnabled } from './activity-automation.mjs';
-import { createProductionEligibility } from './production-eligibility.mjs';
+import { createProductionEligibility, factoryRecipeAvailability, factoryRecipeCosts, insertionRecipeReady } from './production-eligibility.mjs';
 import { simulateNativeFactoryStarts, simulatedFactoryQueueKey } from './factory-native-simulation.mjs';
 import { createFactoryDispatch, shortFactoryFeed } from './factory-dispatch.mjs';
 import { factoryInsertions } from './factory-insert-store.mjs';
+import { insertionYieldsToProduction } from './factory-insertion-queue.mjs';
 import { commitFactoryLane, createProductionTiming, nextFactoryLane, observedProductionDurations, observedProductionHeroes } from './production-timing.mjs';
 
-// 与客户端FactoryUtil一致：活动工坊只使用服务器limitTimeItem开放窗口。
-export function factoryRecipeAvailability(recipe, festivals, now) {
-  if (!recipe) return {allowed:false,reason:'配方未确认',signature:'missing'};
-  if (!recipe.limitType && recipe.buildType!=='活动工厂') return {allowed:true,signature:'ordinary'};
-  if (!Array.isArray(festivals)) return {allowed:false,reason:'活动配方开放状态未同步',signature:'unknown'};
-  const windows=festivals.flatMap(event=>(event.festivalData?.limitTimeItem??[]).filter(row=>row.item===recipe.limitType).map(row=>({item:row.item,openTime:row.openTime,closeTime:row.closeTime})));
-  const valid=windows.filter(w=>Number.isSafeInteger(w.openTime)&&Number.isSafeInteger(w.closeTime)&&w.openTime>0&&w.closeTime>=w.openTime);
-  const allowed=valid.some(w=>w.openTime<=now&&now<=w.closeTime);
-  return {allowed,reason:allowed?'':'当前活动未开放此配方',signature:JSON.stringify(valid)};
-}
+export { factoryRecipeAvailability, factoryRecipeCosts };
 const factoryFailures = new WeakMap();
 
 export const SPEED_UP_ITEM = '加速器';
@@ -95,20 +87,6 @@ export function inventoryStockRows(survey, config) {
   })).filter(row => row.num > 0 || (row.cap && row.num === 0
     && (row.capKind === 'recovery' ? survey.resourceStockKnown : survey.stockKnown)))
     .sort((a, b) => b.num - a.num);
-}
-
-export function factoryRecipeCosts(recipe) {
-  if (!Array.isArray(recipe?.costItem)) return null;
-  const costs = new Map();
-  for (const pair of recipe.costItem) {
-    if (!Array.isArray(pair)) return null;
-    const [id, num] = pair;
-    if (typeof id !== 'string' || !id || !Number.isSafeInteger(num) || num < 0) return null;
-    const total = (costs.get(id) ?? 0) + num;
-    if (!Number.isSafeInteger(total)) return null;
-    if (total) costs.set(id, total);
-  }
-  return Array.from(costs, ([id, num]) => ({ id, num }));
 }
 
 // Bind a click to the displayed recipe and actual factory state. Including
@@ -1162,7 +1140,16 @@ export function planWorld(survey, {
   const priorities = demandPriority.map((_, i) => i).filter(i => demandPriority[i] === 'factory' ? i === stockRank && stockTarget > 0
     : [...detailedNeeds.values()].some(need => (need.productionBySource[demandPriority[i]] ?? 0) > 0));
   const isNative = b => b.factory.autoProductId && (survey.autoProduceForever || survey.autoProduceEndTime > (survey.serverNow ?? now));
-  const facilities = survey.factories.filter(b => b.level > 0 && !blockedFactory(b) && !survey.factoryInsertions?.[b.buildingId]);
+  const fullForInsertion = id => survey.stockCap > 0 && survey.stockKnown !== false
+    && warehouseCount(id) + (incoming.get(id) ?? 0) >= survey.stockCap;
+  const facilities = survey.factories.filter(b => {
+    if (!(b.level > 0) || blockedFactory(b)) return false;
+    const entry = survey.factoryInsertions?.[b.buildingId];
+    if (!entry) return true;
+    const time = survey.serverNow ?? now;
+    const canMake = id => insertionRecipeReady(produceRows.find(row => row.itemId === id), b.level, survey.festivals, time, free);
+    return !isNative(b) && insertionYieldsToProduction(entry, time, fullForInsertion, canMake);
+  });
   const usableRows = new Set(facilities.flatMap(b => produceRows.filter(r => r.buildType === b.type && r.unlockLevel <= b.level)));
   const downstream = new Map();
   for (const row of usableRows) {
@@ -1261,7 +1248,9 @@ export function planWorld(survey, {
     }
     if (settings && !settings.factory.produce) {factoryReasons.set(b.buildingId,'普通排产关闭；原生协同只调整已开启的自动目标');return;}
     const state = dispatch.queues.get(b);
-    if (state.count >= survey.factorySlots) return;
+    const slotLimit = survey.factoryInsertions?.[b.buildingId]
+      ? Math.min(survey.factorySlots, b.factory.factoryQ.length + 1) : survey.factorySlots;
+    if (state.count >= slotLimit) return;
     const initialFinishes = [...state.finishes];
     const localRows = produceRows.filter(row => row.buildType === b.type && row.unlockLevel <= b.level);
     if (!localRows.length) {
@@ -1278,7 +1267,7 @@ export function planWorld(survey, {
       for (const [item, n] of row.costItem ?? []) protectedInputs.set(item, (protectedInputs.get(item) ?? 0) + n);
     }
     const jobs = [];
-    for (let slot = state.count; slot < survey.factorySlots; slot++) {
+    for (let slot = state.count; slot < slotLimit; slot++) {
       const waiting = higher.filter(row => row.buildType === b.type && row.unlockLevel <= b.level)
         .flatMap(row => {
           // A full output cannot start until someone spends it. Ingredients
@@ -1437,7 +1426,7 @@ export function planWorld(survey, {
     if (simulateNative) {
       const picks = settings.factory.produce ? simulateNativeFactoryStarts({
         buildings: ordinary, recipes: produceRows, targets: settings.factory.simulatedTargets, timing,
-        now: survey.serverNow ?? now, cap: survey.stockCap, slots: survey.factorySlots,
+        now: survey.serverNow ?? now, cap: survey.stockCap, slots: survey.factorySlots, insertions:survey.factoryInsertions,
         available: id => free(id) - (feedStock.get(id) ?? 0), owned: id => warehouseCount(id) + (incoming.get(id) ?? 0),
       }) : [];
       for (const { building, row, seconds, primary, laneUntil } of picks) {

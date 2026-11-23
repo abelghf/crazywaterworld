@@ -707,7 +707,7 @@ try {
       assert.equal(recovered.upperBound, 0);
     } finally { await f.close(); }
   });
-  await test('按所选批次内的位置插入，保留在产与队首，库存和仓容在确认时重读', async () => {
+  await test('按所选批次内的位置插入，保留在产与队首，确认时重读可用原料', async () => {
     const f = await fixture();
     try {
       const { OnWaterRequest:water, AllItemRequest:bag } = f.state.responses;
@@ -736,11 +736,19 @@ try {
       const {forecast} = await f.api('world/production-plan');
       const run = forecast.factories[0].runs.find(r => r.status === 'queued');
       const target = {buildingId:'1食品厂', planKey:forecast.insertKey, id:run.id, from:run.from, lane:run.lane, status:run.status};
-      const options = await f.api('world/production-insert-options',target);
-      assert.deepEqual([options.count,options.products[0].max], [3,2]);
       const submit = () => f.response('world/production-insert',{...target, offset:1, productId:'面包',quantity:2,confirm:true});
-      stock.num = 45;
-      assert.match((await submit()).data.error, /最多可插入 1 件/);
+      const round = deferred();
+      f.session().queueTail = round.promise;
+      let queuedSubmit;
+      try {
+        const options = await f.api('world/production-insert-options',target);
+        assert.deepEqual([options.count,options.products[0].max], [3,2]);
+        queuedSubmit = submit();
+        await waitFor(() => f.session().waitingJobs > 0);
+        assert.deepEqual(writes, []);
+        wheat.num = 9;
+      } finally { round.resolve(); }
+      assert.match((await queuedSubmit).data.error, /最多可插入 1 件/);
       stock.num = 43; wheat.num = 4;
       assert.match((await submit()).data.error, /最多可插入 0 件/);
       wheat.num = 14;
@@ -767,7 +775,7 @@ try {
       const { advanceFactoryInsertion } = await import('../src/factory-insertion.mjs');
       const { factoryInsertions } = await import('../src/factory-insert-store.mjs');
       const player = f.session().player;
-      const pending = () => factoryInsertions(player)['1食品厂']?.jobs.length ?? 0;
+      const pending = () => factoryInsertions(player)['1食品厂']?.jobs.reduce((sum, job) => sum + (job.quantity ?? 1), 0) ?? 0;
       assert.equal(pending(),2);
       const resumed = () => advanceFactoryInsertion(client,protocol,{player,config,enabled:()=>true,settings:f.session().preferences},'1食品厂');
       await resumed();
@@ -800,6 +808,80 @@ try {
       assert.equal(writes.length,size+1);
       assert.match(writes.at(-1),/^排/);
     } finally { await f.close(); }
+  });
+  await test('成品满仓仍可插单，后项先做，回包延迟及分次腾仓时按原数量补回', async () => {
+    const f = await fixture();
+    const { factoryInsertions, saveFactoryInsertion } = await import('../src/factory-insert-store.mjs');
+    const { advanceFactoryInsertion } = await import('../src/factory-insertion.mjs');
+    const { getConfig } = await import('../src/config.mjs');
+    const config = getConfig(), recipes = config.tables.BuildingProduceCfg.data;
+    recipes.push({itemId:'饼干',buildType:'食品厂',unlockLevel:1,produceTime:60,costItem:[['面包',1]]},
+      {itemId:'淡水',buildType:'食品厂',unlockLevel:1,produceTime:20,costItem:[]});
+    try {
+      await f.api('connect', {});
+      await updateSettings(f, settings => { settings.loop.world = false; });
+      const { client, player, preferences:settings } = f.session(), buildingId = '1食品厂';
+      const { OnWaterRequest:water, AllItemRequest:bag } = f.state.responses;
+      water.workerOrder = [];
+      f.state.responses.CargoShipsRequest.ship = [];
+      f.state.responses.WeekInfoRequest.activityTime = [];
+      const bread = bag.items.find(row => row.itemId === '面包'), wheat = bag.items.find(row => row.itemId === '小麦');
+      bread.num = 48;
+      const q = water.building[0].factory.factoryQ;
+      water.building.push({buildingId:'2食品厂',level:1,factory:{factoryQ:[{idx:1,productId:'面包',finishTime:f.state.now+600}],
+        finishedProducts:[{id:'面包',num:1}]}});
+      saveFactoryInsertion(player, buildingId, undefined, {jobs:[{id:'饼干',pinned:true}]});
+      const forecast = (await f.api('world/production-plan')).forecast;
+      const run = forecast.factories.find(row => row.id === buildingId).runs[0];
+      const target = {buildingId,planKey:forecast.insertKey,from:run.from,id:run.id,lane:run.lane,status:run.status};
+      const { products } = await f.api('world/production-insert-options', target);
+      assert.equal(products.find(p => p.id === '淡水').max, null);
+      assert(products.find(p => p.id === '面包').max >= 3);
+      const record = () => factoryInsertions(player)[buildingId];
+      const resume = () => advanceFactoryInsertion(client, protocol, {player,config,settings,enabled:()=>true}, buildingId);
+      const writes = [];
+      client.sendWatch = async (name, body, options) => {
+        assert.equal(name,'StartFactoryProduceRequest');
+        try { options.beforeSend(); } catch (error) { throw Object.assign(error,{notSent:true}); }
+        writes.push(body.productId);
+        if (body.productId === '面包') {
+          wheat.num -= 5;
+          q.push({idx:q.length+1,productId:'面包'});
+        } else if (writes.length > 1) {
+          bread.num--;
+          q.push({idx:q.length+1,productId:'饼干'});
+        }
+      };
+      await f.api('world/production-insert',{...target,quantity:3,productId:'面包',confirm:true});
+      assert.deepEqual(writes,['饼干']);
+      assert.equal(record().flight.jobIndex,1);
+      await resume();
+      assert.deepEqual(writes,['饼干']);
+      bread.num--; q.push({idx:1,productId:'饼干'});
+      await resume();
+      assert.deepEqual(writes,['饼干','面包']);
+      assert.deepEqual(record().jobs,[{id:'面包',quantity:2,pinned:true}]);
+      assert.match(record().note,/满仓/);
+      const { runFactoryProductionBatch } = await import('../src/factory-production.mjs');
+      const ordinary = {kind:'startProduce',request:'StartFactoryProduceRequest',body:{buildingId,productId:'饼干'},
+        costs:[{id:'面包',num:1}],factoryStrategy:'smart',demandDriven:true};
+      const fallback = () => runFactoryProductionBatch(client,protocol,[ordinary],{config,player,enabled:()=>true,
+        settings:{...settings,loop:{...settings.loop,world:true}}});
+      assert((await fallback()).results[0].ok);
+      assert.match((await fallback()).results[0].error,/插单/, '普通排产消耗面包后，应把位置让回原插单');
+      bread.num--;
+      await resume();
+      assert.deepEqual(writes,['饼干','面包','饼干','面包','面包'],JSON.stringify(record()));
+      assert.equal(record(),undefined);
+      q.length = 0;
+      bag.items.push({itemId:'淡水',num:50});
+      const empty = (await f.api('world/production-plan')).forecast;
+      await f.api('world/production-insert',{buildingId,planKey:empty.insertKey,from:empty.startAt,status:'gap',
+        quantity:1000000000,productId:'淡水',confirm:true});
+      assert.equal(record().jobs.length,1);
+      assert.equal(record().jobs[0].quantity,1000000000);
+      assert.equal(writes.length,5);
+    } finally { recipes.splice(-2); await f.close(); }
   });
   console.log('排产 HTTP 测试通过 ' + passed + ' 项');
 } finally {

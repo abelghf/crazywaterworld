@@ -1,7 +1,9 @@
 import { setImmediate as yieldToLoop } from 'node:timers/promises';
-import { planWorld, displayBuilding, factoryRecipeAvailability } from './world.mjs';
+import { planWorld, displayBuilding } from './world.mjs';
+import { insertionRecipeReady } from './production-eligibility.mjs';
 import { createProductionTiming, nextFactoryLane, commitFactoryLane } from './production-timing.mjs';
 import { resourceReserve } from './automation-policy.mjs';
+import { consumeInsertionUnit, insertionYieldsToProduction, nextInsertionIndex } from './factory-insertion-queue.mjs';
 
 const hour = 3600;
 const day = 24 * hour;
@@ -143,7 +145,7 @@ export async function forecastProductionDay(
       finishes: queue.finishes,
       chart,
       trace,
-      manual: entry?.jobs.slice() ?? [],
+      manual: entry?.jobs.map((job, sourceIndex) => ({ ...job, sourceIndex })) ?? [],
       insertNote: entry?.note,
       editing: !!(entry?.remove?.length || entry?.flight),
       unknown,
@@ -273,7 +275,8 @@ export async function forecastProductionDay(
       for (const item of order.requirements) add(survey.weekOrder, item.id, item.num);
     }
     const extraDemand = remainder.filter(o => !['merchant', 'cargo'].includes(o.source)).concat(stockNeeds);
-    survey.factoryInsertions = Object.fromEntries(factories.filter(f => f.manual.length || f.editing).map(f => [f.building.buildingId, true]));
+    survey.factoryInsertions = Object.fromEntries(factories.filter(f => f.manual.length || f.editing)
+      .map(f => [f.building.buildingId, { jobs:f.manual, flight:f.editing }]));
     const plan = planWorld(survey, {
       config,
       settings: dispatchSettings,
@@ -287,18 +290,24 @@ export async function forecastProductionDay(
       for (const r of f.building.factory.finishedProducts) add(occupied, r.id, r.num);
     }
     const liveTiming = timingAt(now);
-    const manualSteps = [];
-    for (const [buildingId, f] of manualFacilities) {
-      for (const job of f.manual.slice(0, Math.max(0, f.capacity - f.jobs.length))) {
-        const recipe = recipes.get(job.id);
-        if (!recipe || job.at > now || recipe.unlockLevel > f.building.level ||
-          !factoryRecipeAvailability(recipe, survey.festivals, now).allowed) break;
-        manualSteps.push({ job, request: 'StartFactoryProduceRequest', body: { buildingId, productId: job.id },
-          costs: recipe.costItem.map(([id, num]) => ({ id, num })) });
+    const isFull = id => (stock.get(id) ?? 0) + (occupied.get(id) ?? 0) >= snapshot.stockCap;
+    const free = id => have(id) - (resourceReserve(settings,id) || 0);
+    const ready = (factory, id) => insertionRecipeReady(recipes.get(id), factory.building.level, survey.festivals, now, free);
+    function* productionSteps() {
+      for (const [buildingId, f] of manualFacilities) {
+        while (f.jobs.length < f.capacity && f.manual.length) {
+          const index = nextInsertionIndex(f.manual, now, isFull, id => ready(f,id)), job = f.manual[index];
+          if (!job || !ready(f,job.id)) break;
+          const queued = f.jobs.length;
+          yield { job, index, request:'StartFactoryProduceRequest', body:{ buildingId, productId:job.id },
+            costs:recipes.get(job.id).costItem.map(([id, num]) => ({ id, num })) };
+          if (f.jobs.length === queued) break;
+        }
       }
+      yield* plan.actions;
     }
     let manualAdvanced = false;
-    for (const step of [...manualSteps, ...plan.actions]) {
+    for (const step of productionSteps()) {
       if (step.request !== 'StartFactoryProduceRequest' && step.request !== 'FarmPlantRequest') continue;
       if (step.costs.some(r => have(r.id) - (resourceReserve(settings, r.id) || 0) < r.num)) continue;
       if (step.request === 'FarmPlantRequest') {
@@ -313,9 +322,8 @@ export async function forecastProductionDay(
         const { buildingId, productId } = step.body,
           f = (step.job ? manualFacilities : active).get(buildingId);
         if (
-          !f || (step.job && f.manual[0] !== step.job) ||
-          f.jobs.length >= f.capacity ||
-          (stock.get(productId) ?? 0) + (occupied.get(productId) ?? 0) >= snapshot.stockCap
+          !f || f.jobs.length >= f.capacity || isFull(productId) ||
+          (!step.job && !insertionYieldsToProduction(survey.factoryInsertions[buildingId], now, isFull, id => ready(f,id)))
         )
           continue;
         const duration = liveTiming.factory(recipes.get(productId), { building: f.building }).seconds;
@@ -328,8 +336,9 @@ export async function forecastProductionDay(
         f.jobs.push({ id: productId, idx: ++f.serial, start: lane.start, end: lane.finish });
         f.chart.record(productId, lane.start, lane.finish, 'planned', lane.index);
         f.trace?.units.push({ id: productId, lane: lane.index + 1, from: lane.start, to: lane.finish,
-          at: now, status: 'planned', manual: !!step.job });
-        if (step.job) { f.manual.shift(); manualAdvanced = true; }
+          at: now, status: 'planned', manual: !!step.job, sourceIndex:step.job?.sourceIndex });
+        if (step.job) consumeInsertionUnit(f.manual, step.index);
+        if (step.job || f.manual.length) manualAdvanced = true;
         add(occupied, productId, 1);
       }
       for (const r of step.costs) add(stock, r.id, -r.num);
@@ -338,7 +347,7 @@ export async function forecastProductionDay(
     const revisit = settings.factory.checkEverySeconds ?? 30;
     const events = [
       ...factories.flatMap(f => f.jobs.map(j => j.end)),
-      ...factories.map(f => f.manual[0]?.at),
+      ...factories.map(f => f.manual.find(job => job.at > now)?.at),
       ...farms.map(f => f.farm?.ripeTime),
       ...(survey.festivals ?? []).flatMap(event =>
         (event.festivalData?.limitTimeItem ?? []).flatMap(w => [w.openTime, w.closeTime + 1]),

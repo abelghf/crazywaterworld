@@ -5,7 +5,7 @@ export const simulatedFactoryQueueKey = factory => JSON.stringify([
 ]);
 
 // Local picks for this dispatch only. Reconsider after confirmed completions.
-export function simulateNativeFactoryStarts({ buildings, recipes, targets = [], timing, now, cap, slots, available, owned }) {
+export function simulateNativeFactoryStarts({ buildings, recipes, targets = [], timing, now, cap, slots, available, owned, insertions }) {
   const costs = new Map(), additions = new Map(), jobs = [];
   const stock = id => owned(id) + (additions.get(id) ?? 0);
   const preferred = new Set(targets);
@@ -18,7 +18,8 @@ export function simulateNativeFactoryStarts({ buildings, recipes, targets = [], 
       ?? local.find(row => row.itemId === factory.autoProductId) ?? local[0];
     const queue = timing.factoryQueue(building);
     if (queue.missing.length) continue;
-    const limit = Math.min(slots, queue.lanes.count) - factory.factoryQ.length;
+    const freeLanes = Math.min(slots, queue.lanes.count) - factory.factoryQ.length;
+    const limit = insertions?.[building.buildingId] ? Math.min(1, freeLanes) : freeLanes;
     const candidates = local.map(row => ({ row, seconds: timing.factory(row, { building }).seconds }));
     for (let i = 0; i < limit; i++) {
       const choices = candidates.filter(({ row, seconds }) => seconds > 0 && stock(row.itemId) < cap

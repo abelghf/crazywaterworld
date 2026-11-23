@@ -4395,19 +4395,19 @@ export function createConsole({ host = '127.0.0.1', port = 17321, onLog, recover
         if (!session.client?.connected || session.paused || session.productionSyncRequired) throw new Error('请先连接并同步当前账号，再生成排产计划');
         if (!session.productionPlanRead) {
           const client = session.client, generation = session.generation, player = session.player;
-          const view = settingsView(session), settingsKey = JSON.stringify(view.settings);
+          const settings = effectiveSettings(session), settingsKey = JSON.stringify(settings);
           const insertEpoch = session.factoryInsertEpoch ?? 0;
           const accountCurrent = () => session.client === client && client.connected && !session.paused
             && session.player === player
             && session.generation === generation && !session.productionSyncRequired;
           const enabled = () => accountCurrent() && (session.factoryInsertEpoch ?? 0) === insertEpoch
-            && JSON.stringify(settingsView(session).settings) === settingsKey;
+            && JSON.stringify(effectiveSettings(session)) === settingsKey;
           const job = readJob(session, async () => {
             if (!enabled()) throw new Error('账号或排产设置已变化，请重新计算');
             const config = loadConfigSafe();
             const timing = watchProductionTimings(client, loadConfigSafe);
             await refreshOrderMaterialSpends(client, player, { enabled, request: 'PetFeedRequest' });
-            const snapshot = await readProductionSnapshot(client, protocolFor(client), config, player, view.settings,
+            const snapshot = await readProductionSnapshot(client, protocolFor(client), config, player, settings,
               { enabled, observedDurations: timing.snapshot() });
             if (!enabled()) throw new Error('账号或排产设置已变化，请重新计算');
             if (loadConfigSafe() !== config) throw new Error('游戏配置已更新，请重新计算');
@@ -4416,9 +4416,9 @@ export function createConsole({ host = '127.0.0.1', port = 17321, onLog, recover
             return { snapshot, config, pendingMaterials, insertions:factoryInsertions(player) };
           }).then(async ({ snapshot, config, pendingMaterials, insertions }) => {
             if (!enabled()) throw new Error('账号或排产设置已变化，请重新计算');
-            const result = planProduction(snapshot, config, view.settings, { pendingMaterials });
+            const result = planProduction(snapshot, config, settings, { pendingMaterials });
             const anchors = new Map();
-            result.forecast = await forecastProductionDay(snapshot, config, view.settings, result.orders, {
+            result.forecast = await forecastProductionDay(snapshot, config, settings, result.orders, {
               anchors, insertions, pendingMaterials, checkCurrent() { if (!accountCurrent()) throw new Error('账号已变化，请重新计算'); },
             });
             if (result.strategy === 'nativeSimulation' && !result.forecast.partial) {
@@ -4445,26 +4445,29 @@ export function createConsole({ host = '127.0.0.1', port = 17321, onLog, recover
         const enabled = () => quote && session.factoryInsertPlan === quote && quote.enabled()
           && quote.config === loadConfigSafe() && target.planKey === quote.forecast.insertKey;
         if (!enabled()) throw new Error('请重新生成当前账号的排产计划后插单');
+        const { client, player, generation } = session;
+        const context = { config:quote.config, player, enabled, settings:session.preferences };
+        const prepare = () => prepareFactoryInsertion(client, protocolFor(client), context, quote, target, submit);
+        if (!submit) {
+          json(await readJob(session, prepare, { recoverFormation:false }));
+          return;
+        }
         const result = await enqueue(session, async () => {
           if (!enabled()) throw new Error('请重新生成当前账号的排产计划后插单');
-          const { client, player, generation } = session;
-          const context = { config:quote.config, player, enabled, settings:session.preferences };
-          const saved = await prepareFactoryInsertion(client, protocolFor(client), context, quote, target, submit);
-          if (submit) {
-            session.factoryInsertEpoch = (session.factoryInsertEpoch ?? 0) + 1;
-            session.factoryInsertPlan = null;
-            session.productionPlanRead = null;
-            session.worldRead = null;
-            context.enabled = () => session.client === client && client.connected && session.player === player
-              && session.generation === generation && !session.paused && !session.productionSyncRequired;
-            try {
-              const message = await advanceFactoryInsertion(client, protocolFor(client), context, target.buildingId);
-              if (message) saved.label = message;
-            } catch (error) { saved.label += '，等待核对游戏队列：' + error.message; }
-            emit(session, 'info', saved.label, { worldUpdated:true });
-          }
+          const saved = await prepare();
+          session.factoryInsertEpoch = (session.factoryInsertEpoch ?? 0) + 1;
+          session.factoryInsertPlan = null;
+          session.productionPlanRead = null;
+          session.worldRead = null;
+          context.enabled = () => session.client === client && client.connected && session.player === player
+            && session.generation === generation && !session.paused && !session.productionSyncRequired;
+          try {
+            const message = await advanceFactoryInsertion(client, protocolFor(client), context, target.buildingId);
+            if (message) saved.label = message;
+          } catch (error) { saved.label += '，等待核对游戏队列：' + error.message; }
+          emit(session, 'info', saved.label, { worldUpdated:true });
           return saved;
-        }, submit ? '插入工厂排产' : '读取可插单数量', { recoverFormation:submit });
+        }, '插入工厂排产');
         json(result);
         return;
       }

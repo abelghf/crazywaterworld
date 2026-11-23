@@ -684,6 +684,30 @@ test('缺少库存时保留原始读取错误', () => {
   console.log('通过：指定空档在到时后开始，计划批内前插保留此前与此后的手动任务');
 }
 
+for (const strategy of ['smart','nativeSimulation']) {
+  const {snapshot,settings} = fixture(), id = '1食品厂';
+  settings.factory.strategy = strategy;
+  settings.factory.keepStock = 2;
+  settings.factory.simulatedTargets = ['饼干'];
+  settings.farm.enabled = false;
+  snapshot.stockCap = 2;
+  snapshot.inventory.push({id:'面包',num:2});
+  const cookie = {itemId:'饼干',buildType:'食品厂',unlockLevel:1,produceTime:60,costItem:[['面包',1]]};
+  const cake = {...cookie,itemId:'蛋糕',costItem:[['牛奶',1]]};
+  const configWithCookies = {...config,tables:{...config.tables,BuildingProduceCfg:table([...config.tables.BuildingProduceCfg.data,cookie,cake])}};
+  snapshot.recipes.push({...snapshot.recipes[0], id:'饼干', productId:'饼干', costs:[{id:'面包',num:1}]});
+  const entry = {revision:'v1',jobs:[{id:'面包',quantity:3,pinned:true},{id:'饼干',pinned:true},{id:'蛋糕',pinned:true}]};
+  const anchors = new Map();
+  const day = await forecastProductionDay(snapshot,configWithCookies,settings,[],{anchors,insertions:{[id]:entry}});
+  const trace = anchors.get(id), units = trace.units, f = {...day.factories[0],startAt:day.startAt,endAt:day.endAt};
+  assert.deepEqual(units.slice(0,4).map(u => [u.id,u.sourceIndex]),[['饼干',1],['面包',0],['饼干',undefined],['面包',0]]);
+  const first = locateFactoryInsertion(trace,f,f.runs[0],entry);
+  assert.deepEqual(first.before,[entry.jobs[0]], '对越过满仓产物的任务再插单，也保留满仓批次的位置');
+  assert.deepEqual(first.after,entry.jobs.slice(1));
+  assert.equal(entry.jobs[0].quantity,3);
+  console.log('通过：满仓插单让位给后面任务及普通排产，消耗后优先补回 · '+strategy);
+}
+
 {
   const { snapshot, settings } = fixture();
   const factory = snapshot.factories[0];

@@ -3,9 +3,11 @@ import { linkOperationResult } from './operation-log.mjs';
 import { AutomationSkip, createActionGuard, resourceReserve, worldActionAllowed } from './automation-policy.mjs';
 import { goldAccountKey } from './gold-reservations.mjs';
 import { farmInventory } from './farm-planting.mjs';
-import { pendingOrderMaterialSpends, settleOrderMaterialState } from './order-reservations.mjs';
+import { pendingOrderMaterialSpends, readOrderReservedStock, settleOrderMaterialState } from './order-reservations.mjs';
+import { insertionRecipeReady } from './production-eligibility.mjs';
 import { factoryProductionSnapshot, factoryProductionOperation } from './spend-evidence.mjs';
 import { factoryInsertions } from './factory-insert-store.mjs';
+import { insertionYieldsToProduction } from './factory-insertion-queue.mjs';
 import { emitDiagnostic } from './trace-log.mjs';
 import { simulatedFactoryQueueKey } from './factory-native-simulation.mjs';
 
@@ -20,6 +22,31 @@ export function factoryStockCapacity(config, player) {
   return cap;
 }
 const clock = client => Math.floor((Date.now() + (client.serverClockOffsetMs || 0)) / 1000);
+export function confirmedFactoryIncoming(water) {
+  const incoming = new Map();
+  for (const row of water.building) if (row.factory) {
+    if (row.level === 0 && Array.isArray(row.factory.factoryQ) && !row.factory.factoryQ.length
+      && Array.isArray(row.factory.finishedProducts) && !row.factory.finishedProducts.length) continue;
+    const other = factoryProductionSnapshot(water, row.buildingId);
+    if (!other) throw new AutomationSkip('其他工厂的在产和待收库存不完整');
+    for (const [id, count] of other.totals) incoming.set(id, (incoming.get(id) ?? 0) + count);
+  }
+  return incoming;
+}
+
+// Only alternatives behind the head need an ingredient comparison. Read it
+// before the new operation reserves its own materials.
+export async function readInsertionAlternativeStock(client, protocol, config, entry, context, isFull) {
+  if (!entry || entry.flight || entry.remove?.length || entry.jobs.length < 2) return null;
+  const ids = new Set(), now = clock(client), recipes = rows(config, 'BuildingProduceCfg');
+  for (const job of entry.jobs.slice(1)) {
+    if (job.at > now) break;
+    if (job.id === entry.jobs[0].id || isFull?.(job.id)) continue;
+    for (const [id, num] of recipes.find(r => r.itemId === job.id)?.costItem ?? []) if (num > 0) ids.add(id);
+  }
+  if (!ids.size) return null;
+  return (await readOrderReservedStock(client, protocol, config, { ...context, itemIds:ids })).available;
+}
 const costsOf = steps => {
   const costs = new Map();
   for (const step of steps) for (const row of step.costs ?? []) {
@@ -180,6 +207,9 @@ export async function runFactoryProductionBatch(client, protocol, steps, {
     };
     for (const step of selected) await check(step);
     if (checkSnapshot) { await checkSnapshot(snapshot.building); ensureLive(); }
+    const insertion = selected[0].factoryStrategy ? factoryInsertions(player)[buildingId] : null;
+    const alternativeStock = await readInsertionAlternativeStock(client, protocol, config, insertion, {player,settings:current(),enabled:live});
+    ensureLive();
     batch = { attempted: [], sealed: false };
     batch.operation = factoryProductionOperation(water, buildingId, batch);
     batchStep = { ...selected[0], costs: costsOf(selected), factoryBatch: batch, label: (selected[0].displayFactory || buildingId) + '连续排产' };
@@ -190,16 +220,8 @@ export async function runFactoryProductionBatch(client, protocol, steps, {
     const stock = batch.checkedStock ?? farmInventory(normalize(await client.request('AllItemRequest', {}, 'AllItemResponse')));
     ensureLive();
     const cap = factoryStockCapacity(config, player);
-    const projected = new Map();
-    for (const row of water.building ?? []) if (row.factory) {
-      // A legal level-zero factory message may carry two empty repeated
-      // fields. Its known zero stock must not block an unrelated built factory.
-      if (row.level === 0 && Array.isArray(row.factory.factoryQ) && !row.factory.factoryQ.length
-        && Array.isArray(row.factory.finishedProducts) && !row.factory.finishedProducts.length) continue;
-      const other = factoryProductionSnapshot(water, row.buildingId);
-      if (!other) throw new AutomationSkip('其他工厂的在产和待收库存不完整');
-      for (const [id, count] of other.totals) projected.set(id, (projected.get(id) ?? 0) + count);
-    }
+    const incoming = confirmedFactoryIncoming(water);
+    const projected = new Map(incoming);
     for (const step of selected) {
       const id = step.body.productId;
       projected.set(id, (projected.get(id) ?? 0) + 1);
@@ -222,7 +244,15 @@ export async function runFactoryProductionBatch(client, protocol, steps, {
           if (!worldActionAllowed(current(), step, config)) throw new AutomationSkip('排产策略或目标已变化，等待重新排产');
           if (step.latestStart != null && clock(client)>step.latestStart) throw new AutomationSkip('第二生产位剩余时间不足，等待重新排产');
           if (step.beforeInsertSend) step.beforeInsertSend();
-          else if (factoryInsertions(player)[buildingId]) throw new AutomationSkip('工厂正在执行排产清单中的插单');
+          else {
+            const entry = factoryInsertions(player)[buildingId];
+            const isFull = id => (stock.get(id) ?? 0) + (incoming.get(id) ?? 0) >= cap;
+            const now = clock(client);
+            const canMake = id => insertionRecipeReady(rows(config,'BuildingProduceCfg').find(row => row.itemId === id),
+              snapshot.building.level, client.festivals, now, item => ((alternativeStock ?? stock).get(item) ?? 0) - resourceReserve(current(),item));
+            if (entry && (entry.revision !== insertion?.revision || batch.attempted.length > 1 ||
+              !insertionYieldsToProduction(entry, now, isFull, canMake))) throw new AutomationSkip('工厂正在执行排产清单中的插单');
+          }
         } });
         const entry = { step, ok: false, status: 'unknown', sent, reason: '批次已发送，等待统一核对' };
         results.push(entry); attemptedEntries.add(entry);

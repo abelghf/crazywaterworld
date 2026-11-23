@@ -250,9 +250,27 @@ async function openBatchInsertion(day, factory, run, status, panel) {
   if (!valid()) return;
   const target = { planKey: day.insertKey, buildingId: factory.id, from: run.from, lane: run.lane, status, id: run.id };
   const post = (path, body) => call('/api/world/production-insert' + path, { method: 'POST', body: JSON.stringify(body) });
-  const { products, count, reordersQueue } = await post('-options', target);
-  if (!valid()) return;
   const form = el('div', 'production-insert-form');
+  const notice = el('p', 'plan-day-note', '正在核对库存和可插入数量…');
+  notice.setAttribute('role', 'status');
+  form.appendChild(notice);
+  openConfirm(factory.name + ' · 插入排产', [form], submitInsertion, '确认插入');
+  $('m-ok').disabled = true;
+  const dialogCurrent = () => $('modal').open && $('m-body').firstElementChild === form;
+  let options;
+  try {
+    options = await post('-options', target);
+  } catch (error) {
+    if (dialogCurrent()) notice.textContent = valid() ? error.message : '排产计划已变化，请重新选择。';
+    return;
+  }
+  if (!dialogCurrent()) return;
+  if (!valid()) {
+    notice.textContent = '排产计划已变化，请重新选择。';
+    return;
+  }
+  const { products, count, reordersQueue } = options;
+  clear(form);
   if (reordersQueue) form.appendChild(el('p', 'plan-day-note', '插入位置之后的游戏待排任务会先撤下，再按原顺序补回。'));
   function field(label, node) {
     const wrap = el('label', null, label);
@@ -271,9 +289,9 @@ async function openBatchInsertion(day, factory, run, status, panel) {
   }
   const select = field('生产物品', el('select'));
   for (const product of products) {
-    const option = el('option', null, product.name + '（最多 ' + product.max + ' 件）');
+    const option = el('option', null, product.name + (product.max === null ? '（无需原料）' : '（最多 ' + product.max + ' 件）'));
     option.value = product.id;
-    option.disabled = !product.max;
+    option.disabled = product.max === 0;
     select.appendChild(option);
   }
   const qty = field('数量', el('input'));
@@ -283,26 +301,26 @@ async function openBatchInsertion(day, factory, run, status, panel) {
   const chosen = () => products.find(p => p.id === select.value);
   const offset = () => position ? Number(position.value) - 1 : 0;
   const validPosition = () => Number.isSafeInteger(offset()) && offset() >= 0 && offset() < count;
+  const validQuantity = (n, product = chosen()) => product && Number.isSafeInteger(n) && n >= 1 && (product.max === null || n <= product.max);
   function update() {
-    const max = chosen()?.max ?? 0;
-    qty.max = String(max);
-    const n = Number(qty.value);
-    $('m-ok').disabled = !validPosition() || !Number.isSafeInteger(n) || n < 1 || n > max;
-    hint.textContent = max ? '按可用原料和成品剩余仓容，最多可插入 ' + max + ' 件。' : '当前原料或成品仓容不足。';
+    const max = chosen()?.max;
+    qty.max = max == null ? '' : String(max);
+    $('m-ok').disabled = !validPosition() || !validQuantity(Number(qty.value));
+    hint.textContent = !chosen() || max === 0 ? '当前可用原料不足。' : '成品满仓时先做后面能做的任务，腾出仓容后优先补产。';
   }
   select.onchange = qty.oninput = update;
   if (position) position.oninput = update;
-  openConfirm(factory.name + ' · 插入排产', [form], async () => {
+  async function submitInsertion() {
     const quantity = Number(qty.value);
-    if (!valid() || !validPosition() || !Number.isSafeInteger(quantity) || quantity < 1 || quantity > (chosen()?.max ?? 0)) throw Error('库存或计划已变化，请重新选择');
+    if (!valid() || !validPosition() || !validQuantity(quantity)) throw Error('库存或计划已变化，请重新选择');
     try {
       const result = await post('', { ...target, offset: offset(), productId: select.value, quantity, confirm: true });
       if (account === current) $('hint').textContent = result.label;
     } finally {
       if (current === account && productionAccountReady()) await refreshProductionPlan({ afterInsert:true });
     }
-  }, '确认插入');
-  select.value = products.find(p => p.max > 0)?.id ?? '';
+  }
+  select.value = products.find(p => p.max === null || p.max > 0)?.id ?? '';
   update();
 }
 

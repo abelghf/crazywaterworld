@@ -19,6 +19,7 @@ function fixture() {
       tagName: tag, className, disabled: false, children: [], attributes: {},
       style: { setProperty(name, value) { this[name] = value; } },
       querySelector(selector) { return descendants(this).find(node => '.' + node.className === selector); },
+      get firstElementChild() { return this.children[0]; },
       setAttribute(name, value) { this.attributes[name] = String(value); },
       get textContent() { return text + this.children.map(child => child.textContent).join(''); },
       set textContent(value) { text = String(value ?? ''); this.children = []; },
@@ -48,6 +49,13 @@ function fixture() {
     const $ = env.node, el = env.element, clear = env.clear, table = env.table;
     const chip = (state, label) => el('span', state, label);
     const call = env.call, reportError = error => env.errors.push(error), disconnected = env.disconnected;
+    const openConfirm = (title, nodes, onOk) => {
+      clear($('m-body'));
+      nodes.forEach(node => $('m-body').appendChild(node));
+      $('m-ok').onclick = onOk;
+      $('m-ok').disabled = false;
+      $('modal').open = true;
+    };
     let current = env.current, snapshot = env.snapshot;
     ${script}
     env.reset = resetProductionPlan;
@@ -187,6 +195,46 @@ await test('各需求保留状态与备齐时间，跳过的需求不计入完�
 function descendants(node) {
   return [node, ...node.children.flatMap(descendants)];
 }
+
+await test('插单立即弹窗，读取期间可关闭，旧请求不会覆盖新弹窗', async () => {
+  const env = fixture(), first = deferred(), second = deferred();
+  const startAt = 1767225600, factory = {id:'a', name:'食品厂', runs:[]};
+  env.render({forecast:{startAt, endAt:startAt+86400, completions:[], insertKey:'plan', factories:[factory]}});
+  const panel = env.node('production-day-result').querySelector('.plan-day-panel');
+  panel.isConnected = true;
+  const insert = panel.querySelector('.production-batch-insert');
+  const dialog = env.node('modal'), body = env.node('m-body'), ok = env.node('m-ok');
+  env.respond = () => first.promise;
+  const older = insert.onclick();
+  assert(dialog.open && ok.disabled);
+  assert.match(body.textContent, /正在核对库存/);
+  dialog.open = false;
+  env.respond = () => second.promise;
+  const newer = insert.onclick();
+  second.resolve({products:[{id:'面包',name:'面包',max:2},{id:'淡水',name:'淡水',max:null}], count:1});
+  await newer;
+  assert(!ok.disabled);
+  assert.match(body.textContent, /面包.*最多 2 件/);
+  const qty = descendants(body).find(node => node.tagName === 'input');
+  const select = descendants(body).find(node => node.tagName === 'select');
+  qty.value = '100';
+  qty.oninput();
+  assert(ok.disabled);
+  select.value = '淡水';
+  select.onchange();
+  assert(!ok.disabled);
+  assert.equal(qty.max,'');
+  assert.match(body.textContent,/淡水（无需原料）/);
+  first.reject(new Error('已关闭弹窗的请求失败'));
+  await older;
+  assert(!ok.disabled);
+  assert.doesNotMatch(body.textContent, /失败|正在核对库存/);
+  env.respond = async () => { throw new Error('库存未同步'); };
+  await insert.onclick();
+  assert.match(body.textContent, /库存未同步/);
+  assert(ok.disabled);
+  assert.deepEqual(env.calls, Array(3).fill('/api/world/production-insert-options'));
+});
 
 await test('独立卡片只显示一家工厂，切换与刷新保留选中项，换账号清除', () => {
   const env = fixture(), startAt = Date.UTC(2026, 10, 23, 15, 59) / 1000;
