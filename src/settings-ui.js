@@ -158,7 +158,7 @@ const configGroups = [
     configField('alliance.memberIds','指定帮助的盟友','players',{ parent:'alliance.autoHelp',when:d=>d.alliance.mutual, nameList:'alliance.memberKeywords', help:'按昵称勾选盟友，控制台自动保存角色 ID。角色改名后仍可匹配。ID 与下方昵称关键词命中任一项即可，两项均空时可帮助所有盟友。'}),
     configField('alliance.memberKeywords','补充盟友昵称关键词','names',{ parent: 'alliance.autoHelp',when:d=>d.alliance.mutual,help:'每行一个关键词，忽略大小写；与角色 ID 同时留空表示不限制。'}),
     configField('alliance.stockReserve','赠送后物料保留','number',{ parent: 'alliance.autoHelp',unit:'件',when:d=>d.alliance.mutual}),
-    configField('alliance.helpDailyLimit','每日赠送上限','number',{ parent: 'alliance.autoHelp',unit:'次',when:d=>d.alliance.mutual,help:'连续处理符合物料、昵称和库存限制的盟友求助，直到达到本工具每日赠送上限；暂无可赠送求助时等待后续检查。0 表示不赠送。'}),
+    configField('alliance.helpDailyLimit','每日赠送上限','number',{ parent: 'alliance.autoHelp',unit:'次',when:d=>d.alliance.mutual,help:'按本工具今日确认成功的赠送次数计算。赠送失败会跳过该条求助，继续处理其他合格求助。达到此上限或游戏提示当日赠送已满时停止赠送。0 表示不赠送。'}),
     configField('alliance.autoAsk','自动求助物料','switch',{ parent: 'alliance.mutual',when:d=>d.alliance.mutual,help:'向盟友发布物料求助，等待盟友赠送。与自动送出物料独立；收到的援助由联盟互助总开关控制自动领取。'}),
     configField('alliance.askDailyLimit','每日求助次数','number',{ parent: 'alliance.autoAsk',unit:'次',when:d=>d.alliance.mutual,help:'同一轮连续发起求助，直到游戏今日已用次数达到设定值，包含手动求助；超过游戏每日上限时按游戏上限执行。设为20且今日已求助5次时，再发起15次。0 表示不发起求助。'}),
     configField('alliance.requestMaterials','主动求助物料','multi',{ parent: 'alliance.autoAsk',catalog:'materials',empty:'未选择，按当前缺料请求',when:d=>d.alliance.mutual&&d.alliance.mutualMode==='custom',help:'选定后可在当前不缺料时请求；仍遵守服务器共享的每日求助次数。'}),
