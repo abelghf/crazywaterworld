@@ -159,7 +159,11 @@ function paintSiliconAction(action, body, footer) {
   }
   if (!action.fleetId) {
     const message = el('p', 'dim', quote.reason || '暂无可用舰队');
-    message.setAttribute('role', 'status'); body.append(message); return;
+    message.setAttribute('role', 'status'); body.append(message);
+    for (const fleet of quote.fleets) {
+      if (fleet.reason && fleet.reason !== quote.reason) body.append(el('p', 'dim', fleet.name + ' · ' + fleet.reason));
+    }
+    return;
   }
   if (quote.reason) body.append(el('p', 'warn', quote.reason));
   const field = el('div', 'silicon-fleet-choice'), picker = el('cw-select'), select = el('select');
