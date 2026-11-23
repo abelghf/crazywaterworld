@@ -28,7 +28,7 @@ function fixture(at = now) {
   const state = { period: event.period,
     cargo: { cargoLv: 1, cityId: 10, moveToCityId: 20, moveStartTime: at - 2700, moveEndTime: at + 4500 },
     player: { coins: 1000, profit: 2000, goods: [{ pid: 1, goodsId: 1001, num: 100, buyPrice: 10, cityId: 10 }] } };
-  const settings = { merchant: { autoSpeedUp: true, speedUpMinProfit: 1000, keepPointers: 1, estimateDiscountPercent: 10 } };
+  const settings = { merchant: { fullCargoRoutes: false, autoSpeedUp: true, speedUpMinProfit: 1000, keepPointers: 1, estimateDiscountPercent: 10 } };
   const radar = { radar: [{ cityId: 10, specGoodsId: 1001 }, { cityId: 20, specGoodsId: 1002 }] };
   const stock = new Map([[pointer, 4]]), calls = [], reports = [];
   const player = { playerId: String(80000 + id), worldId: '2002001001', guildId: '1001', level: 37 };
@@ -577,6 +577,18 @@ try {
     assert.equal(merchantSpeedMatches(expected, arrived, now), false);
     f.state.cargo.moveEndTime -= 10;
     assert.equal(merchantSpeedMatches(expected, f.state, now), false);
+  });
+  await test('满舱航线前期自然到港时保留指针，进入配置的收尾窗口才按已开启模式加速', () => {
+    const f = fixture(now - 8 * 3600);
+    Object.assign(f.settings.merchant, { fullCargoRoutes: true, speedUpMode: 'full', liquidationMinutes: 120 });
+    assert.equal(f.plan().kind, 'none');
+    f.event.endTime = f.now + 7100;
+    assert.equal(f.plan().kind, 'speed');
+    f.settings.merchant.autoSpeedUp = false;
+    assert.equal(f.plan().kind, 'none');
+    const closing = fixture();
+    Object.assign(closing.settings.merchant, { fullCargoRoutes: true, speedUpMode: 'full' });
+    assert.equal(closing.plan().useNum, 2, '收盘救航只用赶得及成交的根数');
   });
   console.log('海商王指针测试通过：' + passed + ' 项');
 } finally {

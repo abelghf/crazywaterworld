@@ -27,7 +27,7 @@ const config = { tables: {
 } };
 function fixture() {
   const id = ++serial, settings = defaultSettings(), calls = [], reports = [];
-  Object.assign(settings.merchant, { autoSpeedUp:true, autoBuyPointers:true, speedUpMode:'refresh', speedUpMinProfit:100, pointerDailyDiamondLimit:4000 });
+  Object.assign(settings.merchant, { fullCargoRoutes:false, autoSpeedUp:true, autoBuyPointers:true, speedUpMode:'refresh', speedUpMinProfit:100, pointerDailyDiamondLimit:4000 });
   Object.assign(settings.resources, {allowDiamonds:true,diamondDailyLimit:10000});
   const event = { period:1001,startTime:at-86400,endTime:at+86400 }, file = path.join(folder, 'usage-'+id+'.json');
   const state = { period:1001,player:{coins:1000,profit:2000,buySpeedTimes:0,goods:[{pid:1,goodsId:1001,num:100,buyPrice:10,cityId:10}]},

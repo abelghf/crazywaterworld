@@ -12,6 +12,7 @@ const lineupScript = readFileSync(new URL('./lineup-editor.js', import.meta.url)
 const lineupCss = readFileSync(new URL('./lineup-editor.css', import.meta.url), 'utf8');
 const settingsScript = readFileSync(new URL('./settings-ui.js', import.meta.url), 'utf8');
 const runtimeOverviewScript = readFileSync(new URL('./runtime-overview-ui.js', import.meta.url), 'utf8');
+const merchantIntelScript = readFileSync(new URL('./merchant-intel-ui.js', import.meta.url), 'utf8');
 const activitiesScript = readFileSync(new URL('./ui/activities.js', import.meta.url), 'utf8');
 const settingsCss = readFileSync(new URL('./settings.css', import.meta.url), 'utf8');
 const giftCodeScript=readFileSync(new URL('./gift-codes-ui.js',import.meta.url),'utf8');
@@ -1248,6 +1249,7 @@ async function pirateAdvanceCommand(action) {
 $('pirate-manual-once').onclick=()=>pirateAdvanceCommand('once');
 $('pirate-advance-start').onclick=()=>pirateAdvanceCommand('start');
 $('pirate-advance-stop').onclick=()=>pirateAdvanceCommand('stop');
+${merchantIntelScript}
 ${runtimeOverviewScript}
 function renderLoop(data) {
   renderAutomationOverview(data);

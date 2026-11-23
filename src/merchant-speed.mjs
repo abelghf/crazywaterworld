@@ -16,7 +16,7 @@ const settingsOf = ctx => fullSettingsOf(ctx).merchant ?? {};
 const stampSettings = ctx => {
   const full = fullSettingsOf(ctx), settings = full.merchant ?? {};
   return JSON.stringify([
-    settings.autoSpeedUp, settings.speedUpMinProfit, settings.keepPointers, settings.estimateDiscountPercent,
+    settings.autoSpeedUp, settings.speedUpMinProfit, settings.keepPointers, settings.estimateDiscountPercent, settings.fullCargoRoutes, settings.liquidationMinutes,
     settings.quoteMaxAgeSeconds, settings.speedUpMode, settings.guardLastPointer, settings.speedUpMaxPerLeg, full.loop?.everySeconds, ctx.everyMs
     , settings.dailyPointerLimit, settings.refreshWindowMinutes, settings.autoBuyPointers, settings.pointerDailyDiamondLimit, settings.profitLimit,
     settings.minExpectedProfit, settings.liquidationMinutes, settings.maxLossPercent, settings.refreshWaitSeconds,
@@ -71,9 +71,13 @@ export function planMerchantSpeed(config, event, state, radar, stock, settings, 
   const deadline = tradeDeadline(config, event, time);
   if (deadline === null) return none('不在开放交易时段');
   const actionSeconds = Math.max(60, Number.isFinite(options.actionSeconds) ? Math.ceil(options.actionSeconds) : 60);
-  const mode = settings.speedUpMode ?? 'profit';
+  const savingPointers = (settings.fullCargoRoutes ?? MERCHANT_DEFAULTS.fullCargoRoutes) &&
+    event.endTime - time > (settings.liquidationMinutes ?? MERCHANT_DEFAULTS.liquidationMinutes) * 60;
+  if (savingPointers && (!state.player?.goods?.length || cargo.moveEndTime + state.player.goods.length * actionSeconds < deadline))
+    return none('满舱航线可自然到港成交，保留指针用于收尾');
+  const mode = savingPointers ? 'deadline' : settings.speedUpMode ?? 'profit';
   const perPointer = merchantPointerSeconds(config);
-  const guard = settings.guardLastPointer === true && perPointer && cargo.moveEndTime - time <= perPointer;
+  const guard = !savingPointers && settings.guardLastPointer === true && perPointer && cargo.moveEndTime - time <= perPointer;
   const arrivalPolicy = guard ? 'guard' : ['race', 'full'].includes(mode) ? mode : null;
   const refreshMode = ['refresh', 'arrival'].includes(mode);
   const timing = merchantTiming(config, event, time);

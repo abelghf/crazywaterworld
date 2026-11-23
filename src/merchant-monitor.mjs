@@ -116,7 +116,11 @@ export function watchMerchant(client) {
         if (positive(timing.nextRefreshAt) && timing.nextRefreshAt > time) deadlines.push(timing.nextRefreshAt);
         if (positive(timing.tradeStartTime) && timing.tradeStartTime > time) deadlines.push(timing.tradeStartTime);
       }
-      if (positive(input.plan?.nextCheckAt) && input.plan.nextCheckAt > time) deadlines.push(input.plan.nextCheckAt);
+      if (positive(input.plan?.nextCheckAt) && input.plan.nextCheckAt > time) {
+        deadlines.push(input.plan.nextCheckAt);
+        if (settings?.fullCargoRoutes && (['WAIT_REFRESH', 'WAIT_DEPARTURE'].includes(input.plan.mode) || input.plan.kind === 'buy'))
+          priorityAt = Math.min(priorityAt || Infinity, input.plan.nextCheckAt);
+      }
       nextAt = Math.max(time + 1, Math.min(...deadlines)); dirty = false;
       return nextAt;
     },

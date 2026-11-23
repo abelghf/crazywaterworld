@@ -57,6 +57,14 @@ function integration({ mainEveryMs = 3600000 } = {}) {
 }
 
 try {
+  await test('满舱卡点与刷新前采购均能在长监控间隔内准时唤醒', () => {
+    const monitor = watchMerchant(new EventEmitter()), time = wall / 1000;
+    for (const plan of [{ kind: 'wait', mode: 'WAIT_DEPARTURE' }, { kind: 'wait', mode: 'WAIT_REFRESH' }, { kind: 'buy' }]) {
+      monitor.observe({ time, settings: { fullCargoRoutes: true, monitorSeconds: 300 }, plan: { ...plan, nextCheckAt: time + 23 } });
+      assert.equal(monitor.nextCheckAt, time + 23);
+      assert.equal(monitor.priorityAt, time + 23);
+    }
+  });
   await test('最后一根在窗口边界唤醒，原先同港的船改线使快照失效', () => {
     const client = new EventEmitter(), monitor = watchMerchant(client), off = monitor.subscribe(() => {});
     const now = wall / 1000;

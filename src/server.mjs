@@ -19,6 +19,7 @@ import { readResourceFieldsOverview, previewResourceField, runResourceFieldShort
 import {activityRankCatalog,readActivityRanking} from './activity-rankings.mjs';
 import {readActivityStatistics} from './activity-statistics.mjs';
 import { merchantActivity, readMerchantStatus, readMerchantOverview, readMerchantJournal, merchantJournalSummary } from './merchant-activity.mjs';
+import { saveMerchantIntel } from './merchant-intel.mjs';
 import { watchMerchant } from './merchant-monitor.mjs';
 import { giftCodeStatus, giftCodeSummary, startGiftCodes, startGiftCodeBatch } from './gift-codes.mjs';
 import { publicGiftCodes } from './gift-code-library.mjs';
@@ -3418,6 +3419,15 @@ export function createConsole({ host = '127.0.0.1', port = 17321, onLog, recover
         for(const {done,session} of started)done.then(()=>emit(session,'info','礼包兑换完成，请查看账号结果汇总'),()=>emit(session,'error','礼包兑换中断，请核对游戏内奖励'));
         if(started.length>1)Promise.allSettled(started.map(result=>result.done)).then(()=>emit(null,'info','批量礼包兑换结束：共 '+started.length+' 个账号，请查看账号结果汇总'));
         json({accepted:started.length,results:results.map(({id,title,accepted,error})=>({id,title,accepted,error}))});return;
+      }
+      if (route === 'POST /api/merchant/intel') {
+        const { session } = scoped_(parsed), client = session.client, player = session.player;
+        const enabled = () => client?.connected && session.client === client && session.player === player && !session.paused;
+        if (!enabled()) throw Error('请先连接当前角色再保存港口情报');
+        const payload = jsonBody();
+        const result = await readJob(session, () => saveMerchantIntel(client, loadConfigSafe(), player, usageFor(session), payload, enabled));
+        watchMerchant(client).invalidate('手动港口情报已更新');
+        json(result); return;
       }
       if(route==='GET /api/merchant/history'){
         const { session } = scoped_(parsed), ledger = usageFor(session);
