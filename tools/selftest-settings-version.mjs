@@ -700,8 +700,31 @@ try {
       assert.deepEqual(migrateSettingsVersion(settings, version), expected);
     }
   });
+  test('VIP 只保存总开关，旧配置保留总开关选择，原生任务兼容任一领奖开关', () => {
+    for (const vip of [true, false]) {
+      for (const vipDaily of [true, false]) {
+        for (const vipDailyGift of [true, false]) {
+          const old = defaultSettings();
+          old.activityAutomation.vip = vip;
+          Object.assign(old.schedule, { vipDaily, vipDailyGift });
+          const restored = importAutomationSettings({ format: SETTINGS_FORMAT, version: 49, settings: old });
+          assert.deepEqual(restored, validateSettings(old));
+          assert.equal(restored.activityAutomation.vip, vip);
+          assert(!Object.hasOwn(restored.schedule, 'vipDaily'));
+          assert(!Object.hasOwn(restored.schedule, 'vipDailyGift'));
+          const tasks = nativeTaskValues(restored, old.schedule);
+          assert.equal(tasks.vipDaily, vip);
+          assert(!Object.hasOwn(tasks, 'vipDailyGift'));
+          const native = { vipDaily, vipDailyGift };
+          assert.equal(settingsFromNative(native).activityAutomation.vip, vipDaily || vipDailyGift);
+          delete old.activityAutomation;
+          assert.equal(importAutomationSettings({ format: SETTINGS_FORMAT, version: 1, settings: old }).activityAutomation.vip, vipDaily || vipDailyGift);
+        }
+      }
+    }
+  });
   test('版本1升级后重复迁移保持一致，保留有效的用户值', () => {
-    assert.equal(SETTINGS_SCHEMA_VERSION, 49);
+    assert.equal(SETTINGS_SCHEMA_VERSION, 50);
     const settings = legacySettings();
     settings.factory.checkEverySeconds = 270;
     settings.resources.diamondDailyLimit = 1234;
