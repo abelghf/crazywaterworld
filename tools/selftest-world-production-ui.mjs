@@ -18,6 +18,7 @@ function element(tag = 'div', className = '', value = '') {
   let text = String(value ?? '');
   const node = {
     tagName: tag, className, children: [], dataset: {}, attributes: {},
+    style: { setProperty(name, value) { this[name] = value; } },
     get textContent() { return text + this.children.map(child => child.textContent).join(' '); },
     set textContent(value) { text = String(value ?? ''); this.children = []; },
     appendChild(child) { this.children.push(child); child.parent = this; return child; },
@@ -180,6 +181,32 @@ test('海面依次展示工厂、农田、空位，活动工坊并入工厂表�
   assert.deepEqual(env.tables[1].headers, ['农田', '等级', '当前作物', '状态与计时']);
   assert.deepEqual(env.tables[1].rows.map(row => row[0]?.text ?? row[0]), ['1农田', '2农田', '10农田']);
   assert.equal(JSON.stringify(data), original, '展示排序不能修改服务器快照');
+});
+
+test('居民订单按账号每日上限显示交付进度，空订单列表也能查看', () => {
+  const env = fixture();
+  const box = env.node('world-orders');
+  for (const [orderNum, target, detail] of [
+    [0, 40, '今日还可交 40 单'],
+    [37, 40, '今日还可交 3 单'],
+    [37, 45, '今日还可交 8 单'],
+    [45, 45, '今日已达上限'],
+    [43, 40, '今日已达上限'],
+  ]) {
+    env.render(worldData(env, { orderOfTheDay: { orderNum, dailyLimit: target } }));
+    assert(box.textContent.includes(detail));
+    const ring = box.querySelector('[role="progressbar"]');
+    assert.equal(ring.children[0].textContent, orderNum + '/' + target);
+    assert.equal(ring.children[1].textContent, '每日上限');
+    assert.equal(ring.attributes['aria-valuemax'], String(target));
+    assert.equal(ring.attributes['aria-valuenow'], String(Math.min(orderNum, target)));
+    assert.equal(ring.style['--order-fill'], Math.min(orderNum / target, 1) * 100 + '%');
+  }
+  env.render(worldData(env, { orderOfTheDay: { orderNum: 3, tier: 6, reqNums: [6, 12] } }));
+  assert.equal(box.textContent, '今日已完成 3 单 · 每日上限未同步');
+  assert.equal(box.querySelector('[role="progressbar"]'), null);
+  env.refreshUnavailable('account');
+  assert.equal(box.textContent, '');
 });
 
 test('居民订单以材料标签和逐项需缺留数量展示缺口，关闭自动交付也显示缺料', () => {

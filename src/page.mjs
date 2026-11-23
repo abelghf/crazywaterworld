@@ -1458,8 +1458,7 @@ function residentOrderButton(order) {
   button.dataset.residentOrder = String(order.index);
   const ready = Boolean(order.orderKey) && order.manualDecision?.status === 'ready';
   button.disabled = pending || !ready || !account || snapshot.paused || disconnected.has(account);
-  button.title = pending ? '账号忙时自动排队，结果见运行日志'
-    : ready ? '提交这份居民订单' : order.manualDecision?.reason || '请先刷新订单状态';
+  button.title = pending ? '账号忙时自动排队，结果见运行日志' : order.manualDecision?.reason || '请先刷新订单状态';
   button.setAttribute('aria-label', '提交' + (order.workerName || '居民') + '的订单 #' + order.index);
   button.onclick = async () => {
     if (button.disabled || pendingResidentOrders.has(key) || current !== account || snapshot.paused || disconnected.has(account)) return;
@@ -1882,6 +1881,34 @@ function buildingListSection(title, className, content, collapsed) {
   return buildingSection(title, className, content, button);
 }
 
+function residentOrderProgress(daily) {
+  if (!Number.isSafeInteger(daily?.orderNum) || daily.orderNum < 0) {
+    return el('p', 'dim', '今日交付进度未同步');
+  }
+  const count = daily.orderNum;
+  const target = daily.dailyLimit;
+  if (!Number.isSafeInteger(target) || target <= 0) return el('p', '', '今日已完成 ' + fmt(count) + ' 单 · 每日上限未同步');
+
+  const box = el('div', 'resident-order-progress');
+  const ring = el('div', 'resident-order-ring');
+  const filled = Math.min(count, target);
+  ring.style.setProperty('--order-fill', (filled / target * 100) + '%');
+  ring.setAttribute('role', 'progressbar');
+  ring.setAttribute('aria-label', '今日居民订单交付进度');
+  ring.setAttribute('aria-valuemin', '0');
+  ring.setAttribute('aria-valuemax', String(target));
+  ring.setAttribute('aria-valuenow', String(filled));
+  ring.title = '今日已交付 ' + fmt(count) + ' 单，每日上限 ' + fmt(target) + ' 单';
+  ring.setAttribute('aria-valuetext', ring.title);
+  const fraction = el('strong', '', fmt(count));
+  fraction.appendChild(el('small', '', '/' + fmt(target)));
+  ring.append(fraction, el('span', '', '每日上限'));
+
+  const status = count >= target ? '今日已达上限' : '今日还可交 ' + fmt(target - count) + ' 单';
+  box.append(ring, el('span', 'resident-order-remaining', status));
+  return box;
+}
+
 function renderWorld(data) {
   stateActions.setGameData(current, 'world', data);
   orderClockOffset=Number.isFinite(data.serverNow)?data.serverNow*1000-Date.now():0;
@@ -1939,6 +1966,7 @@ function renderWorld(data) {
     (button || $('tab-manual')).focus({ preventScroll: true });
   }
   const obox = clear($('world-orders'));
+  if (data.orderOfTheDay || data.orders.length) obox.appendChild(residentOrderProgress(data.orderOfTheDay));
   if (data.orders.length) {
     const ordersTable = table(['订单', '居民', '需求', '挂机交付', '手动操作'], data.orders.map((o) => [
       '#' + o.index,

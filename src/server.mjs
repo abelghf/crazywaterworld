@@ -98,7 +98,7 @@ import { appointments } from './appointments.mjs';
 import { surveyDailies, runDailies, formatSurvey, canClaimDailyReward } from './dailies.mjs';
 import { dailySingleState, addDailyOptions, runDailySingle } from './daily-single.mjs';
 import { surveyTasks, runTasks, formatTaskPlan, selectTaskSettings } from './tasks.mjs';
-import { makeTypeResolver, displayBuilding, weekFactoryInfo, surveyWorld, inventoryStockRows, factoryIncomingStock, manualFactoryProducts, startManualFactoryProduction, planWorld, runWorldRound, speedUpProduction, SPEED_UP_ITEM, submitResidentOrder, rerollResidentOrder, watchResidentRefreshes, formatWorldPlan, formatFieldReport, loadMapAsset } from './world.mjs';
+import { makeTypeResolver, displayBuilding, weekFactoryInfo, surveyWorld, inventoryStockRows, factoryIncomingStock, manualFactoryProducts, startManualFactoryProduction, planWorld, runWorldRound, speedUpProduction, SPEED_UP_ITEM, manualResidentOrderDecision, submitResidentOrder, rerollResidentOrder, watchResidentRefreshes, formatWorldPlan, formatFieldReport, loadMapAsset } from './world.mjs';
 import { runLoop, formatLoopRound, formatLoopStep } from './loop.mjs';
 import { foldBusinessEntry, createOperationJournal } from './business-journal.mjs';
 import { upgradeChanges } from './building-upgrade-log.mjs';
@@ -1978,14 +1978,16 @@ export function createConsole({ host = '127.0.0.1', port = 17321, onLog, recover
           icon: buildingIcon(b.type),
         };
       }),
+      orderOfTheDay: survey.orderOfTheDay && {
+        orderNum: survey.orderOfTheDay.orderNum ?? 0,
+        dailyLimit: survey.residentOrderLimit,
+      },
       orders: survey.orders.map((order) => ({
         ...order,
         workerIcon: workerIcon(order.workerId),
         decision: autoOrders.find(row => row.index === order.index),
         manualRefresh:{allowed:!!order.orderKey&&!order.refreshTime&&!order.refreshPending&&order.requirements.length>0&&session.player?.level>=12,reason:order.refreshPending?'上次换单待确认':order.refreshTime?'等待新订单':session.player?.level<12?'角色12级开放':!order.orderKey?'订单身份待确认':!order.requirements.length?'订单需求未同步':''},
-        manualDecision: order.orderKey ? planWorld({ ...survey, orders: [order] }, {
-          config, enabled: kind => kind === 'finishOrder',
-        }).orderDecisions[0] : { status: 'unknown', reason: '无法确认这条居民订单，请刷新后再试' },
+        manualDecision: manualResidentOrderDecision(survey, order, config),
         requirements: order.requirements.map((need) => ({ ...need, name: displayMaterial(config, need.id), sources: config?.materialSources(need.id), icon: materialIcon(need.id) })),
         missing: (order.missing ?? []).map((need) => ({ ...need, name: displayMaterial(config, need.id), sources: config?.materialSources(need.id), icon: materialIcon(need.id) })),
       })),
@@ -4346,7 +4348,7 @@ export function createConsole({ host = '127.0.0.1', port = 17321, onLog, recover
           job = enqueue(session, async () => {
             if (!enabled()) throw new Error('账号连接已变化，请刷新居民订单');
             const result = await (isReroll?rerollResidentOrder:submitResidentOrder)(client, protocolFor(client), { index, orderKey, enabled, ledger:usageFor(session),
-              config: loadConfigSafe(), player: session.player, cargoEnabled: () => session.loop.tasks.cargo });
+              config: loadConfigSafe(), player: session.player });
             emit(session, 'info', result.label, { worldUpdated: true });
             return { ok: true, ...result };
           }, (isReroll?'手动换单 #':'手动提交居民订单 #') + index).finally(() => session.residentJobs.delete(key));

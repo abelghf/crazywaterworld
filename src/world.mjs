@@ -460,6 +460,9 @@ export async function surveyWorld(client, protocol, { config = null, player = nu
   const effects = (includeInventoryCaps && !ordersOnly) || timingEffectsNeeded ? await get('GameEffectRequest') : null;
   // RAW_MATERIAL_UPPER_BOUND is the account's current per-material capacity, including bonuses.
   const rawMaterialCap = Array.isArray(effects?.effects) ? effects.effects.find(effect => effect?.id === 16)?.value : null;
+  const baseOrderLimit = rowsOf(config, 'OrderParamCfg').find(row => row.paramName === '订单每日上限')?.paramValue;
+  // WORKER_ORDER_INC (18) adds to the configured limit. An absent effect in a full list means zero bonus.
+  const orderBonus = Array.isArray(effects?.effects) ? effects.effects.find(effect => effect?.id === 18)?.value ?? 0 : null;
   const resFieldInfo = resFields?.info ?? null;
   const vip = rowsOf(config, 'VipLevelCfg').find(row => row.level === player?.vip?.vipLevel);
   const stockBonus = Number(vip?.effects?.find(([effect]) => effect === '加工品存量上限')?.[1] ?? 0);
@@ -481,7 +484,9 @@ export async function surveyWorld(client, protocol, { config = null, player = nu
     weekOrder,
     cargoOrder,
     cargoOrders,
-    orderOfTheDay: water.orderOfTheDay ?? { orderNum: 0, rewardedNum: 0 },
+    orderOfTheDay: water.orderOfTheDay ?? null,
+    residentOrderLimit: Number.isSafeInteger(baseOrderLimit) && baseOrderLimit > 0 && Number.isSafeInteger(orderBonus) && orderBonus >= 0
+      ? baseOrderLimit + orderBonus : null,
     autoProduceEndTime: water.autoProduceEndTime ?? 0,
     autoProduceForever: water.autoProduceForever === true,
     festivals: Array.isArray(client.festivals)?normalize(client.festivals):null,
@@ -558,6 +563,32 @@ function orderFactoryJobs(jobs, building, timing) {
     start = end;
   }
   return ordered;
+}
+
+export function manualResidentOrderDecision(survey, order, config) {
+  if (!order.orderKey) return { status: 'unknown', reason: '无法确认这条居民订单，请刷新后再试' };
+  if (order.refreshTime) return { status: 'refreshing', reason: '订单刷新中，等待新需求' };
+  if (!order.requirements.length || order.requirements.some(r => !r.id || !Number.isSafeInteger(r.num) || r.num <= 0)) {
+    return { status: 'unknown', reason: '尚未收到完整订单需求' };
+  }
+  if (!survey.stockKnown) return { status: 'unknown', reason: '未能读取仓库库存' };
+  if (order.missing.length) {
+    const missing = order.missing.map(({ id, num }) => displayMaterial(config, id) + ' ×' + num);
+    return { status: 'missing', reason: '仓库还缺 ' + missing.join('、') };
+  }
+  return { status: 'ready', reason: '仓库材料已齐，手动提交可使用挂机预留的材料' };
+}
+
+function residentDeliveryAction(order, orderOfTheDay, weeklyBorrowed = [], borrowedText = '') {
+  const label = `交付${order.workerName || '未知居民'}的订单 #${order.index}`;
+  return {
+    kind: 'finishOrder', request: 'FinishWorkerOrderRequest', response: 'FinishWorkerOrderResponse',
+    body: { index: order.index }, costs: order.requirements,
+    counters: { residentOrders: 1 }, counterMinimums: { residentOrders: Number(orderOfTheDay?.orderNum ?? 0) },
+    orderKey: order.orderKey, requirements: order.requirements, workerId: order.workerId, textId: order.textId,
+    weeklyBorrowed,
+    label: label + (order.rewardExp == null ? '' : `（经验 ${order.rewardExp}）`) + (borrowedText ? '；商人订单待补 ' + borrowedText : ''),
+  };
 }
 
 // 计划：收成品 → 竣工 → 建造 → 交单 → 排产 → 余料升级 → 加速。每步都只排「客户端确实会发的请求」。
@@ -881,19 +912,7 @@ export function planWorld(survey, {
         borrowedTotals.set(id, (borrowedTotals.get(id) ?? 0) + num);
       }
       for (const r of order.requirements) reserve(r.id, r.num);
-      actions.push({
-        kind: 'finishOrder',
-        request: 'FinishWorkerOrderRequest',
-        response: 'FinishWorkerOrderResponse',
-        body: { index: order.index },
-        costs: order.requirements,
-        counters: { residentOrders: 1 },
-        counterMinimums: { residentOrders: Number(survey.orderOfTheDay?.orderNum ?? 0) },
-        weeklyBorrowed,
-        orderKey: order.orderKey, requirements: order.requirements, workerId: order.workerId, textId: order.textId,
-        label: `交付${label}${order.rewardExp == null ? '' : `（经验 ${order.rewardExp}）`}` +
-          (borrowedText ? '；商人订单待补 ' + borrowedText : ''),
-      });
+      actions.push(residentDeliveryAction(order, survey.orderOfTheDay, weeklyBorrowed, borrowedText));
       residentPlanned++;
       continue;
     }
@@ -1446,22 +1465,27 @@ export async function runWorldRound(client, protocol, plan, {
 // A harvest earlier in this round can complete the weekly order. Do not spend
 // its stock based solely on a plan that was made before the harvest.
 async function confirmResidentOrder(client, protocol, step, config, player, cargoEnabled, settings, usage) {
-  if (!config || !player) return { reason: '无法复核商人订单和贸易港预留' };
-  const includeCargo = cargoEnabled();
-  const survey = await surveyWorld(client, protocol, { config, player, ordersOnly: true, includeCargo });
-  if (survey.orderCheckError) return { reason: survey.orderCheckError };
+  if (!player) return { reason: '无法确认交单账号' };
+  if (!step.manualCheck && !config) return { reason: '无法复核商人订单和贸易港预留' };
+  const includeCargo = !step.manualCheck && cargoEnabled();
+  const survey = await surveyWorld(client, protocol, { config, player, ordersOnly: true, includeWeekOrder: !step.manualCheck, includeCargo });
   const order = survey.orders.find(row => row.index === step.body.index);
   if (!order || (step.orderKey && order.orderKey !== step.orderKey)) return { reason: '这条居民订单已刷新或已处理，请查看当前订单' };
-  if (!step.manualCheck && (order.workerId !== step.workerId || order.textId !== step.textId ||
+  if (step.manualCheck) {
+    const decision = manualResidentOrderDecision(survey, order, config);
+    return decision.status === 'ready' ? { action: residentDeliveryAction(order, survey.orderOfTheDay) } : { reason: decision.reason };
+  }
+  if (survey.orderCheckError) return { reason: survey.orderCheckError };
+  if (order.workerId !== step.workerId || order.textId !== step.textId ||
     order.requirements.length !== step.requirements.length ||
-    !order.requirements.every(item => step.requirements.some(old => item.id === old.id && item.num === old.num)))) {
+    !order.requirements.every(item => step.requirements.some(old => item.id === old.id && item.num === old.num))) {
     return { reason: '订单需求已刷新，留待下一轮重新安排' };
   }
-  const fresh = planWorld({ ...survey, orders: [order] }, { config, enabled: kind => kind === 'finishOrder', settings: step.manualCheck ? null : settings, usage });
+  const fresh = planWorld({ ...survey, orders: [order] }, { config, enabled: kind => kind === 'finishOrder', settings, usage });
   const current = fresh.actions.find(action => action.kind === 'finishOrder');
   if (!current) return { reason: fresh.orderDecisions[0].reason };
-  if ((!includeCargo && cargoEnabled()) || (!step.manualCheck && current.weeklyBorrowed.some(item =>
-    item.num > (step.weeklyBorrowed.find(old => old.id === item.id)?.num ?? 0)))) {
+  if ((!includeCargo && cargoEnabled()) || current.weeklyBorrowed.some(item =>
+    item.num > (step.weeklyBorrowed.find(old => old.id === item.id)?.num ?? 0))) {
     return { reason: '订单预留已变化，请重新核对库存' };
   }
   return { action: current };
@@ -1495,7 +1519,7 @@ export async function rerollResidentOrder(client,protocol,{index,orderKey,config
  }catch(error){if(error.prompt&&error.request==='DenyOrderRequest')ledger.cancel(ticket);throw error;}
 }
 
-export async function submitResidentOrder(client, protocol, { index, orderKey, config, player, cargoEnabled = () => false, enabled = () => true }) {
+export async function submitResidentOrder(client, protocol, { index, orderKey, config, player, enabled = () => true }) {
   if (!Number.isSafeInteger(index) || index < 0 || index > 2147483647 || typeof orderKey !== 'string' || !orderKey) {
     throw new Error('请从当前居民订单列表中选择要交付的一单');
   }
@@ -1504,7 +1528,7 @@ export async function submitResidentOrder(client, protocol, { index, orderKey, c
   const step = { kind: 'finishOrder', request: 'FinishWorkerOrderRequest', response: 'FinishWorkerOrderResponse',
     body: { index }, orderKey, manualCheck: true, label: '交付居民订单 #' + index };
   const { results } = await runWorld(client, protocol, { actions: [step] }, {
-    config, player, allowMutate: true, cargoEnabled, enabled,
+    config, player, allowMutate: true, enabled,
   });
   const [entry] = results;
   if (!entry?.ok) throw new Error(entry?.error || '账号托管状态已变化，已取消手动交单');

@@ -18,6 +18,7 @@ const config = {
   BuildingProduceCfg: [{ itemId: '面包', buildType: '食品厂', unlockLevel: 1, produceTime: 60, costItem: [['小麦', 5]] }],
   FarmlandPlantCfg: [{ id: '小麦', time: 30, produceNum: 5, material: ['小麦种子', 1] }],
   BuildingProduceParamCfg: [{ paramName: '制造位上限', paramValue: 6 }],
+  OrderParamCfg: [{ paramName: '订单每日上限', paramValue: 42 }],
   GameParamCfg: [{ paramName: '初始人口', paramValue: 3 }, { paramName: '初始人口上限', paramValue: 100 }, { paramName: '产品存量初始上限', paramValue: 50 }],
   CargoUnlockCfg: [{ index: 1, playerLevel: 9 }],
   ModuleOpenCfg: [{ moduleId: '联盟情报', playerLevel: 18 }, { moduleId: '联盟商船', playerLevel: 18 }],
@@ -161,6 +162,20 @@ try {
       assert.equal(world.farms[0].productId, '小麦');
       assert.deepEqual(world.recipes.map(recipe => [recipe.productId, recipe.output, recipe.inputs[0].id, recipe.inputs[0].num]),
         [['面包', 1, '小麦', 5], ['小麦', 5, '小麦种子', 1]]);
+    } finally { await f.close(); }
+  });
+  await test('居民订单每日上限使用游戏配置与账号加成，读取失败时保留交付数', async () => {
+    const f = await fixture();
+    try {
+      const replies = f.state.responses;
+      replies.OnWaterRequest.orderOfTheDay = { orderNum: 37, rewardedNum: 30 };
+      await f.api('connect', {});
+      const readProgress = async () => (await f.api('world')).orderOfTheDay;
+      assert.deepEqual(await readProgress(), { orderNum: 37, dailyLimit: 42 });
+      replies.GameEffectRequest.effects.push({ id: 18, value: 5 });
+      assert.deepEqual(await readProgress(), { orderNum: 37, dailyLimit: 47 });
+      delete replies.GameEffectRequest;
+      assert.deepEqual(await readProgress(), { orderNum: 37, dailyLimit: null });
     } finally { await f.close(); }
   });
   await test('仓库按账号效果刷新原料容量，挑战券按配置标记恢复上限并保留实际数量', async () => {
