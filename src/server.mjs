@@ -4428,7 +4428,7 @@ export function createConsole({ host = '127.0.0.1', port = 17321, onLog, recover
             if (!enabled() || loadConfigSafe() !== config) throw new Error('账号或排产配置已变化，请重新计算');
             if (!result.forecast.unavailable) {
               result.forecast.insertKey = randomUUID();
-              session.factoryInsertPlan = { anchors, forecast:result.forecast, config, enabled };
+              session.factoryInsertPlan = { anchors, forecast:result.forecast, config, timing:snapshot.timing, enabled };
             }
             return result;
           }).finally(() => { if (session.productionPlanRead === job) session.productionPlanRead = null; });

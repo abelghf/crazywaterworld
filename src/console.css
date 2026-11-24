@@ -271,6 +271,9 @@ html:has(.world-map-detail:modal) { overflow:hidden }
 .plan-day-note { margin-top:4px }
 .plan-day-totals { display:flex; align-items:baseline; flex-wrap:wrap; gap:6px 18px; margin:12px 0 8px; color:var(--muted-foreground); font-size:12px }
 .plan-day-totals strong { color:var(--foreground); font-size:14px; font-weight:600 }
+.production-pending-title { margin:10px 0 2px; font-size:13px; font-weight:600 }
+.production-pending-list { list-style:decimal; margin:0; padding-inline-start:1.75em; max-height:12rem; overflow:auto }
+.production-pending-list li:only-child { list-style:none; margin-inline-start:-1.75em }
 .production-batches { list-style:none; padding:0; margin:8px 0 0; max-height:30rem; overflow:auto; scrollbar-width:thin }
 .production-batch { display:grid; grid-template-columns:minmax(7rem,1fr) minmax(12rem,1fr) minmax(5rem,.6fr) 7rem 3rem; align-items:center; gap:4px 12px; padding:8px 4px; border-top:1px solid var(--border); min-height:40px }
 .production-batch-name { display:flex; align-items:baseline; gap:7px; overflow-wrap:anywhere }

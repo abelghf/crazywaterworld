@@ -913,7 +913,7 @@ export function planWorld(survey, {
     const crops = rowsOf(config, 'FarmlandPlantCfg');
     for (const plot of survey.buildings.filter(b => b.type === '农田' && b.level > 0 && !b.buildStartTime && !b.buildFinishTime)) {
       const crop = crops.find(r => r.id === plot.farm?.productId);
-      if (crop && canCollect(plot) && plot.farm.ripeTime > 0 && plot.farm.ripeTime < (survey.serverNow ?? now)) {
+      if (crop && !survey.factoryInsertions?.[plot.buildingId]?.flight && canCollect(plot) && plot.farm.ripeTime > 0 && plot.farm.ripeTime < (survey.serverNow ?? now)) {
         markHarvest(crop.id, crop.produceNum);
         actions.push({ kind: 'farm', request: 'FarmHarvestRequest', response: 'FarmHarvestResponse',
           body: { buildingId: [plot.buildingId] }, label: '农田收获 ' + name(crop.id) });
@@ -1111,6 +1111,7 @@ export function planWorld(survey, {
         notes.push(name(crop.id) + ' 订单缺 ' + shortage(crop.id) + '，种植需要' + name(crop.material[0]));
     }
     for (const b of plots.filter(b => !b.farm?.productId)) {
+      if (survey.factoryInsertions?.[b.buildingId]?.jobs?.length) continue;
       const choices = crops.filter(r => free(r.material[0]) >= r.material[1]
         && projected(r.id) < survey.stockCap * 5 && (custom ? custom.has(r.id) && shortage(r.id) > 0 : settings || !weeklyGap.has(r.id) || shortage(r.id) > 0));
       choices.sort((a, b) => (custom ? custom.get(a.id).priority - custom.get(b.id).priority : 0)
@@ -2185,6 +2186,17 @@ export async function runWorld(client, protocol, plan, {
           session.delete(step.body.index); // A lost reply can still have consumed this slot.
         }
         if (response && protocol[response]) {
+          if (step.request === 'FarmPlantRequest') {
+            const entries = factoryInsertions(player);
+            if (!step.beforePlantSend && actual.body.args.some(arg => entries[arg.buildingId]?.jobs?.length)) {
+              throw new AutomationSkip('农田正在为工厂插单补料');
+            }
+            step.beforePlantSend?.();
+          }
+          if (step.request === 'FarmHarvestRequest' && player) {
+            const entries = factoryInsertions(player);
+            if (actual.body.buildingId.some(id => entries[id]?.flight)) throw new AutomationSkip('插单播种待确认，稍后收获');
+          }
           dispatched = writePending = true;
           const body = await client.request(step.request, actual.body, response, timeout);
           writePending = false;

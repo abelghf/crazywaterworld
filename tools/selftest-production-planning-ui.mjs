@@ -236,22 +236,36 @@ await test('插单立即弹窗，读取期间可关闭，旧请求不会覆盖�
   assert.deepEqual(env.calls, Array(3).fill('/api/world/production-insert-options'));
 });
 
-await test('插单成功和队列异常都刷新清单，顶栏不显示操作提示', async () => {
+await test('满仓插单后刷新可见剩余 340 件，撤回后清除记录', async () => {
   const env = fixture();
+  const factory = { id:'a', name:'水厂', runs:[] };
   const plan = { forecast: { startAt:1000, endAt:87400, insertKey:'plan', completions:[],
-    factories:[{ id:'a', name:'水厂', runs:[] }] } };
+    factories:[factory] } };
   env.render(plan);
+  assert.equal(env.node('production-day-preview').textContent, factory.name);
   for (const warning of [undefined, '工厂队列已变化，插单已撤回']) {
     env.respond = async route => {
       if (route.endsWith('-options')) return { products:[{ id:'淡水', name:'淡水', max:null }], count:1 };
-      if (route.endsWith('-insert')) return { label:warning || '已插入淡水 ×2', warning };
+      if (route.endsWith('-insert')) {
+        factory.pendingInsertions = warning ? [] : [{id:'淡水',name:'淡水',quantity:340}];
+        factory.insertNote = warning ? undefined : '淡水已满仓，消耗后优先补产';
+        return { label:warning || '已插入淡水 ×340', warning };
+      }
       return plan;
     };
     const panel = env.node('production-day-result').querySelector('.plan-day-panel');
     panel.isConnected = true;
     await panel.querySelector('.production-batch-insert').onclick();
-    descendants(env.node('m-body')).find(node => node.tagName === 'input').value = '2';
+    descendants(env.node('m-body')).find(node => node.tagName === 'input').value = '340';
     await env.node('m-ok').onclick();
+    const day = env.node('production-day-result'), preview = env.node('production-day-preview');
+    if (warning) {
+      assert.doesNotMatch(day.textContent + preview.textContent, /待入队插单|淡水/);
+    } else {
+      assert.match(day.textContent, /待入队插单.*淡水 ×340.*淡水已满仓/);
+      assert.match(preview.textContent, /待入队插单 · 淡水 ×340/);
+      assert.match(day.querySelector('.plan-day-totals').textContent, /运行 0秒.*空闲 24小时/);
+    }
     assert.equal(env.node('hint').textContent, '');
     assert.deepEqual(env.calls.slice(-2), ['/api/world/production-insert', '/api/world/production-plan']);
   }
@@ -308,6 +322,15 @@ await test('独立卡片只显示一家工厂，切换与刷新保留选中项�
   env.render({});
   assert.equal(card.hidden, true);
   assert.equal(box.textContent, '');
+});
+
+await test('高级配方显示上游工厂补料件数及农田播种茬数', () => {
+  const env = fixture(), startAt = 1767225600;
+  const factory = {id:'food', name:'食品厂', runs:[], upstream:[
+    {factory:'海水提取厂-1', name:'淡水', quantity:7}, {factory:'农田-1', name:'小麦', quantity:2, crop:true},
+  ]};
+  env.render({forecast:{startAt,endAt:startAt+86400,completions:[],factories:[factory]}});
+  assert.match(env.node('production-day-result').textContent, /上游补料插单.*海水提取厂-1 · 淡水 ×7.*农田-1 · 小麦 ×2 茬/);
 });
 
 await test('并行的一秒产物完整列出，长任务只列一次，翻页覆盖全部批次', () => {

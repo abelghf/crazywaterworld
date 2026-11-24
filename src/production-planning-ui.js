@@ -190,6 +190,22 @@ function renderFactorySchedule(container, day, factory) {
     totals.appendChild(stat);
   }
   panel.appendChild(totals);
+  if (factory.pendingInsertions?.length) {
+    panel.appendChild(el('h3', 'production-pending-title', '待入队插单'));
+    const pending = el('ol', 'production-pending-list');
+    for (const job of factory.pendingInsertions) {
+      pending.appendChild(el('li', null, job.name + ' ×' + job.quantity + (job.supplyFor ? '（为' + job.supplyFor + '补料）' : '')));
+    }
+    panel.appendChild(pending);
+  }
+  if (factory.upstream?.length) {
+    panel.appendChild(el('h3', 'production-pending-title', '上游补料插单'));
+    const list = el('ol', 'production-pending-list');
+    for (const job of factory.upstream) {
+      list.appendChild(el('li', null, job.factory + ' · ' + job.name + ' ×' + job.quantity + (job.crop ? ' 茬' : '')));
+    }
+    panel.appendChild(list);
+  }
   for (const note of [factory.unknown, factory.insertNote]) if (note) panel.appendChild(el('p', 'plan-day-note', note));
   const list = el('ol', 'production-batches');
   list.setAttribute('aria-label', factory.name + ' 排产顺序');
@@ -289,7 +305,8 @@ async function openBatchInsertion(day, factory, run, status, panel) {
   }
   const select = field('生产物品', el('select'));
   for (const product of products) {
-    const option = el('option', null, product.name + (product.max === null ? '（无需原料）' : '（最多 ' + product.max + ' 件）'));
+    const option = el('option', null, product.name + (product.autoSupply ? '（自动补料）'
+      : product.max === null ? '（无需原料）' : '（最多 ' + product.max + ' 件）'));
     option.value = product.id;
     option.disabled = product.max === 0;
     select.appendChild(option);
@@ -306,7 +323,12 @@ async function openBatchInsertion(day, factory, run, status, panel) {
     const max = chosen()?.max;
     qty.max = max == null ? '' : String(max);
     $('m-ok').disabled = !validPosition() || !validQuantity(Number(qty.value));
-    hint.textContent = !chosen() || max === 0 ? '当前可用原料不足。' : '成品满仓时先做后面能做的任务，腾出仓容后优先补产。';
+    if (chosen()?.autoSupply) {
+      hint.textContent = '缺少的可生产原料会优先插到对应工厂或农田，已有库存、在产和已插单的数量会先抵扣。'
+        + (max != null && Number(qty.value) > max ? '按当前原料和设施最多可插入 ' + max + ' 件。' : '');
+    } else {
+      hint.textContent = !chosen() || max === 0 ? '当前可用原料不足。' : '成品满仓时先做后面能做的任务，腾出仓容后优先补产。';
+    }
   }
   select.onchange = qty.oninput = update;
   if (position) position.oninput = update;
@@ -358,12 +380,21 @@ function renderProductionDay(day, orders) {
     renderFactorySchedule(body, day, factory);
     const preview = clear($('production-day-preview'));
     preview.appendChild(el('strong', null, factory.name));
+    const pending = factory.pendingInsertions ?? [];
+    if (pending.length) {
+      const first = pending[0];
+      preview.appendChild(el('span', null, '待入队插单 · ' + first.name + ' ×' + first.quantity
+        + (pending.length > 1 ? ' 等 ' + pending.length + ' 批' : '')));
+    }
     const batches = factory.runs?.slice(0, 3) ?? [];
     for (const run of batches) {
       preview.appendChild(el('span', null, forecastStatusLabels[forecastRunStatus(run)] + ' · ' + run.name + ' ×' + run.quantity));
     }
-    if (!batches.length) preview.appendChild(el('span', null, factory.unknown || factory.insertNote ||
-      (!Array.isArray(factory.runs) ? '排期待确认' : factory.disabled ? '已停用' : '未来 24 小时空闲')));
+    if (!batches.length) {
+      const note = factory.unknown || factory.insertNote ||
+        (!Array.isArray(factory.runs) ? '排期待确认' : factory.disabled && '已停用');
+      if (note) preview.appendChild(el('span', null, note));
+    }
   }
   picker.onchange = () => selectFactory(factories[picker.selectedIndex]);
   selectFactory(factories.find(factory => factory.id === selectedForecastFactory) ?? factories[0]);
