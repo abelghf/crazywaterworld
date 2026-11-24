@@ -138,7 +138,8 @@ export async function forecastProductionDay(
   const stock = new Map(snapshot.inventory.map(r => [r.id, r.num]));
   const held = new Map(),
     pending = new Set(pendingMaterials.flatMap(r => [...(r.scope ?? [])]));
-  const have = id => (pending.has(id) ? 0 : Math.max(0, (stock.get(id) ?? 0) - (held.get(id) ?? 0)));
+  const nativeFactoryStock = id => pending.has(id) ? 0 : stock.get(id) ?? 0;
+  const have = id => Math.max(0, nativeFactoryStock(id) - (held.get(id) ?? 0));
   const byId = new Map(snapshot.buildings.map(b => [b.id, b]));
   // The latest game snapshot can confirm a send before the dispatch journal's next check.
   // Remove that unit from this read-only projection so it only appears in the game queue.
@@ -281,6 +282,7 @@ export async function forecastProductionDay(
     productionTiming: snapshot.timing,
     stock,
     have,
+    nativeFactoryStock,
     warehouseCount: id => stock.get(id) ?? 0,
     stockCap: snapshot.stockCap,
     factorySlots: slots,
@@ -397,7 +399,8 @@ export async function forecastProductionDay(
     let manualAdvanced = false;
     for (const step of productionSteps()) {
       if (step.request !== 'StartFactoryProduceRequest' && step.request !== 'FarmPlantRequest') continue;
-      if (step.costs.some(r => have(r.id) - (resourceReserve(settings, r.id) || 0) < r.num)) continue;
+      const inputs = step.factoryStrategy === 'nativeSimulation' ? nativeFactoryStock : have;
+      if (step.costs.some(r => inputs(r.id) - (resourceReserve(settings, r.id) || 0) < r.num)) continue;
       if (step.request === 'FarmPlantRequest') {
         const { buildingId, productId } = step.body.args[0],
           plot = farms.find(b => b.buildingId === buildingId),

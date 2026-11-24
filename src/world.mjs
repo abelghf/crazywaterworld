@@ -29,7 +29,7 @@ import { runFactoryProductionBatch, confirmFactoryProductionBeforeHarvest } from
 import { readOrderReservedStock } from './order-reservations.mjs';
 import { activityProductionEnabled } from './activity-automation.mjs';
 import { createProductionEligibility, factoryRecipeAvailability, factoryRecipeCosts, insertionRecipeReady } from './production-eligibility.mjs';
-import { simulateNativeFactoryStarts, simulatedFactoryQueueKey } from './factory-native-simulation.mjs';
+import { nativeMaterialReceipts, simulateNativeFactoryStarts, simulatedFactoryQueueKey } from './factory-native-simulation.mjs';
 import { createFactoryDispatch, shortFactoryFeed } from './factory-dispatch.mjs';
 import { factoryInsertions } from './factory-insert-store.mjs';
 import { insertionYieldsToProduction } from './factory-insertion-queue.mjs';
@@ -721,8 +721,9 @@ export function planWorld(survey, {
     .map(order => ({ ...order, source: 'cargo' }));
   const orderPriority = settings?.factory?.demandPriority ?? ['merchant', 'cargo'];
   const orderRank = source => orderPriority.includes(source) ? orderPriority.indexOf(source) : orderPriority.length;
-  const smartOrders = settings?.factory.demandFirst && settings.factory.strategy !== 'nativeSimulation'
-    && (enabled('startProduce') || reserveFactoryInputs && worldPreferenceEnabled(settings, 'startProduce'));
+  const simulateNative = settings?.factory.strategy === 'nativeSimulation';
+  const smart = !simulateNative && settings?.factory.demandFirst === true;
+  const smartOrders = smart && (enabled('startProduce') || reserveFactoryInputs && worldPreferenceEnabled(settings, 'startProduce'));
   const directOrders = [weeklyOrder, ...cargoOrders];
   const cargoItems = new Set(cargoOrders.flatMap(order => order.requirements.map(item => item.id)));
   const lastClaim = new Map();
@@ -1152,7 +1153,7 @@ export function planWorld(survey, {
   // of lower-priority recipes so stocking the factory cannot starve the pet.
   const petRank = demandPriority.indexOf('petAdvance');
   const feedStock = new Map();
-  if (settings?.factory.demandFirst && petRank >= 0 && activityProductionEnabled(settings, 'petAdvance')) {
+  if (smart && petRank >= 0 && activityProductionEnabled(settings, 'petAdvance')) {
     for (const { requirements } of extraDemand.filter(row => row.source === 'petAdvance' && row.readyToFeed)) {
       if (requirements.every(({ id, num }) => free(id) - (feedStock.get(id) ?? 0) >= num)) {
         for (const { id, num } of requirements) feedStock.set(id, (feedStock.get(id) ?? 0) + num);
@@ -1205,8 +1206,6 @@ export function planWorld(survey, {
   const factoryReasons = new Map();
   const timing = createProductionTiming({ config, ...survey.productionTiming, serverNow: survey.serverNow ?? now });
   const dispatch = createFactoryDispatch(survey, timing, canCollect, rowsOf(config, 'FarmlandPlantCfg'));
-  const simulateNative = settings?.factory.strategy === 'nativeSimulation';
-  const smart = !simulateNative && settings?.factory.demandFirst === true;
   const revisit = settings?.factory.checkEverySeconds ?? 30;
   const nextWaits = new Map();
   // Each source tier allocates shared inputs across all factories.
@@ -1511,10 +1510,21 @@ export function planWorld(survey, {
     for (const b of facilities.filter(isNative)) planFactory(b);
     const ordinary = facilities.filter(b => !isNative(b));
     if (simulateNative) {
-      const picks = settings.factory.produce ? simulateNativeFactoryStarts({
-        buildings: ordinary, recipes: produceRows, targets: settings.factory.simulatedTargets, timing,
+      const collecting = new Set(actions.filter(step => step.kind === 'gainFactory').map(step => step.body.buildingId));
+      const receipts = nativeMaterialReceipts(survey.factories, b => collecting.has(b.buildingId));
+      // Earlier actions will spend these units before the factories start. An
+      // unsubmitted order has no such cost and cannot hold a factory's inputs.
+      const spending = new Map();
+      for (const step of actions) for (const { id, num } of step.costs ?? []) {
+        spending.set(id, (spending.get(id) ?? 0) + num);
+      }
+      const confirmedStock = survey.nativeFactoryStock ?? have;
+      const picks = settings.factory.produce && survey.stockKnown !== false ? simulateNativeFactoryStarts({
+        buildings: ordinary, recipes: rowsOf(config, 'BuildingProduceCfg'), availableProducts: craftable,
+        targets: settings.factory.simulatedTargets, timing,
         now: survey.serverNow ?? now, cap: survey.stockCap, slots: survey.factorySlots, insertions:survey.factoryInsertions,
-        available: id => free(id) - (feedStock.get(id) ?? 0), owned: id => warehouseCount(id) + (incoming.get(id) ?? 0),
+        available: id => confirmedStock(id) + (receipts.get(id) ?? 0) - (spending.get(id) ?? 0) - resourceReserve(settings, id),
+        owned: id => warehouseCount(id) + (incoming.get(id) ?? 0) - (spending.get(id) ?? 0),
       }) : [];
       for (const { building, row, seconds, primary, laneUntil } of picks) {
         for (const [id, n] of row.costItem) reserve(id, n);

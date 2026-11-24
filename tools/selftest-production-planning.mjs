@@ -71,6 +71,74 @@ test('模拟原生预览只展示可开工的下一批，已有队列占位时�
   assert.deepEqual(plan().timeline.map(j=>j.kind),['existing']);
 });
 
+test('模拟原生预览仅将允许领取的已完成上游材料计入可用库存', () => {
+  const {snapshot,settings,plan}=fixture();
+  settings.factory.strategy='nativeSimulation';
+  settings.factory.gain=true;
+  snapshot.inventory.find(i=>i.id==='小麦').num=0;
+  snapshot.buildings[0].factory.finishedProducts=[];
+  const supplier={id:'1加工厂',buildingId:'1加工厂',type:'加工厂',level:1,
+    factory:{factoryQ:[],finishedProducts:[{id:'小麦',num:1}]}};
+  snapshot.buildings.push(supplier);
+  snapshot.factories.push({id:supplier.id,type:supplier.type,level:1,capacity:6,enabled:false,queue:[],finished:supplier.factory.finishedProducts});
+  const starts=()=>plan().timeline.filter(j=>j.kind==='nativeSimulation').map(j=>j.itemId);
+  assert.deepEqual(starts(),['面包']);
+  settings.factory.blockedCollectionTypes=[supplier.type];
+  assert.deepEqual(starts(),[]);
+  settings.factory.blockedCollectionTypes=[]; settings.factory.gain=false;
+  assert.deepEqual(starts(),[]);
+});
+
+{
+  const { snapshot, settings } = fixture();
+  settings.factory.strategy = 'nativeSimulation';
+  settings.factory.gain = true;
+  settings.farm.enabled = false;
+  const start = snapshot.serverNow, id = '1切鱼厂';
+  const fish = (itemId, produceTime, costItem) => ({ itemId, produceTime, costItem, buildType:'切鱼厂', unlockLevel:1 });
+  const sashimi = fish('生鱼片', 90, [['鱼',6]]), oil = fish('鱼油', 1380, [['鱼',50],['玻璃',30]]);
+  const recipes = [{ ...config.tables.BuildingProduceCfg.data[0], produceTime:25 }, sashimi, fish('鱼肠线',300,[['鱼',20]]), oil];
+  const cfg = { ...config, tables:{ ...config.tables, BuildingProduceCfg:table(recipes) } };
+  snapshot.stockCap = 20;
+  snapshot.inventory.push({id:'鱼',num:700}, {id:'玻璃',num:390}, {id:'生鱼片',num:20});
+  snapshot.buildings.push({ id, buildingId:id, type:'切鱼厂', level:1, factory:{factoryQ:[],finishedProducts:[],autoProductId:'生鱼片'} });
+  snapshot.factories.push({ id, type:'切鱼厂', level:1, capacity:6, enabled:true, queue:[], finished:[], nativeAutoProductId:'生鱼片' });
+  snapshot.timing.observedDurations = [{ buildingId:id, productId:'鱼油', seconds:2, samples:12 }];
+  for (const row of recipes.slice(1)) snapshot.recipes.push({ id:row.itemId, productId:row.itemId, facilityType:row.buildType,
+    durationSeconds:row.produceTime, unlockLevel:1, available:true, output:1, costs:row.costItem.map(([id,num]) => ({id,num})) });
+  const orders = [{id:'resident:1',kind:'order',source:'resident',metadata:{enabled:true},requirements:[{id:'面包',num:1},{id:'生鱼片',num:1}]}];
+  const anchors = new Map();
+  await forecastProductionDay(snapshot, cfg, settings, orders, {anchors});
+  const starts = anchors.get(id).units;
+  assert.deepEqual(starts.slice(0,13).map(j => [j.id,j.from-start,j.to-start]),
+    Array.from({length:13}, (_,i) => ['鱼油',2*i,2*i+2]));
+  assert.deepEqual([starts[13].id, starts[13].from-start], ['生鱼片',26], '第25秒交单腾出仓容，第26秒空位立即恢复主产');
+  // A known target outside the available recipe set must not promote an arbitrary slow fallback in the preview.
+  snapshot.buildings.at(-1).factory.autoProductId = '暂时停产';
+  snapshot.inventory.find(r => r.id === '生鱼片').num = 0;
+  const preview = planProduction(snapshot, cfg, settings);
+  assert.equal(preview.timeline.find(j => j.machineId === id+':1' && j.kind === 'nativeSimulation')?.itemId, '鱼油');
+  console.log('通过：鱼油连续13个两秒周期，完工读取最新库存切回生鱼片');
+}
+
+{
+  const {snapshot, settings, plan} = fixture();
+  settings.factory.strategy = 'nativeSimulation';
+  settings.factory.gain = true;
+  settings.farm.enabled = false;
+  snapshot.inventory.find(row => row.id === '小麦').num = 1;
+  snapshot.buildings[0].factory.finishedProducts = [];
+  snapshot.orders = [{id:'resident:1', kind:'order', source:'resident', requirements:[{id:'小麦',num:1}], metadata:{enabled:false}}];
+  assert.deepEqual(plan().timeline.filter(j => j.kind === 'nativeSimulation').map(j => j.itemId), ['面包']);
+  const day = await forecastProductionDay(snapshot, config, settings, snapshot.orders);
+  assert.equal(day.factories[0].runs[0]?.id, '面包', '已凑齐但未提交的订单不占用原生生产原料');
+  const pending = await forecastProductionDay(snapshot, config, settings, snapshot.orders, {pendingMaterials:[{scope:['小麦']}]});
+  assert.equal(pending.factories[0].runs.length, 0, '未确认的真实扣款不能当作可用现货');
+  snapshot.orders[0].metadata.enabled = true;
+  const delivered = await forecastProductionDay(snapshot, config, settings, snapshot.orders);
+  assert.equal(delivered.factories[0].runs.length, 0, '订单已交付时同步扣减实物');
+}
+
 test('关闭活动总开关后排程移除对应备料订单，其他订单继续参与', () => {
   const { snapshot, settings } = fixture();
   snapshot.orders.push(...['merchant', 'heroRaid'].map(source => ({

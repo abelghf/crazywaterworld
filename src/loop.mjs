@@ -490,15 +490,17 @@ export async function runLoop(client, protocol, {
         const currentSettings = getSettings();
         const current = () => !stop.aborted && runtimeActive() && client.connected !== false && currentSettings === getSettings();
         const canFactory = key => current() && factoryDue && factorySchedule.active() && enabled(key);
-        const holdForOrders = canFactory('startProduce') || enabled('finishOrder') || checkUpgrade;
+        const simulateNative = currentSettings?.factory?.strategy === 'nativeSimulation';
+        const holdForOrders = (!simulateNative && canFactory('startProduce')) || enabled('finishOrder') || checkUpgrade;
+        const cargoDemand = (!simulateNative || holdForOrders) && needsCargoDemand(currentSettings);
         let version = factorySchedule.version();
         const survey = await surveyWorld(client, protocol, { config, player,
           includeProductionTiming: canFactory('startProduce') && currentSettings?.factory?.produce !== false,
-          includeWeekOrder: holdForOrders || needsCargoDemand(currentSettings),
-          includeCargo: (enabled('cargo') && holdForOrders) || needsCargoDemand(currentSettings) });
+          includeWeekOrder: holdForOrders || cargoDemand,
+          includeCargo: (enabled('cargo') && holdForOrders) || cargoDemand });
         // 募兵、上船和订单可能已改变需求，不能沿用主轮的备料快照。
         let demand = [];
-        if (currentSettings && canFactory('startProduce')) {
+        if (currentSettings && canFactory('startProduce') && (!simulateNative || checkUpgrade)) {
           const extra = await surveyBaseAutomation(client, protocol, config, player, currentSettings, survey,
             { ledger: usageLedger, enabled: current });
           if (current()) demand = baseDemands(extra, config, currentSettings);
@@ -509,7 +511,7 @@ export async function runLoop(client, protocol, {
           if (kind === 'gainFactory') return canFactory('collect');
           if (kind === 'finishUpgrade') return checkUpgrade && enabled('finishUpgrade');
           if (kind === 'upgrade') return checkUpgrade && enabled('upgrade') && orderRead;
-          return ['startProduce', 'nativeProduce'].includes(kind) && canFactory('startProduce') && orderRead;
+          return ['startProduce', 'nativeProduce'].includes(kind) && canFactory('startProduce') && (simulateNative || orderRead);
         };
         const plan = planWorld(survey, { config, enabled: allow, settings: currentSettings, blockedCollectionTypes: getBlockedCollectionTypes?.(), usage: usage(), extraDemand: demand, factoryWaitHistory });
         if (currentSettings?.factory?.cooperateNative && allow('startProduce')) observeNativePlan(survey, plan);
@@ -1218,13 +1220,17 @@ export async function runLoop(client, protocol, {
           } catch (error) { phaseFailure('world', '广告加速', error); }
         }
         const usesOrders = allowWorld('finishOrder') || allowWorld('denyOrder');
+        const simulateNative = settings?.factory?.strategy === 'nativeSimulation';
+        const factoryOrders = !simulateNative && allowWorld('startProduce');
+        const readsOrders = usesOrders || factoryOrders || allowWorld('farm') || allowWorld('upgrade');
+        const cargoDemand = needsCargoDemand(settings) && (!simulateNative || readsOrders
+          || allowWorld('speedUpProduce') && settings.factory.speedUpSources.includes('cargo'));
         const factoryReadVersion = factorySchedule.version();
         const survey = await surveyWorld(client, protocol, { config, player,
           includeProductionTiming: allowWorld('startProduce') && settings?.factory?.produce !== false,
-          includeCargo: needsCargoDemand(settings) || (!!isEnabled && enabled('cargo') && (allowWorld('startProduce') || usesOrders)),
-          includeWeekOrder: needsCargoDemand(settings) || (allowWorld('speedUpProduce') && settings?.factory.speedUpSources.includes('merchant'))
-            || usesOrders || allowWorld('startProduce') || allowWorld('farm') || allowWorld('upgrade') });
-        if (settings && ((allowWorld('startProduce') && (settings.factory.demandFirst || settings.alliance?.enabled &&
+          includeCargo: cargoDemand || (!!isEnabled && enabled('cargo') && (factoryOrders || usesOrders)),
+          includeWeekOrder: readsOrders || cargoDemand || (allowWorld('speedUpProduce') && settings?.factory.speedUpSources.includes('merchant')) });
+        if (settings && ((allowWorld('startProduce') && (!simulateNative || readsOrders) && (settings.factory.demandFirst || settings.alliance?.enabled &&
           settings.alliance.recruit && settings.alliance.recruitProduction || settings.guildShip?.enabled && settings.guildShip.produceMissing)) || settings.factory.speedUpSources.length > 0)) {
           const extra = await surveyBaseAutomation(client, protocol, config, player, settings, survey, { ledger: usageLedger, enabled: () => !stop.aborted && runtimeActive() && client.connected !== false });
           extraDemand = baseDemands(extra, config, settings);
