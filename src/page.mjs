@@ -1594,9 +1594,9 @@ const factoryFinishClock = new Intl.DateTimeFormat('zh-CN', {
   hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23',
 });
 
-function factoryProduct(job, recipes, num = 1) {
+function factoryProduct(job, recipes) {
   if (!job.productId) return el('span', 'dim', job.name || '产物未同步');
-  return planMaterialList([{ id: job.productId, name: job.name, icon: job.icon, num }], recipes);
+  return planMaterialList([{ id: job.productId, name: job.name, icon: job.icon, num: 1 }], recipes);
 }
 
 const pendingFactoryStarts = new Set();
@@ -1747,39 +1747,6 @@ function factoryProductionQueue(factory, recipes, accelerators) {
     const overflow = jobs.slice(capacity).map(job => job.name || job.productId || '产物未同步');
     section.appendChild(el('p', 'dim', '游戏队列另外返回 ' + overflow.length + ' 项：' + overflow.join('、')));
   }
-  return section;
-}
-
-function factoryPlannedProduction(factory, recipes) {
-  const section = el('section', 'factory-planned-section');
-  const heading = el('h3', null, '排产计划');
-  section.appendChild(heading);
-  const jobs = factory.plannedJobs;
-  if (!jobs?.length) {
-    section.appendChild(el('p', 'dim', Array.isArray(jobs) ? '本轮没有待投产任务' : '本轮计划未同步'));
-    return section;
-  }
-  const list = el('ol', 'factory-planned-list');
-  const groups = [];
-  for (const job of jobs) {
-    const last = groups.at(-1);
-    if (last && (job.productId || job.name) === (last[0].productId || last[0].name)) last.push(job);
-    else groups.push([job]);
-  }
-  heading.appendChild(el('span', 'factory-planned-caption dim', '整批预计完成（北京时间）'));
-  for (const group of groups) {
-    const row = el('li', 'factory-planned-group');
-    const first = group[0];
-    row.appendChild(factoryProduct(first, recipes, group.length));
-    if (group.every(job => Number.isFinite(job.estimatedFinishTime) && job.estimatedFinishTime > 0)) {
-      const time = Math.max(...group.map(job => job.estimatedFinishTime));
-      const stamp = el('time', 'factory-planned-time', factoryFinishClock.format(time * 1000));
-      stamp.dateTime = new Date(time * 1000).toISOString();
-      row.appendChild(stamp);
-    } else row.appendChild(el('span', 'dim', '时间待定'));
-    list.appendChild(row);
-  }
-  section.appendChild(list);
   return section;
 }
 
@@ -2058,11 +2025,7 @@ function factoryProductionSection(factories, expanded, recipes, accelerators, au
       button.setAttribute('aria-label', (open ? '收起' : '展开') + (factory.displayName || factory.buildingId) + '的生产格');
       detail.hidden = !open;
       clear(cell);
-      if (open) {
-        const sections = el('div', 'factory-detail-sections');
-        sections.append(factoryProductionQueue(factory, recipes, accelerators), factoryPlannedProduction(factory, recipes));
-        cell.appendChild(sections);
-      }
+      if (open) cell.appendChild(factoryProductionQueue(factory, recipes, accelerators));
     };
     setExpanded(expanded.has(factory.buildingId));
     button.onclick = () => {

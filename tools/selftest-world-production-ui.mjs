@@ -292,7 +292,7 @@ test('一键展开收起同步单厂开关，农田与空位可独立折叠并�
   assert.equal(groupButton('factory').textContent, '全部展开');
 });
 
-test('六个游戏格只展示已投产队列，工具拟投产物及估时单列', () => {
+test('工厂详情只展示游戏生产格，即使本轮有待投产任务', () => {
   const env = fixture();
   const now = env.now / 1000 + 5;
   env.render(worldData(env, { factories: [factory([
@@ -311,30 +311,12 @@ test('六个游戏格只展示已投产队列，工具拟投产物及估时单�
   assert.equal(slots.length, 6);
   assert.match(slots[0].textContent, /格子 1.*生产中.*面包.*完成时间.*08:01:10/);
   assert.match(slots[1].textContent, /格子 2.*排队 #1.*饼干/);
-  const [game, plan] = descendants(detail).filter(node => node.tagName === 'section');
-  assert.doesNotMatch(game.textContent, /蛋糕|08:02:10/);
-  assert.match(plan.children[0].textContent, /排产计划.*预计完成/);
-  assert.match(plan.textContent, /蛋糕.*08:03:05/);
-  assert.doesNotMatch(plan.textContent, /面包|饼干/);
+  assert.deepEqual(descendants(detail).filter(node => node.tagName === 'h3').map(node => node.textContent), ['游戏生产格']);
+  assert.doesNotMatch(detail.textContent, /排产计划|蛋糕|08:02:10/);
   assert(slots.slice(2).every(slot => slot.textContent.includes('空闲')));
   button.onclick();
   assert.equal(detail.hidden, true);
   assert.equal(button.attributes['aria-expanded'], 'false');
-});
-
-test('相邻同产物只显示整批最晚完成时间，跨日和部分时间未知时仍正确', () => {
-  const env = fixture();
-  const midnight = 1767283200;
-  const plannedJobs = [
-    ['面包', midnight - 5], ['面包', midnight + 5], ['面包', midnight], ['面条', null], ['面包', midnight + 10], ['面包', null],
-  ].map(([productId, estimatedFinishTime]) => ({ productId, estimatedFinishTime }));
-  env.render(worldData(env, { factories: [factory([], { plannedJobs })] }));
-  const button = productionButton(env);
-  button.onclick();
-  const groups = descendants(detailRow(button)).filter(node => node.className === 'factory-planned-group');
-  assert.deepEqual(groups.map(group => group.children[0].textContent), ['面包 ×3', '面条 ×1', '面包 ×2']);
-  assert.deepEqual(groups.map(group => group.children.slice(1).map(node => node.textContent)),
-    [['01/02 00:00:05'], ['时间待定'], ['时间待定']]);
 });
 
 test('多个在产位均展示剩余时间，排队摘要显示首项和总数', () => {
@@ -361,7 +343,8 @@ test('多座工厂可独立展开，刷新或工厂消失后按建筑保留状�
   const first = productionButton(env), second = productionButton(env, '2食品厂');
   first.onclick();
   second.onclick();
-  assert.match(detailRow(first).textContent, /饼干.*本轮没有待投产任务/);
+  assert.match(detailRow(first).textContent, /饼干/);
+  assert.doesNotMatch(detailRow(first).textContent, /排产计划|本轮没有待投产任务/);
   assert.equal((detailRow(second).textContent.match(/空闲/g) || []).length, 6);
   data.factories[0].jobs = [{ productId: '蛋糕' }];
   data.factories.reverse();

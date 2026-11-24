@@ -348,15 +348,9 @@ summary.plan-material-label::after { width:12px; height:12px }
 }
 .factory-toggle[aria-expanded="false"] svg { transform:rotate(-90deg) }
 .factory-queue-preview { display:inline-flex; align-items:baseline; gap:6px; flex-wrap:wrap }
-.factory-detail-sections { width:calc(100% - 9px); min-width:0; display:grid; gap:14px; margin:4px 0 10px 9px; padding-inline-start:14px; border-inline-start:2px solid var(--border) }
-.factory-detail-sections h3 { font-size:13px; font-weight:600; margin:0 0 6px }
+.factory-game-section { width:calc(100% - 9px); min-width:0; margin:4px 0 10px 9px; padding-inline-start:14px; border-inline-start:2px solid var(--border) }
+.factory-game-section h3 { font-size:13px; font-weight:600; margin:0 0 6px }
 .factory-queue { display:grid; grid-template-columns:repeat(auto-fill,minmax(min(100%,145px),1fr)); gap:8px }
-.factory-planned-section { padding-block-start:10px; border-block-start:1px solid var(--border) }
-.factory-planned-section p,.factory-planned-list { margin:0; font-size:12px }
-.factory-planned-caption { margin-inline-start:8px; font-weight:400; font-size:12px }
-.factory-planned-list { display:flex; flex-wrap:wrap; gap:5px 8px; list-style:none; padding:0 }
-.factory-planned-group { display:flex; flex-wrap:wrap; max-width:100%; align-items:baseline; gap:2px 8px; padding:4px 8px; border:1px solid var(--border); border-radius:6px; font-variant-numeric:tabular-nums }
-.factory-planned-time { white-space:nowrap; color:var(--muted-foreground) }
 .factory-slot { display:grid; align-content:start; gap:8px; min-width:0; padding:10px; border:1px solid var(--border); border-radius:8px; background:var(--card); font-size:12px }
 .factory-slot-header,.factory-product,.factory-finish { display:flex; align-items:center; flex-wrap:wrap; gap:4px 6px }
 .factory-slot-header { justify-content:space-between; font-variant-numeric:tabular-nums }
@@ -394,7 +388,7 @@ button.factory-empty:disabled { cursor:wait; opacity:.6 }
 .order-material-name { color:var(--foreground); overflow-wrap:anywhere }
 .order-material-missing { color:var(--warning) }
 @container main (max-width:46.5rem) {
-  .factory-detail-sections { width:100%; gap:10px; margin:0; padding:0; border:0 }
+  .factory-game-section { width:100%; margin:0; padding:0; border:0 }
   .factory-queue { grid-template-columns:repeat(auto-fill,minmax(min(100%,8rem),1fr)); gap:6px }
   .factory-slot { padding:8px; gap:6px }
   .factory-product { font-size:inherit }
