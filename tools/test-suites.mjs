@@ -211,6 +211,7 @@ const extra = [
   'tools/selftest-world-production-ui.mjs',
   'tools/selftest-activity-rankings.mjs',
   'tools/selftest-season-preview.mjs',
+  'tools/selftest-season-merit.mjs',
   'tools/selftest-side-rewards.mjs',
   'tools/selftest-claim-cleanup.mjs',
   'tools/selftest-console-performance.mjs',

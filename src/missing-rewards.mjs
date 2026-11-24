@@ -62,7 +62,7 @@ export async function claimFestivalActive(client,config,{enabled,ledger,report})
  if(!found)wait(report,label,'当前未同步到开放的酆都签到活动');
 }
 const reportClaimsActive = new WeakSet();
-export async function claimReportRewards(client,config,{enabled,ledger,report}){
+export async function claimReportRewards(client,config,{enabled,ledger,report,beforeSend,requireComplete=false}){
   const label = '邮件战报一键领取', request = 'QuickGotCampaignReportRequest';
   if (!enabled()) return;
   if (!ledger?.keyRecords || !ledger?.reserve) return wait(report, label, '领取记录不可用');
@@ -70,6 +70,7 @@ export async function claimReportRewards(client,config,{enabled,ledger,report}){
   reportClaimsActive.add(client);
   try {
     let snapshot = await readReportSnapshot(client, enabled);
+    if (requireComplete && !snapshot.complete) return wait(report, label, snapshot.reason);
     for (const [saved, record] of Object.entries(ledger.keyRecords())) {
       if (record.confirmed || record.details?.request !== request) continue;
       const ids = record.details.claimIds;
@@ -94,7 +95,7 @@ export async function claimReportRewards(client,config,{enabled,ledger,report}){
         ledger, key: (all ? 'report-all:' : 'report-ids:') + signature([...ids].sort()),
         title: label + ' · 本批 ' + ids.length + ' 份', request,
         body: all ? { all: true } : { all: false, campaignId: ids.map(automationWireId) },
-        enabled, details: { claimIds: ids, all },
+        enabled, beforeSend, details: { claimIds: ids, all },
         report: entry => report(!all && entry.ok ? { ...entry, partial: true,
           reason: `已确认本批 ${ids.length} 份；${before.reason || '本次按已读取编号领取'}，其余战报待同步` } : entry),
         verify: async reply => {

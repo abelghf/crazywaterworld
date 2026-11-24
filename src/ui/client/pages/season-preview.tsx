@@ -32,6 +32,7 @@ import {
 import { createAccountRequest } from "../lib/api";
 import { getConsoleStore } from "../lib/console-store";
 import { formatGameTime } from "../lib/time";
+import { SeasonMeritSettings } from "./season-merit-settings";
 import styles from "./season-preview.module.css";
 
 const labels = { merit: "功勋榜", tech: "科技榜", mail: "邮件物品" } as const;
@@ -107,9 +108,7 @@ function MailView({ mail }: { mail: Mail }) {
       <div className={styles.heading}>
         <div>
           <h3>邮件物品</h3>
-          <p>
-            {mail.scanned} 封系统邮件 · {mail.reportsScanned} 条战报
-          </p>
+          <p>未领取功勋 {numberText(mail.merit.pending)}</p>
         </div>
         <label className={styles.filter} htmlFor="season-show-claimed">
           包含已领取附件
@@ -361,7 +360,10 @@ function Preview({ account }: { account: string }) {
         </Button>
       </div>
       <div className={styles.layout}>
-        <MySeason data={snapshot} errors={errors} />
+        <div className={styles.sidebar}>
+          <MySeason data={snapshot} errors={errors} />
+          <SeasonMeritSettings account={account} />
+        </div>
         <Card className={styles.content}>
           <fieldset aria-label="赛季预览内容" className={styles.segments}>
             {sections.map((key) => (
@@ -426,6 +428,7 @@ function SeasonPage() {
           <Trophy size={26} aria-hidden="true" />
           <p>请先连接当前账号</p>
         </Card>
+        {account && <SeasonMeritSettings key={account} account={account} />}
       </div>
     );
   return <Preview key={account} account={account} />;

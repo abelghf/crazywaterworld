@@ -23,7 +23,7 @@ function rankRow(item) {
   };
 }
 
-export async function readSeasonRanking(client, player, kind) {
+export async function readSeasonRanking(client, player, kind, limit = 50) {
   if (kind !== 'merit' && kind !== 'tech') throw Error('未知赛季榜单');
   const type = kind === 'merit' ? 0 : 1;
   const info = await client.request('SeasonRankInfoRequest', {}, 'SeasonRankInfoResponse');
@@ -31,7 +31,7 @@ export async function readSeasonRanking(client, player, kind) {
   const players = new Set();
   let mine = null;
   // SeasonRankPop starts at page 1 for both personal boards.
-  for (let page = 1; page <= 50; page++) {
+  for (let page = 1; page <= limit; page++) {
     const reply = await client.request('SeasonRankPlayerRequest', { type, page }, 'SeasonRankPlayerResponse');
     if (!Array.isArray(reply?.player)) throw Error('赛季榜单未完整返回');
     if (reply.myRank?.rank > 0) mine = rankRow(reply.myRank);
@@ -42,9 +42,9 @@ export async function readSeasonRanking(client, player, kind) {
       }
       rows.push(row);
       if (row.playerId) players.add(row.playerId);
-      if (rows.length === 50) break;
+      if (rows.length === limit) break;
     }
-    if (rows.length === 50 || (page === 1 && !reply.player.length && !reply.maxPage)) break;
+    if (rows.length === limit || (page === 1 && !reply.player.length && !reply.maxPage)) break;
     if (!Number.isSafeInteger(reply.maxPage) || reply.maxPage < page) throw Error('赛季榜单页数未确认');
     if (!reply.player.length && (page > 1 || reply.maxPage > page)) throw Error('赛季榜单分页缺失，请刷新');
     if (page === reply.maxPage) break;
@@ -136,6 +136,7 @@ async function seasonMailSnapshot(client, player, config) {
   }
   for (const [id, mail] of mails) {
     if (!mail.attachment) continue;
+    if (typeof mail.got !== 'boolean') throw Error('系统邮件领取状态尚未确认，请刷新邮箱');
     accumulate({
       kind: 'system', id, subject: mail.subject || '未命名邮件',
       sendTime: mail.sendTime || null, claimed: !!mail.got,

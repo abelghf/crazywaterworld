@@ -136,6 +136,18 @@ try {
   assert.equal((await fetch(base + '/api/season/mail')).ok, false);
   assert.equal((await fetch(base + '/api/season/rank?account=a&kind=other')).ok, false);
   assert.equal((await fetch(base + '/api/season/mail?account=a', { method: 'POST' })).status, 404);
+  const settingsPath = '/api/season/merit-settings?account=a';
+  const originalPref = await get(settingsPath);
+  const postPref = (pref, version) => fetch(base + settingsPath, { method:'POST', headers:{'content-type':'application/json'},
+    body:JSON.stringify({ seasonMerit:pref, revision:version.revision, baseRevision:version.baseRevision, confirm:true }) });
+  assert.equal(originalPref.enabled, false);
+  assert(!(await postPref({enabled:true,targetRank:0,leadMinutes:5}, originalPref)).ok);
+  assert(!(await postPref({enabled:true,targetRank:1,leadMinutes:0}, originalPref)).ok);
+  const selected = { enabled:true, targetRank:2, leadMinutes:12 };
+  assert((await postPref(selected, originalPref)).ok);
+  assert(!(await postPref(selected, originalPref)).ok);
+  assert.equal((await get(settingsPath)).leadMinutes,12);
+  assert.equal((await get('/api/season/merit-settings?account=b')).enabled,false);
   if (process.argv.includes('--browser')) {
     const { chromium } = await import('playwright-core');
     const executablePath = process.env.CW_BROWSER_TEST_EXECUTABLE || [
@@ -153,6 +165,14 @@ try {
     await summary.getByText('第 94 名', {exact: true}).waitFor();
     await summary.getByText('第 2 名', {exact: true}).waitFor();
     await summary.getByText('未领 9,007,199,254,741,072').waitFor();
+    const toggle = panel.getByRole('switch',{name:'自动偷榜'});
+    await toggle.waitFor();
+    assert(await toggle.isChecked());
+    await panel.getByLabel('结算前（分钟）').fill('8');
+    await panel.getByRole('button',{name:'保存设置'}).click();
+    await panel.getByText('已保存，随本账号挂机运行').waitFor();
+    assert.equal((await get(settingsPath)).leadMinutes,8);
+    await panel.getByText(/请手动关闭挂机配置中的「邮件附件」/).waitFor();
     assert.equal(await summary.getByText(/^已领/).count(), 0);
     for (const width of [320, 390, 1180]) {
       await page.setViewportSize({ width, height: 844 });
@@ -170,6 +190,8 @@ try {
     await panel.getByRole('cell', { name: '玩家3', exact: true }).waitFor();
     assert.equal(await panel.locator('tbody tr').count(), 3);
     await panel.getByRole('button', { name: '邮件物品' }).click();
+    await panel.getByText('未领取功勋 9,007,199,254,741,072').waitFor();
+    assert.equal(await panel.getByText(/\d+\s*封系统邮件/).count(), 0);
     const meritMail = panel.locator('details').filter({ has: page.locator('summary strong', { hasText: /^功勋$/ }) });
     await meritMail.locator('summary').click();
     await meritMail.getByText(/第一封/).waitFor();
@@ -197,6 +219,7 @@ try {
     release();
     await summary.getByText('未加入联盟').waitFor();
     await summary.getByText('未领 0').waitFor();
+    assert(!(await toggle.isChecked()));
     await panel.getByRole('table', { name: '最强个人 · 功勋榜' }).waitFor();
     assert.equal(await panel.getByText('S4 赛季').count(), 0);
   }

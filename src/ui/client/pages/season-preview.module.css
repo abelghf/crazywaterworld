@@ -4,6 +4,45 @@
   min-width: 0;
   font-variant-numeric: tabular-nums;
 }
+.sidebar,
+.meritForm {
+  display: grid;
+  gap: 12px;
+  min-width: 0;
+}
+.meritHeading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.meritForm p {
+  color: var(--muted-foreground);
+  font-size: 0.8125rem;
+  line-height: 1.55;
+}
+.meritFields {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+.meritFields label {
+  display: grid;
+  gap: 5px;
+  font-size: 0.8125rem;
+}
+.meritFields input {
+  width: 100%;
+  min-width: 0;
+}
+.meritForm .meritWarning {
+  padding: 8px 10px;
+  border-radius: var(--radius);
+  background: var(--warning-muted);
+  color: var(--warning);
+}
+.meritForm [role="alert"] {
+  color: var(--destructive);
+}
 .titlebar,
 .titlebar > div,
 .heading,

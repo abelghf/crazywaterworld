@@ -2263,7 +2263,7 @@ export function createConsole({ host = '127.0.0.1', port = 17321, onLog, recover
         '/api/guild/mutual/stop', '/api/trials/stop'].includes(parsed.pathname)) assertSettingsReady(found.session);
       if (req.method === 'POST' && found.session.syncingProduction
         && !['/api/accounts/pause', '/api/disconnect', '/api/loop/stop', '/api/stages/stop', '/api/pirates/advance/stop',
-          '/api/guild/mutual/stop', '/api/loop/auto-start', '/api/loop/interval', '/api/settings', '/api/settings/validate', '/api/login-settings', '/api/week-order/settings', '/api/hero-raid/settings', '/api/merchant/settings', '/api/guild-ship/settings', '/api/activities/settings', '/api/appointments/settings', '/api/logs/clear',
+          '/api/guild/mutual/stop', '/api/loop/auto-start', '/api/loop/interval', '/api/settings', '/api/settings/validate', '/api/login-settings', '/api/week-order/settings', '/api/hero-raid/settings', '/api/merchant/settings', '/api/guild-ship/settings', '/api/activities/settings', '/api/season/merit-settings', '/api/appointments/settings', '/api/logs/clear',
           '/api/lineup-presets/save', '/api/lineup-presets/delete', '/api/lineup-presets/bind'].includes(parsed.pathname)) {
         throw new Error('正在自动同步手动操作后的生产状态，请等待同步完成后操作');
       }
@@ -2316,6 +2316,22 @@ export function createConsole({ host = '127.0.0.1', port = 17321, onLog, recover
           }); } catch { /* 读取失败保留上次已确认名单；从未同步时不展示虚构舰队。 */ }
         }
         json(settingsView(session));
+        return;
+      }
+      if (route === 'GET /api/season/merit-settings' || route === 'POST /api/season/merit-settings') {
+        if (!parsed.searchParams.get('account')) throw Error('请选择赛季预览账号');
+        const { session } = scoped_(parsed);
+        let current = settingsView(session);
+        if (req.method === 'POST') {
+          const payload = jsonBody();
+          needConfirm(payload);
+          if (payload.revision !== current.revision || !current.revision && payload.baseRevision !== current.baseRevision)
+            throw new SettingsError({ revision: '挂机配置已变化，请重新读取再保存' });
+          const next = { ...current.settings, seasonMerit: payload.seasonMerit };
+          adoptPreferences(session, saveAutomationSettings(session.id, next, { revision: current.revision }));
+          current = settingsView(session);
+        }
+        json({ ...current.settings.seasonMerit, revision: current.revision, baseRevision: current.baseRevision });
         return;
       }
       if (route === 'GET /api/activities/settings') {
