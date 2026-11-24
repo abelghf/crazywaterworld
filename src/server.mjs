@@ -51,7 +51,7 @@ import { readAllianceRadar } from './alliance-radar.mjs';
 import { previewRadarSweep } from './radar-sweep.mjs';
 import { planRadarPreview, pendingPetrol } from './dispatch-preview.mjs';
 import { inspectHunt } from './pirates.mjs';
-import { pirateAutoDay, selectPirateAdvance, runSinglePirateHunt } from './pirate-advance.mjs';
+import { pirateAutoDay, pirateTimeoutTypes, selectPirateAdvance, runSinglePirateHunt } from './pirate-advance.mjs';
 import { fleetRecordReason, dispatchReservationReason, fleetDispatchView, dispatchLabels, bridgeFleetReservations } from './fleet-availability.mjs';
 import { watchFreeRewardClock } from './extra-free-rewards.mjs';
 import { createPirateAdvanceTask } from './pirate-advance.mjs';
@@ -2799,11 +2799,13 @@ export function createConsole({ host = '127.0.0.1', port = 17321, onLog, recover
           if (category === 'pirateHunt') {
             const snapshot=await inspectHunt(client,config,session.player),ledger=usageFor(session);
             for(const fleet of snapshot.view.fleets??[])fleet.reason ||= (!settings.pirateHunt.fleetIds.includes(fleet.buildingId)?'未选择此舰队':'')|| fleetRecordReason(ledger.keyRecords(),fleet.buildingId,exactAutomationId(session.player.worldId))||(previewCityReserved.includes(fleet.buildingId)?'城战时段预留':dispatchReservationReason(client,settings,'pirateHunt',fleet.buildingId,{ignoreOwners:['cityWar']}));
-            const checkpoint=session.loop.running?session.loop.challengeRun?.pirate:null;
-            const dailyRun=pirateAutoDay(ledger,session.player,checkpoint);
-            const halted=checkpoint?.scope===dailyRun.scope && checkpoint.state?.halted;
-            const reason=dailyRun.reason || (halted && checkpoint.state.reason) || (session.pirateAdvance.view().running && '手动首杀推进中，本轮跳过');
-            const autoState=checkpoint?.scope===dailyRun.scope ? checkpoint.state??{} : {};
+            const dailyRun=pirateAutoDay(ledger,session.player,session.loop.running?session.loop.challengeRun?.pirate:null);
+            const {checkpoint}=dailyRun;
+            const timedOut=pirateTimeoutTypes(ledger,exactAutomationId(session.player.worldId),dailyRun.day,Date.now()+(client.serverClockOffsetMs||0));
+            const autoState={...checkpoint.state,timedOutTypes:[...new Set([...(checkpoint.state?.timedOutTypes??[]),...timedOut])]};
+            const reason=dailyRun.reason || (checkpoint.state?.halted && checkpoint.state.reason)
+              || (session.pirateAdvance.view().running && '手动首杀推进中，本轮跳过')
+              || (checkpoint.active && !checkpoint.active.counted && !autoState.timedOutTypes.includes(checkpoint.active.type) && '等待核对上一场海盗首杀战果');
             const selection=reason?{reason}:selectPirateAdvance(snapshot,settings.pirateHunt,{pendingFuel:pendingPetrol(ledger),autoState});
             const plan={actions:selection.reason?[]:[{kind:'pirateFirst',label:selection.fleet.name+' → '+selection.target.name+' '+selection.target.level+'级',costs:[{id:'汽油',num:selection.cost}]}],notes:selection.reason?[selection.reason]:[]};
             return {...output(plan,{fleets:snapshot.view.fleets?.length??0,targets:snapshot.view.targets?.length??0},'海盗首杀'),dispatch:{fleets:snapshot.view.fleets,fuel:snapshot.view.fuel,pending:pendingPetrol(ledger)}};
