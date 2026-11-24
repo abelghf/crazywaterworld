@@ -99,6 +99,7 @@ ${chrome()}
   <section id="tab-giftcodes" class="hidden">
     ${giftCodesPage()}
   </section>
+  <section id="tab-season-preview" class="hidden" aria-label="赛季预览"><div id="season-preview-root"></div></section>
   <section id="tab-account" class="hidden">
     ${accountPage()}
   </section>
@@ -3012,7 +3013,7 @@ async function boot() {
     : savedView?.tab === 'resources' && savedView.resource === 'activities' ? 'activities' : savedView?.tab;
   try {
     // 恢复账号页时先显示保存的角色资料，由该页按连接状态决定是否读取资源。
-    await loadAccounts(true, initialTab !== 'account'
+    await loadAccounts(true, initialTab !== 'account' && initialTab !== 'season-preview'
       && !(initialTab === 'resources' && ['shops', 'chat', 'items'].includes(savedView?.resource)));
   } catch (error) {
     reportError(error);
