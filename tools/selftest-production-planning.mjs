@@ -38,6 +38,28 @@ function fixture() {
 let passed = 0;
 function test(name, run) { run(); passed++; console.log('通过：' + name); }
 
+{
+  const {snapshot,settings} = fixture(), start = snapshot.serverNow;
+  const jobs = { '1食品厂':{jobs:[{id:'面包',quantity:2,pinned:true,at:start+90000},{id:'面包',at:start+90001}]},
+    '9失联工厂':{jobs:[{id:'面包',quantity:4,pinned:true}]} };
+  settings.loop.world = false;
+  Object.assign(snapshot.farms[0],{productId:'小麦',num:5,ripeTime:start+60});
+  const forecast = () => forecastProductionDay(snapshot,config,settings,[],{insertions:jobs});
+  const day = await forecast();
+  assert.deepEqual(day.factories[0].unscheduled.map(j=>j.quantity),[2,1]);
+  assert.equal(day.unsynced[0].unscheduled[0].quantity,4);
+  assert.deepEqual(day.farms[0].runs.map(r=>[r.id,r.from,r.to]),[['小麦',start,start+60]]);
+  snapshot.inventoryKnown = false;
+  snapshot.farms[0].ripeTime = start-1;
+  const partial = await forecast();
+  assert(partial.unavailable);
+  assert.equal(partial.materials['小麦'].stock,null);
+  assert.equal(partial.farms[0].ready[0].quantity,1);
+  assert.equal(partial.factories.find(f=>f.id==='9失联工厂').pendingInsertions[0].quantity,4);
+  assert.deepEqual(partial.factories.find(f=>f.id==='1食品厂').unscheduled.map(j=>j.quantity),[2,1]);
+  console.log('通过：跨日、农田、未同步设施及读数不全时的已知批次均保留');
+}
+
 test('模拟原生预览只展示可开工的下一批，已有队列占位时等待', () => {
   const {snapshot,settings,plan}=fixture();
   settings.factory.strategy='nativeSimulation';
@@ -673,7 +695,10 @@ test('缺少库存时保留原始读取错误', () => {
   const day = await forecastProductionDay(snapshot,config,settings,[],{anchors,insertions:{[id]:entry}});
   const trace = anchors.get(id), f = { ...day.factories[0], startAt:start,endAt:day.endAt };
   assert.deepEqual(f.runs.map(r => [r.id,r.from,r.to,r.quantity]), [['面包',start+90,start+210,2]]);
-  assert.deepEqual(f.pendingInsertions, [{id:'面包',name:'面包',quantity:1},{id:'面包',name:'面包',quantity:1}]);
+  assert.deepEqual(f.pendingInsertions.map(job => [job.planIndex,job.quantity,job.estimatedStart,job.estimatedFinish]), [
+    [0,1,start+90,start+150], [1,1,start+150,start+210],
+  ]);
+  assert.equal(f.runs[0].inserted, true);
   const [run] = f.runs;
   const position = locateFactoryInsertion(trace,f,{...run,offset:1},entry);
   assert.deepEqual(position.before,entry.jobs.slice(0,1));
@@ -684,6 +709,31 @@ test('缺少库存时保留原始读取错误', () => {
   assert.throws(() => locateFactoryInsertion(trace,f,{...run,offset:2},entry),/变化/);
   assert.throws(() => locateFactoryInsertion(trace,f,{status:'gap',from:start+91},entry),/变化/);
   console.log('通过：指定空档在到时后开始，计划批内前插保留此前与此后的手动任务');
+}
+
+{
+  const {snapshot,settings} = fixture(), id = '1食品厂';
+  settings.loop.world = false;
+  snapshot.stockCap = 3;
+  const entry = {jobs:[{id:'面包',quantity:5,pinned:true,supplyFor:'急救包'}]};
+  const forecast = async () => (await forecastProductionDay(snapshot,config,settings,[],{insertions:{[id]:entry}})).factories[0];
+  const partial = await forecast();
+  assert.deepEqual(partial.runs.map(r => [r.quantity,r.supplyFor]), [[3,'急救包']]);
+  assert.deepEqual(partial.pendingInsertions, [{id:'面包',name:'面包',quantity:5,estimatedStart:snapshot.serverNow,
+    planIndex:0,beforeRun:0,supplyFor:'急救包'}]);
+  const target = {status:'batch',id:'面包',planIndex:0,offset:4};
+  const position = locateFactoryInsertion({},partial,target,entry);
+  assert.deepEqual([position.count,position.before[0].quantity,position.after[0].quantity], [5,4,1]);
+  assert.equal(position.after[0].supplyFor, '急救包');
+  assert.throws(() => locateFactoryInsertion({},partial,{...target,offset:5},entry),/变化/);
+  entry.flight = {kind:'start',id:'面包',baseline:0};
+  snapshot.buildings[0].factory = {factoryQ:[{idx:1,productId:'面包'}],finishedProducts:[]};
+  snapshot.factories[0].queue = [{index:1,productId:'面包',num:1}];
+  const confirmed = await forecast();
+  assert.deepEqual(confirmed.untimedQueue,[{id:'面包',name:'面包',quantity:1}]);
+  assert.equal(confirmed.pendingInsertions[0].quantity,4);
+  assert.equal(entry.jobs[0].quantity,5);
+  console.log('通过：跨厂补料按可见批次抵扣，游戏已确认的件数只显示一次');
 }
 
 for (const strategy of ['smart','nativeSimulation']) {
@@ -703,6 +753,7 @@ for (const strategy of ['smart','nativeSimulation']) {
   const day = await forecastProductionDay(snapshot,configWithCookies,settings,[],{anchors,insertions:{[id]:entry}});
   const trace = anchors.get(id), units = trace.units, f = {...day.factories[0],startAt:day.startAt,endAt:day.endAt};
   assert.deepEqual(units.slice(0,4).map(u => [u.id,u.sourceIndex]),[['饼干',1],['面包',0],['饼干',undefined],['面包',0]]);
+  assert.deepEqual(f.pendingInsertions.map(j => [j.id,j.beforeRun]), [['面包',0],['饼干',0],['蛋糕',0]]);
   const first = locateFactoryInsertion(trace,f,f.runs[0],entry);
   assert.deepEqual(first.before,[entry.jobs[0]], '对越过满仓产物的任务再插单，也保留满仓批次的位置');
   assert.deepEqual(first.after,entry.jobs.slice(1));

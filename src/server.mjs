@@ -1234,21 +1234,25 @@ export function createConsole({ host = '127.0.0.1', port = 17321, onLog, recover
     const current=()=>session.client===instance && instance.connected && session.player && !session.paused && !session.productionSyncRequired;
     let servicingInserts = false;
     const insertTimer = setInterval(async () => {
-      if (servicingInserts || !current() || closing) return;
+      if (servicingInserts || !current() || closing || !session.loop.running) return;
       const player = session.player, generation = session.generation;
-      const enabled = () => current() && !closing && session.player === player && session.generation === generation;
+      const running = () => current() && !closing && session.player === player && session.generation === generation
+        && session.loop.running && !session.loop.controller?.signal.aborted;
       servicingInserts = true;
       try {
-        const ids = Object.keys(factoryInsertions(player));
-        if (ids.length) await enqueue(session, async () => {
-          for (const id of ids) {
-            if (!enabled()) return;
+        const entries = Object.entries(factoryInsertions(player));
+        if (entries.length) await enqueue(session, async () => {
+          for (const [id, entry] of entries) {
+            if (!running()) return;
+            const task = entry.jobs[0]?.crop ? 'farm' : 'startProduce';
+            const enabled = () => running() && session.loop.tasks[task] && nativePreferenceEnabled(session.preferences, task);
+            if (!enabled()) continue;
             const message = await advanceFactoryInsertion(instance, protocolFor(instance),
               { player, enabled, config:loadConfigSafe(), settings:session.preferences }, id);
             if (message) emit(session,'warn',message,{ worldUpdated:true });
           }
         }, '执行排产插单');
-      } catch (error) { if (enabled()) emit(session,'warn','排产插单待核对：' + error.message); }
+      } catch (error) { if (running()) emit(session,'warn','排产插单待核对：' + error.message); }
       finally { servicingInserts = false; }
     }, 10000);
     insertTimer.unref?.();
@@ -4527,7 +4531,7 @@ export function createConsole({ host = '127.0.0.1', port = 17321, onLog, recover
         const enabled = () => quote && session.factoryInsertPlan === quote && quote.enabled()
           && quote.config === loadConfigSafe() && target.planKey === quote.forecast.insertKey;
         if (!enabled()) throw new Error('请重新生成当前账号的排产计划后插单');
-        const { client, player, generation } = session;
+        const { client, player } = session;
         const context = { config:quote.config, player, enabled, settings:session.preferences };
         const prepare = () => prepareFactoryInsertion(client, protocolFor(client), context, quote, target, submit);
         if (!submit) {
@@ -4541,15 +4545,8 @@ export function createConsole({ host = '127.0.0.1', port = 17321, onLog, recover
           session.factoryInsertPlan = null;
           session.productionPlanRead = null;
           session.worldRead = null;
-          context.enabled = () => session.client === client && client.connected && session.player === player
-            && session.generation === generation && !session.paused && !session.productionSyncRequired;
-          let warning;
-          try {
-            warning = await advanceFactoryInsertion(client, protocolFor(client), context, target.buildingId);
-          } catch (error) { warning = saved.label + '，等待核对游戏队列：' + error.message; }
-          const label = warning || saved.label;
-          emit(session, warning ? 'warn' : 'info', label, { worldUpdated:true });
-          return { ...saved, label, warning };
+          emit(session, 'info', saved.label, { worldUpdated:true });
+          return saved;
         }, '插入工厂排产');
         json(result);
         return;
