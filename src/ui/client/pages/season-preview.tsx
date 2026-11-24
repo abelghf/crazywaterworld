@@ -256,9 +256,7 @@ function MySeason({ data, errors }: { data: Snapshot; errors: Errors }) {
                 ? `未领 ${numberText(mail.merit.pending)}`
                 : unavailable("mail")
             }
-            detail={
-              mail ? `已领 ${numberText(mail.merit.claimed)}` : errors.mail
-            }
+            detail={errors.mail}
           />
         </dl>
         {dates?.midEndTime || dates?.endTime ? (

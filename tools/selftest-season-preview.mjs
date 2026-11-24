@@ -153,6 +153,7 @@ try {
     await summary.getByText('第 94 名', {exact: true}).waitFor();
     await summary.getByText('第 2 名', {exact: true}).waitFor();
     await summary.getByText('未领 9,007,199,254,741,072').waitFor();
+    assert.equal(await summary.getByText(/^已领/).count(), 0);
     for (const width of [320, 390, 1180]) {
       await page.setViewportSize({ width, height: 844 });
       const stats = await summary.boundingBox();
