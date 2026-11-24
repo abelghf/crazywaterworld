@@ -19,7 +19,7 @@ export const MERCHANT_DEFAULTS = Object.freeze({
   autoSpeedUp: false,
   keepPointers: 0,
   speedUpMode: 'deadline', guardLastPointer: false, speedUpMaxPerLeg: 4, monitorSeconds: 60,
-  refreshWindowMinutes: 8, dailyPointerLimit: 28, autoBuyPointers: false, pointerDailyDiamondLimit: 0,
+  refreshWindowMinutes: 8, dailyPointerLimit: 28, periodPointerLimit: -1, autoBuyPointers: false, pointerDailyDiamondLimit: 0,
   profitLimit: 0, firstDepartureMode: 'smart', firstDepartureTime: '10:00', firstDepartureWaitMinutes: 29,
   autoUpgrade: false
 });
@@ -33,7 +33,7 @@ export function merchantSettings(input = {}) {
   for (const [key, fallback] of Object.entries(output)) {
     const value = input?.[key];
     if (typeof fallback === 'boolean') output[key] = typeof value === 'boolean' ? value : fallback;
-    else if (key === 'speedUpMode') output[key] = ['deadline', 'refresh', 'arrival', 'race', 'full'].includes(value) ? value : fallback;
+    else if (key === 'speedUpMode') output[key] = ['deadline', 'refresh', 'arrival', 'race', 'full', 'goal'].includes(value) ? value : fallback;
     else if (key === 'firstDepartureMode') output[key] = ['smart', 'time'].includes(value) ? value : fallback;
     else if (key === 'firstDepartureTime') output[key] = typeof value === 'string' && /^([01]\d|2[0-3]):[0-5]\d$/.test(value) ? value : fallback;
     else if (natural(value)) output[key] = value;
@@ -53,6 +53,11 @@ export function merchantActionSeconds(settings = {}, intervalSeconds = 0) {
 export function merchantPointerSeconds(config) {
   const seconds = Number(param(config, '海商王加速时长')) * 60;
   return positive(seconds) ? seconds : null;
+}
+
+export function merchantGoalSalePrice(definition, port, knownPrice, discount) {
+  if (port.specGoodsId === definition.goodsId && !positive(knownPrice)) return 0;
+  return Math.floor(Math.min(definition.unitPrice, knownPrice ?? definition.unitPrice) * (100 - discount) / 100);
 }
 
 export function merchantTiming(config, event, time) {
@@ -267,7 +272,7 @@ function comparableQuotes(markets, definitions) {
 
 function expectedPrice(def, port, snapshot, pastRounds, peers, origin, freshAtArrival, discount) {
   if (!positive(def?.unitPrice)) return null;
-  const role = marketRole(port, def.goodsId) ?? '普通';
+  const role = marketRole(port, def.goodsId);
   const quote = snapshot?.goods.find(g => g.goodsId === def.goodsId);
   let basis = def.unitPrice, source = '商品基准价';
   if (quote && freshAtArrival) {
@@ -277,11 +282,15 @@ function expectedPrice(def, port, snapshot, pastRounds, peers, origin, freshAtAr
     // 每轮每港只贡献一个样本，且特产、紧缺状态须与本次估价一致。
     const past = [];
     for (const round of pastRounds?.values() ?? []) {
-      if (marketRole(round, def.goodsId) !== role) continue;
+      if (marketRole(round, def.goodsId) !== (role ?? '普通')) continue;
       const price = round.goods.find(g => g.goodsId === def.goodsId)?.price;
       if (positive(price)) past.push(price);
     }
-    if (past.length >= 2) {
+    if (!role) {
+      // 当天紧缺尚未共享。只用本港同货已确认的普通报价，以一份基准价缓和稀少样本。
+      basis = median([def.unitPrice, ...past]);
+      source = past.length ? '紧缺未确认，基准价与目的港' + past.length + '轮同商品普通报价中位数' : '紧缺未确认，采用商品基准价';
+    } else if (past.length >= 2) {
       basis = median(past);
       source = '目的港' + past.length + '轮同商品' + role + '报价中位数';
     } else if (role === '特产') {
@@ -298,6 +307,10 @@ function expectedPrice(def, port, snapshot, pastRounds, peers, origin, freshAtAr
         basis = median(samples);
         source = '同档普通货涨跌幅中位数';
       }
+      if (role === '普通' && past.length === 1) {
+        basis = median([past[0], basis]);
+        source = '目的港一轮同商品普通报价与' + source + '的均值';
+      }
     }
     if (quote && quote.price <= basis) {
       basis = quote.price;
@@ -311,6 +324,29 @@ const profit = (price, batch, ship) => {
   const difference = (price - batch.buyPrice) * batch.num;
   return difference > 0 ? Math.ceil(difference * (10000 + ship.profitMargin) / 10000) : difference;
 };
+
+// 有多批可卖且单卖一批即可升级时，把升级后能多赚最多的批次留在船上。
+function saleToUnlockShip(sales, config, event, state, ship, settings, timing, time, actionSeconds) {
+  if (!settings.autoUpgrade || sales.length < 2 || !natural(state.player.profit)) return null;
+  const deadline = Math.min(timing.nextRefreshAt ?? Infinity, timing.tradeEndTime);
+  if (time + (sales.length + 1) * actionSeconds >= deadline) return null;
+  const finalStart = merchantFinalCargoStart(timing, event, settings, state.player.goods, state.cargo.cityId);
+  if (finalStart !== null && time >= finalStart) return null;
+  const ships = rows(config, 'TradeShipCfg'), next = ships.find(row => row.lv === ship.lv + 1);
+  if (!positive(next?.upMoney) || !natural(next.profitMargin) || next.profitMargin <= ship.profitMargin ||
+    next.upCost?.[0] !== 'RUBY' || next.upCost.length !== 2 || !positive(next.upCost[1])) return null;
+  const gap = next.upMoney - state.player.profit, first = sales[0];
+  const firstProfit = state.player.profit + first.gain;
+  if (gap <= 0 || first.gain < gap || (settings.profitLimit > 0 && firstProfit >= settings.profitLimit) ||
+    ships.some(row => row.lv > next.lv && natural(row.upMoney) && firstProfit >= row.upMoney)) return null;
+  let selected = first, bonus = profit(first.price, first.batch, next) - first.gain;
+  for (const candidate of sales.slice(1)) {
+    if (candidate.gain < gap) break;
+    const extra = profit(candidate.price, candidate.batch, next) - candidate.gain;
+    if (extra < bonus) { selected = candidate; bonus = extra; }
+  }
+  return selected === first ? null : selected;
+}
 
 export function planMerchant(config, event, state, market, radar, time, visited = [], options = {}) {
   const settings = merchantSettings(options.settings), timing = merchantTiming(config, event, time);
@@ -341,7 +377,10 @@ export function planMerchant(config, event, state, market, radar, time, visited 
   const { ports, history, pastRounds } = portsAndHistory(config, event, radar, options.markets, time, settings, timing.marketEpoch);
   const observedMarkets = new Map(history).set(cargo.cityId, market);
   const peers = comparableQuotes(observedMarkets, definitions);
-  const arrival = time + (timing.travelSeconds ?? Infinity);
+  const closing = positive(options.closingPointers) && settings.autoSpeedUp && settings.speedUpMode === 'goal';
+  const travel = closing ? Math.max(actionSeconds, timing.travelSeconds - options.closingPointers * merchantPointerSeconds(config)) :
+    timing.travelSeconds ?? Infinity;
+  const arrival = time + travel;
   const sameRound = merchantTiming(config, event, arrival).marketEpoch === timing.marketEpoch;
   const canArrive = count => positive(timing.travelSeconds) && arrival + Math.max(1, count) * actionSeconds < timing.tradeEndTime;
   const strict = settings.fullCargoRoutes;
@@ -356,8 +395,14 @@ export function planMerchant(config, event, state, market, radar, time, visited 
     const key = port.cityId + ':' + definition.goodsId;
     if (!estimates.has(key)) {
       const snapshot = history.get(port.cityId);
-      estimates.set(key, expectedPrice(definition, port, snapshot, pastRounds.get(port.cityId), peers, cargo.cityId,
-        sameRound && snapshot && arrival - snapshot.observedAt <= settings.quoteMaxAgeSeconds, settings.estimateDiscountPercent));
+      let value = expectedPrice(definition, port, snapshot, pastRounds.get(port.cityId), peers, cargo.cityId,
+        sameRound && snapshot && arrival - snapshot.observedAt <= settings.quoteMaxAgeSeconds, settings.estimateDiscountPercent);
+      if (closing && value) {
+        const known = snapshot?.goods.find(g => g.goodsId === definition.goodsId)?.price;
+        const price = merchantGoalSalePrice(definition, port, known, settings.estimateDiscountPercent);
+        if (price < value.price) value = { ...value, price, source: '收尾用针保守估价' };
+      }
+      estimates.set(key, value);
     }
     return estimates.get(key);
   };
@@ -518,13 +563,15 @@ export function planMerchant(config, event, state, market, radar, time, visited 
   }
   sales.sort((a, b) => b.gain - a.gain || (b.swap?.extra ?? 0) - (a.swap?.extra ?? 0) || a.batch.pid - b.batch.pid);
   if (sales.length) {
-    const sale = sales[0], batch = sale.batch;
+    const unlock = !liquidation && saleToUnlockShip(sales, config, event, state, ship, settings, timing, time, actionSeconds);
+    const sale = unlock || sales[0], batch = sale.batch;
     return { kind: 'sell', mode: sale.swap ? 'SWAP' : mode, city: cargo.cityId, pid: batch.pid, goodsId: batch.goodsId, count: batch.num,
       price: sale.price, gain: sale.gain, expectedProfit: sale.gain, estimated: false,
       ...(sale.swap && { latestActionAt: sale.swap.latestActionAt }),
       label: (sale.swap ? '平价换货，出售' : sale.gain < 0 ? '清仓出售' : '出售') + definitions.get(batch.goodsId).itemName + ' ×' + batch.num +
         '，本港报价收益 ' + sale.gain + '；释放舱位 ' + batch.num * definitions.get(batch.goodsId).capacity +
-        (sale.swap ? '，换货比继续持有预计多赚 ' + sale.swap.extra : sale.opportunity > 0 ? '，再采购预计收益 ' + sale.opportunity : '') };
+        (unlock ? '，本批成交可解锁 ' + (ship.lv + 1) + ' 级船，留大单到升级后再卖' :
+          sale.swap ? '，换货比继续持有预计多赚 ' + sale.swap.extra : sale.opportunity > 0 ? '，再采购预计收益 ' + sale.opportunity : '') };
   }
   // 一程未必出售全部持货；具体路线已按可出售批次数检查，不能用无关滞销批次阻塞它。
   if (!canArrive(1)) return wait('本时段剩余时间不足以航行并完成出售', { mode: 'FINAL_LIQUIDATION' });
@@ -565,7 +612,7 @@ export function planMerchant(config, event, state, market, radar, time, visited 
   const hasDiscountedRoute = !!moveRoute;
   let reference = false;
   const canLoad = free > 0 && player.coins > 0 && saleSlots >= 3;
-  const allowReference = !liquidation && settings.estimateDiscountPercent > 0 && settings.estimateDiscountPercent < 100;
+  const allowReference = !closing && !liquidation && settings.estimateDiscountPercent > 0 && settings.estimateDiscountPercent < 100;
   if (!buyRoute && allowReference && (canLoad || occupied > 0)) {
     // 已有载货航线时只补同港货物，并为原本能卖的所有批次留足操作时间。
     const ports = moveRoute ? [moveRoute.port] : destinations;
@@ -585,6 +632,16 @@ export function planMerchant(config, event, state, market, radar, time, visited 
     }
   }
   const tradeMode = reference ? 'THIN_MARGIN' : mode;
+  // 薄利方案另报同一批货在折后价下可兑现的利润，低于成本的批次按策略留仓。
+  const discountedOutcome = (route, purchases = []) => {
+    if (!reference) return {};
+    const gain = (goodsId, buyPrice, num) => {
+      const quote = estimate(definitions.get(goodsId), route.port);
+      return Math.max(0, profit(quote.price, { buyPrice, num }, ship));
+    };
+    const held = route.batches.reduce((sum, { batch }) => sum + gain(batch.goodsId, batch.buyPrice, batch.num), 0);
+    return { discountedProfit: purchases.reduce((sum, item) => sum + gain(item.goodsId, item.price, item.count), held) };
+  };
   let estimateLabel = '整船预计净收益 ';
   if (reference) estimateLabel = '整船按未打折参考价估算收益 ';
   else if (settings.estimateDiscountPercent) estimateLabel = '整船按 ' + settings.estimateDiscountPercent + '% 风险折扣估算净收益 ';
@@ -604,11 +661,12 @@ export function planMerchant(config, event, state, market, radar, time, visited 
     if (strict) purchaseDetails.push(['装入后舱位', amount.format(occupied + space) + ' / ' + amount.format(ship.capacity) + ' 格']);
     if (buyRoute.approximate) purchaseDetails.push(['配货方式', '组合搜索近似估算']);
     return { kind: 'buy', mode: tradeMode, city: cargo.cityId, destination: buyRoute.port.cityId, goodsId: purchase.goodsId,
-      count: purchase.count, price: purchase.price, expectedProfit: buyRoute.net, estimated: true, purchases: buyRoute.purchases,
+      count: purchase.count, price: purchase.price, expectedProfit: buyRoute.net, ...discountedOutcome(buyRoute, buyRoute.purchases),
+      estimated: true, purchases: buyRoute.purchases,
       ...(stagedRoute && { nextCheckAt: timing.nextRefreshAt }),
       ...(reference && !hasDiscountedRoute && { waitForFirstDeparture: true }),
       approximate: buyRoute.approximate, arrival,
-      latestActionAt: timing.tradeEndTime - timing.travelSeconds - (buyRoute.batches.length + buyRoute.purchases.length * 2 + 1) * actionSeconds,
+      latestActionAt: timing.tradeEndTime - travel - (buyRoute.batches.length + buyRoute.purchases.length * 2 + 1) * actionSeconds,
       purchaseDetails,
       label: (buyRoute.purchases.length > 1 ? '组合 ' + buyRoute.purchases.length + ' 种，本笔' : '') +
         (stagedRoute ? '刷新前买入' : '买入') + definition.itemName + ' ×' + amount.format(purchase.count) +
@@ -633,8 +691,8 @@ export function planMerchant(config, event, state, market, radar, time, visited 
     return { kind: 'move', mode: tradeMode, city: cargo.cityId, destination: moveRoute.port.cityId,
       ...(reference && !hasDiscountedRoute && { waitForFirstDeparture: true }),
       goodsId: lead.batch.goodsId, priceNote,
-      arrival, expectedProfit: moveRoute.cargoOutcome.net, expectedScore: moveRoute.cargoOutcome.score, estimated: true,
-      latestActionAt: timing.tradeEndTime - timing.travelSeconds - Math.max(1, moveRoute.batches.length) * actionSeconds,
+      arrival, expectedProfit: moveRoute.cargoOutcome.net, ...discountedOutcome(moveRoute), expectedScore: moveRoute.cargoOutcome.score, estimated: true,
+      latestActionAt: timing.tradeEndTime - travel - Math.max(1, moveRoute.batches.length) * actionSeconds,
       salePids: moveRoute.batches.map(row => row.batch.pid), accelerationRequired: 0,
       label: (strict ? '满舱 ' + occupied + '/' + ship.capacity + ' 格，商船从港口 ' : '商船从港口 ') + cargo.cityId + ' 前往 ' + moveRoute.port.cityId + '，' + estimateLabel + moveRoute.cargoOutcome.net +
         (moveRoute.cargoOutcome.net !== moveRoute.cargoOutcome.score ? '，预计累计利润增加 ' + moveRoute.cargoOutcome.score : '') +

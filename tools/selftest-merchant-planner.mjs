@@ -144,6 +144,55 @@ test('没有联盟紧缺共享也能按风险折扣估算先选港再买入', ()
   assert.equal(move.destination, 20);
 });
 
+test('紧缺未共享时用目的港同货历史和基准价估值，忽略同档溢价与过期紧缺身份', () => {
+  const f = fixture();
+  Object.assign(f.market, { specGoodsId: 4, rareGoodsId: 5 });
+  f.market.goods = [70, 140, 150].map((price, i) => ({ goodsId: i + 1, price, stock: i ? 20 : 0 }));
+  f.config.tables.TradeGoodsCfg.data.forEach(def => { def.unitPrice = 100; });
+  f.radar.radar = [{ cityId: 20, specGoodsId: 4, rareGoodsId: 0 }];
+  const offer = () => f.plan().purchases[0];
+  assert.equal(offer().referencePrice, 100);
+  const ordinary = f.history(20, 90, { observedAt: f.now - 7200, specGoodsId: 4, rareGoodsId: 5 });
+  f.markets = [ordinary, { ...ordinary, observedAt: ordinary.observedAt - 1 },
+    { ...ordinary, observedAt: f.now - 14400, rareGoodsId: 1, goods: [{ goodsId: 1, price: 160 }] },
+    { ...ordinary, observedAt: f.now + 10, goods: [{ goodsId: 1, price: 180 }] }];
+  assert.deepEqual([offer().referencePrice, offer().expectedPrice], [95, 85]);
+  assert.match(offer().priceSource, /紧缺未确认.*1轮同商品普通报价/);
+  f.radar.radar[0].rareGoodsId = 5;
+  assert.equal(offer().referencePrice, 117, '确认是普通货后结合本港同货记录与同档参考价');
+  f.markets = [];
+  assert.equal(offer().referencePrice, 145, '没有本港记录时使用同档普通货参考价');
+});
+
+test('可用小单解锁下一级时先卖小单，留大单按新船级的实价结算', () => {
+  const f = fixture();
+  f.config.tables.TradeShipCfg.data[0].capacity = 1000;
+  f.config.tables.TradeShipCfg.data.push({ lv: 2, capacity: 3000, profitMargin: 600, upMoney: 10000, upCost: ['RUBY', 300] });
+  Object.assign(f.state.player, { profit: 9000, coins: 0, goods: [f.batch({ num: 100 }), f.batch({ pid: 2, num: 10 })] });
+  f.state.cargo.cityId = 20;
+  f.radar.radar = [{ cityId: 20 }];
+  f.market.goods = [{ goodsId: 1, price: 150, stock: 20 }];
+  assert.equal(f.plan().pid, 1);
+  f.settings.autoUpgrade = true;
+  f.settings.profitLimit = 12000;
+  assert.equal(f.plan().pid, 1, '大单可直接到活动停止线');
+  f.settings.profitLimit = 0;
+  const regularTime = f.now;
+  f.now = merchantTiming(f.config, f.event, f.now).nextRefreshAt - 60;
+  assert.equal(f.plan().pid, 1, '报价即将刷新，优先兑现最大利润');
+  f.now = regularTime;
+  f.state.player.profit = 8000;
+  assert.equal(f.plan().pid, 1, '小单还不能解锁');
+  f.state.player.profit = 9000;
+  const small = f.plan();
+  assert.deepEqual([small.kind, small.pid, small.gain], ['sell', 2, 1030]);
+  assert.match(small.label, /解锁 2 级船/);
+  f.state.player.goods.pop();
+  f.state.player.profit += small.gain;
+  f.state.cargo.cargoLv = 2;
+  assert.equal(f.plan().gain, 10600);
+});
+
 test('薄利补一件淡水时，提示分清每格价差、本批收益和整船收益', () => {
   const f = fixture();
   Object.assign(f.config.tables.TradeShipCfg.data[0], { capacity: 2, profitMargin: 0 });
@@ -157,6 +206,7 @@ test('薄利补一件淡水时，提示分清每格价差、本批收益和整�
   f.state.player.goods = [f.batch({ goodsId: 2, num: 1, buyPrice: 9 })];
   f.radar.radar = [{ cityId: 70, specGoodsId: 3, rareGoodsId: 4 }];
   const plan = f.plan();
+  assert.equal(plan.discountedProfit, 4671, '薄利补货不能把旧货的参考收益计入折后可售收益');
   assert.equal(plan.label, '买入淡水 ×1，单价 50，70 号港预计卖价 52。每格价差 2 商会币，整船预计净收益 5,193 商会币（未扣风险折扣）');
   assert.deepEqual(Object.fromEntries(plan.purchaseDetails), {
     '本批预计净收益': '2 商会币', '本批占舱': '1 格', '本港买价': '与基准价持平', '卖价依据': '同档普通货涨跌幅中位数（较基准价高 4%）'
@@ -199,12 +249,14 @@ test('仅有薄利时首趟按设置等待，随后买货出航，到港按实�
   assert.equal(buy.kind, 'buy');
   assert.equal(buy.count, 10);
   assert.equal(buy.expectedProfit, 52);
+  assert.equal(buy.discountedProfit, 0);
   f.state.player.coins -= buy.price * buy.count;
   f.state.player.goods = [f.batch({ buyPrice: buy.price, num: buy.count })];
   const move = next();
   assert.equal(move.kind, 'move');
   assert.equal(move.destination, buy.destination);
   assert.equal(move.expectedProfit, buy.expectedProfit);
+  assert.equal(move.discountedProfit, 0);
   f.state.cargo.cityId = move.destination;
   f.now = move.arrival;
   f.market.goods[0].price = 94;

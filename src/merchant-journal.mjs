@@ -37,7 +37,7 @@ function cleanExpected(expected) {
     'start', 'marketEpoch', 'cargoSignature', 'exploration', 'period', 'moveStartTime', 'beforeEndTime', 'afterEndTime', 'useNum',
     'diamondCost', 'cost', 'beforeLevel', 'afterLevel', 'level', 'cargoLv', 'beforeDiamonds', 'afterDiamonds',
     'startTime', 'fromLevel', 'toLevel', 'diamonds', 'accelerationReason', 'incrementalProfit',
-    'estimatedIncrementalProfit', 'savedSeconds', 'estimatedProfit', 'priceNote', 'saleCount', 'saleSeconds', 'evidenceExpiresAt']);
+    'estimatedIncrementalProfit', 'savedSeconds', 'estimatedProfit', 'discountedProfit', 'priceNote', 'saleCount', 'saleSeconds', 'evidenceExpiresAt']);
 }
 function emptyJournal(event) {
   return { version: 1, event, snapshots: [], trades: [], archivedTotals: totals(), archivedIds: [], batches: [],
@@ -133,10 +133,10 @@ function confirmedMetrics(entry) {
   if (!before || !after) { result.unverifiedConfirmations = 1; return result; }
   const b = before.player, a = after.player, request = expected.request;
   if (request === 'TradeBuyRequest') {
-    const added = a.goods.filter(g => g.goodsId === expected.goodsId && g.cityId === expected.city && (expected.price == null || g.buyPrice === expected.price))
-      .reduce((sum, g) => sum + g.num - (b.goods.find(old => old.pid === g.pid)?.num ?? 0), 0);
+    const value = goods => goods.filter(g => g.goodsId === expected.goodsId && g.cityId === expected.city)
+      .reduce((sum, g) => sum + g.num * g.buyPrice, 0);
     const cost = b.coins - a.coins;
-    if (!positive(added) || !positive(cost) || !signed(cost)) result.unverifiedConfirmations = 1;
+    if (!positive(cost) || value(a.goods) - value(b.goods) !== cost) result.unverifiedConfirmations = 1;
     else { result.confirmedTrades = result.buys = 1; result.buyCost = cost; }
   } else if (request === 'TradeSellRequest') {
     const batch = b.goods.find(g => g.pid === expected.pid), retained = a.goods.find(g => g.pid === expected.pid);
