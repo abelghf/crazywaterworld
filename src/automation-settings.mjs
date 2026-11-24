@@ -61,7 +61,7 @@ export const DEFAULT_SETTINGS = {
   merchant: { enabled: false, fullCargoRoutes: false, autoShareIntel: false, quoteMaxAgeSeconds: 300, estimateDiscountPercent: 0, refreshWaitSeconds: 120, liquidationMinutes: 120,
     maxLossPercent: 0, minExpectedProfit: 1, autoSpeedUp: false, keepPointers: 0,
     speedUpMode: 'deadline', guardLastPointer: false, speedUpMaxPerLeg: 4, monitorSeconds: 60,
-    refreshWindowMinutes: 8, dailyPointerLimit: 28, autoBuyPointers: false, pointerDailyDiamondLimit: 0,
+    refreshWindowMinutes: 8, dailyPointerLimit: 28, periodPointerLimit: -1, autoBuyPointers: false, pointerDailyDiamondLimit: 0,
     profitLimit: 0, firstDepartureMode: 'smart', firstDepartureTime: '10:00', firstDepartureWaitMinutes: 29,
     autoUpgrade: false },
   loop: { rounds: 0, everySeconds: 60, tasks: false, dailies: false, world: false, heroes: false },
@@ -134,8 +134,8 @@ const constraints = {
   'merchant.quoteMaxAgeSeconds': int(86400, 1), 'merchant.estimateDiscountPercent': int(100),
   'merchant.refreshWaitSeconds': int(3600), 'merchant.liquidationMinutes': int(1440), 'merchant.maxLossPercent': int(100),
   'merchant.minExpectedProfit': int(1000000000, 1), 'merchant.keepPointers': int(1000000),
-  'merchant.speedUpMode': { kind: 'choice', values: ['deadline', 'refresh', 'arrival', 'race', 'full'] }, 'merchant.speedUpMaxPerLeg': int(100, 1),
-  'merchant.refreshWindowMinutes': int(30, 1), 'merchant.dailyPointerLimit': int(1000), 'merchant.pointerDailyDiamondLimit': int(100000),
+  'merchant.speedUpMode': { kind: 'choice', values: ['deadline', 'refresh', 'arrival', 'race', 'full', 'goal', 'eventFree'] }, 'merchant.speedUpMaxPerLeg': int(100, 1),
+  'merchant.refreshWindowMinutes': int(30, 1), 'merchant.dailyPointerLimit': int(1000), 'merchant.periodPointerLimit': int(1000000, -1), 'merchant.pointerDailyDiamondLimit': int(100000),
   'merchant.profitLimit': int(1000000000), 'merchant.firstDepartureMode': { kind: 'choice', values: ['smart', 'time'] },
   'merchant.firstDepartureTime': { kind: 'time' }, 'merchant.firstDepartureWaitMinutes': int(120),
   'merchant.monitorSeconds': int(300, 10),
@@ -381,6 +381,9 @@ function validateCurrentSettings(input, { partial = false, catalog = null } = {}
   input = migrateVersion60Settings(input);
   input = migrateVersion61Settings(input);
   input = migrateVersion62Settings(input);
+  if (plain(input?.merchant) && !Object.hasOwn(input.merchant, 'periodPointerLimit')) {
+    input = { ...input, merchant: { ...input.merchant, periodPointerLimit: DEFAULT_SETTINGS.merchant.periodPointerLimit } };
+  }
   if (plain(input?.resourceFields) && !Object.hasOwn(input.resourceFields, 'refillAfterLoss')) {
     input = { ...input, resourceFields: { ...input.resourceFields, refillAfterLoss: false } };
   }

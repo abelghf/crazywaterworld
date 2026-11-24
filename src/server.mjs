@@ -20,6 +20,7 @@ import {activityRankCatalog,readActivityRanking} from './activity-rankings.mjs';
 import {readActivityStatistics} from './activity-statistics.mjs';
 import { merchantActivity, readMerchantStatus, readMerchantOverview, readMerchantJournal, merchantJournalSummary } from './merchant-activity.mjs';
 import { saveMerchantIntel } from './merchant-intel.mjs';
+import { merchantPresets, merchantPresetOptions } from './merchant-presets.mjs';
 import { watchMerchant } from './merchant-monitor.mjs';
 import { giftCodeStatus, giftCodeSummary, startGiftCodes, startGiftCodeBatch } from './gift-codes.mjs';
 import { publicGiftCodes } from './gift-code-library.mjs';
@@ -1130,6 +1131,7 @@ export function createConsole({ host = '127.0.0.1', port = 17321, onLog, recover
         merchant: current.settings.merchant,
         schedule: Object.fromEntries(merchantTaskKeys.map(key => [key, current.settings.schedule[key]])),
       },
+      presets: merchantPresetOptions(current.settings),
       rules: { numbers: Object.fromEntries(Object.entries(current.rules.numbers).filter(([key]) => key.startsWith('merchant.'))) },
       revision: current.revision,
       baseRevision: current.baseRevision,
@@ -2495,14 +2497,19 @@ export function createConsole({ host = '127.0.0.1', port = 17321, onLog, recover
           ...Object.keys(current.settings.merchant).map(key => 'merchant.' + key),
           ...merchantTaskKeys.map(key => 'schedule.' + key),
         ]);
-        if (!fields.has(payload.key)) throw new SettingsError({ settings: '请选择有效的海商王活动设置' });
+        const preset = payload.key === 'preset' && merchantPresets.find(row => row.id === payload.value);
+        if (!preset && !fields.has(payload.key)) throw new SettingsError({ settings: '请选择有效的海商王活动设置' });
         if (!Number.isSafeInteger(payload.revision) || payload.revision !== current.revision
           || !current.revision && payload.baseRevision !== current.baseRevision) {
           throw new SettingsError({ revision: '海商王活动设置已变化，请重新读取后再保存' });
         }
         const next = structuredClone(current.settings);
-        const [group, field] = payload.key.split('.');
-        next[group][field] = payload.value;
+        if (preset) {
+          for (const [group, values] of Object.entries(preset.settings)) Object.assign(next[group], values);
+        } else {
+          const [group, field] = payload.key.split('.');
+          next[group][field] = payload.value;
+        }
         adoptPreferences(session, saveAutomationSettings(session.id, next, { revision: current.revision }));
         if (session.client) {
           for (const key of merchantTaskKeys) rewardSchedule(session.client).clearTask(key);

@@ -784,11 +784,13 @@ try {
     for (const value of [undefined, false, true]) {
       const document = structuredClone(legacy);
       if (value !== undefined) document.settings.merchant.fullCargoRoutes = value;
+      if (value === true) document.settings.merchant.periodPointerLimit = 0;
       const expected = structuredClone(document.settings);
       delete expected.schedule.worldOnline;
       delete expected.merchant.speedUpMinProfit;
       expected.merchant.speedUpMode = 'deadline';
       expected.merchant.fullCargoRoutes = value ?? defaultSettings().merchant.fullCargoRoutes;
+      expected.merchant.periodPointerLimit = document.settings.merchant.periodPointerLimit ?? -1;
       expected.afk = { claimIntervalHours: 0 };
       expected.schedule.afkUpgrade = false;
       expected.museum.targetFragments = [];
