@@ -207,6 +207,7 @@ export function createConsole({ host = '127.0.0.1', port = 17321, onLog, recover
   const traceLog = createTraceLog(TRACE_PATH, { maxBytes: TRACE_MAX_BYTES });
   const protocolDiagnostics = createProtocolDiagnostics(path.join(DATA_DIR, 'protocol-errors'));
   const globalLog = [];
+  let allLogsCleared = null;
   const streams = new Set();
   const sessions = new Map();
   const hostingChanges = new Map();
@@ -615,6 +616,9 @@ export function createConsole({ host = '127.0.0.1', port = 17321, onLog, recover
   function terminal(entry) {
     try { if (onLog) Promise.resolve(onLog(entry)).catch(() => {}); } catch { /* Logging is an observer. */ }
   }
+  function sendLogClear(stream, cleared) {
+    return writeStream(stream, `event: logs-cleared\ndata: ${JSON.stringify(cleared)}\n\n`);
+  }
   function flushBatch(session) {
     if (!session?.batchOutput) return;
     clearTimeout(session.batchOutput.timer);
@@ -779,8 +783,7 @@ export function createConsole({ host = '127.0.0.1', port = 17321, onLog, recover
       progressionJobs: new Map(),
       log: [],
       upgradeRevision: 0,
-      logClearBefore: 0,
-      logClearAt: 0,
+      logsCleared: null,
       dailySingle: dailySingleState(),
       shops: createShopState(),
       loop: {
@@ -3026,17 +3029,23 @@ export function createConsole({ host = '127.0.0.1', port = 17321, onLog, recover
       }
       if (route === 'POST /api/logs/clear') {
         needConfirm(jsonBody());
-        const { session } = scoped_(parsed);
-        const cleared = { account: session.id, before: logId, at: Date.now() };
-        session.log.length = 0;
-        session.operations.clear();
-        clearTimeout(session.batchOutput?.timer);
-        session.batchOutput = null;
-        session.upgradeInspection = null;
-        session.logClearBefore = cleared.before;
-        session.logClearAt = cleared.at;
+        const all = parsed.searchParams.get('scope') === 'all';
+        const selected = all ? null : scoped_(parsed).session;
+        const cleared = { ...(all ? { scope: 'all' } : { account: selected.id }), before: logId, at: Date.now() };
+        if (all) {
+          globalLog.length = 0;
+          allLogsCleared = cleared;
+        }
+        for (const session of all ? sessions.values() : [selected]) {
+          session.log.length = 0;
+          session.operations.clear();
+          clearTimeout(session.batchOutput?.timer);
+          session.batchOutput = null;
+          session.upgradeInspection = null;
+          session.logsCleared = all ? null : cleared;
+        }
         for (const stream of streams) {
-          if (stream.allAccounts || stream.account === session.id) writeStream(stream, `event: logs-cleared\ndata: ${JSON.stringify(cleared)}\n\n`);
+          if (all || stream.allAccounts || stream.account === cleared.account) sendLogClear(stream, cleared);
         }
         json(cleared);
         return;
@@ -3054,9 +3063,10 @@ export function createConsole({ host = '127.0.0.1', port = 17321, onLog, recover
         res.once('close', () => streams.delete(res));
         const logSession = sessions.get(res.account);
         const logSessions = res.allAccounts ? [...sessions.values()] : logSession ? [logSession] : [];
-        const since = Math.max(Number(req.headers['last-event-id'] ?? 0) || 0, res.allAccounts ? 0 : logSession?.logClearBefore ?? 0);
+        const since = Math.max(Number(req.headers['last-event-id'] ?? 0) || 0, res.allAccounts ? 0 : logSession?.logsCleared?.before ?? 0);
+        if (allLogsCleared && !sendLogClear(res, allLogsCleared)) return;
         for (const item of logSessions) {
-          if (item.logClearAt && !writeStream(res, `event: logs-cleared\ndata: ${JSON.stringify({ account: item.id, before: item.logClearBefore, at: item.logClearAt })}\n\n`)) return;
+          if (item.logsCleared && !sendLogClear(res, item.logsCleared)) return;
         }
         const entries = [...globalLog, ...logSessions.flatMap(item => item.log)]
           .sort((a, b) => a.id - b.id).slice(-LOG_LIMIT);
