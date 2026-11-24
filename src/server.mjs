@@ -3741,7 +3741,7 @@ export function createConsole({ host = '127.0.0.1', port = 17321, onLog, recover
             verifyConnection();
             return client.request(...args);
           }, { recoverFormation: false }) };
-          const mail = await readSeasonMail(reader, player, loadConfigSafe({ allowStale: true }));
+          const mail = await readSeasonMail(client, player, loadConfigSafe({ allowStale: true }), reader);
           verifyConnection();
           json(mail);
           return;

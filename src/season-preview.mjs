@@ -68,7 +68,25 @@ export async function readSeasonGuildRank(client, player) {
   return { ...result, state: 'ranked', rank: row.rank, score: Object.hasOwn(row, 'score') ? quantity(row.score) : null };
 }
 
-export async function readSeasonMail(client, player, config) {
+export async function readSeasonMail(client, player, config, reader = client) {
+  let changed = false;
+  const onSend = ({ name }) => {
+    if (name === 'QuickGotReadEmailRequest' || name === 'QuickGotCampaignReportRequest') changed = true;
+  };
+  client.on?.('sent', onSend);
+  try {
+    for (let attempt = 0; attempt < 2; attempt++) {
+      changed = false;
+      const snapshot = await seasonMailSnapshot(reader, player, config);
+      if (!changed) return snapshot;
+    }
+    throw Error('领取状态正在变化，请稍后刷新邮件物品');
+  } finally {
+    client.off?.('sent', onSend);
+  }
+}
+
+async function seasonMailSnapshot(client, player, config) {
   const mails = await readMailbox(client);
   const { reports, complete, reason } = await readReportSnapshot(client);
   if (!complete) throw Error(reason);
@@ -77,6 +95,7 @@ export async function readSeasonMail(client, player, config) {
   const names = new Map([
     ...(tables?.HeroCfg?.data ?? []).map(row => ['heroes:' + row.id, row.name]),
     ...(tables?.EquipCfg?.data ?? []).map(row => ['equips:' + row.id, row.name]),
+    ...(tables?.HeroBadgeCfg?.data ?? []).map(row => ['badge:' + row.id, row.name]),
     ...(tables?.AntiqueBaseCfg?.data ?? []).map(row => ['antiques:' + row.antiqueId, row.showName]),
   ]);
   function accumulate(source, assets, attachments = {}) {
@@ -94,8 +113,20 @@ export async function readSeasonMail(client, player, config) {
     for (const asset of assets) {
       add('asset-' + asset.type, asset.id, BigInt(quantity(asset.num)));
     }
-    for (const kind of ['heroes', 'equips', 'antiques']) {
-      for (const id of attachments[kind] ?? []) add(kind, id, 1n);
+    for (const [kind, field] of Object.entries({ heroes: 'heroId', equips: 'equipId', antiques: 'antiqueId', badge: 'badgeId', supplies: 'supId' })) {
+      for (const entry of attachments[kind] ?? []) {
+        const id = typeof entry === 'string' ? entry : entry?.[field];
+        if (!entry?.frag) {
+          add(kind, id, 1n);
+          continue;
+        }
+        if (!id) throw Error('奖励碎片标识缺失，请刷新邮箱');
+        const color = kind === 'antiques' && tables?.AntiqueBaseCfg?.data?.find(row => row.antiqueId === id)?.color;
+        const amount = kind === 'heroes' ? tables?.HeroCfg?.data?.find(row => row.id === id)?.heroFrag
+          : color && tables?.AntiqueFragReturnCfg?.data?.find(row => row.color === color)?.count;
+        if (Number.isSafeInteger(amount) && amount > 0) add('asset-0', id + '碎片', BigInt(amount));
+        else add(kind + '-fragment-packs', id + '碎片兑换包', 1n);
+      }
     }
     for (const [key, count] of amounts) {
       const item = items.get(key);
@@ -111,8 +142,7 @@ export async function readSeasonMail(client, player, config) {
     }, mail.attachment.assets?.asset ?? [], mail.attachment);
   }
   for (const [id, report] of reports) {
-    const assets = report.rewards?.assetPackage?.asset;
-    if (!assets?.length) continue;
+    if (!report.rewards) continue;
     const cargo = report.treasureLoot;
     const subject = cargo ? `货轮${cargo.uid || ''} ${cargo.buildingId || ''}`.trim()
       : report.cityWar ? '攻城战' : '战斗奖励';
@@ -120,7 +150,7 @@ export async function readSeasonMail(client, player, config) {
     accumulate({
       kind: 'report', id, subject, sendTime: Number.isSafeInteger(time) && time > 0 ? time : null,
       claimed: report.received,
-    }, assets);
+    }, report.rewards.assetPackage?.asset ?? [], report.rewards);
   }
   let pendingMerit = 0n, claimedMerit = 0n;
   for (const item of items.values()) {

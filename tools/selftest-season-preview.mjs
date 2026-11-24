@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { EventEmitter } from 'node:events';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -27,11 +28,13 @@ const reports = [
   { uid: large, read: true, received: true, treasureLoot: { uid: 46, feats: 330 },
     rewards: { assetPackage: { asset: [asset('功勋', 330), asset('RUBY', 110)] } } },
   { uid: 43, read: true, received: false, treasureLoot: { uid: 49, feats: 77 },
-    rewards: { assetPackage: { asset: [asset('功勋', 77)] } } },
+    rewards: { assetPackage: { asset: [asset('功勋', 77)] }, heroes: [{heroId:'英雄甲'}], badge:[{badgeId:'徽章甲'}] } },
   { uid: 44, read: false, received: false, treasureLoot: { uid: 50, feats: 800 } },
+  { uid: 45, received: false, rewards: { equips: ['装备甲'], supplies: [{supId:'补给甲'}],
+    antiques: [{antiqueId:'藏品甲'}, {antiqueId:'藏品甲',frag:true}] } },
 ];
 function fakeClient(owner) {
-  return {
+  return Object.assign(new EventEmitter(), {
     connected: true, stop() { this.connected = false; }, snapshot() { return { state: 'READY' }; },
     async request(name, body) {
       calls.push({ owner, name, body });
@@ -53,7 +56,7 @@ function fakeClient(owner) {
         : { total: reports.length, reports: [reports[body.pageNo]] };
       throw Error('意外游戏请求 ' + name);
     },
-  };
+  });
 }
 let browser;
 try {
@@ -81,8 +84,8 @@ try {
   assert.deepEqual(calls.at(-1), { owner: 'b', name: 'SeasonRankPlayerRequest', body: { type: 1, page: 1 } });
   const mail = await get('/api/season/mail?account=a');
   assert.equal(mail.scanned, 2);
-  assert.equal(mail.reportsScanned, 3);
-  assert.deepEqual(mail.items.map(row => row.id).sort(), ['功勋', '英雄甲', '装备甲', '藏品甲', 'RUBY'].sort());
+  assert.equal(mail.reportsScanned, 4);
+  assert.deepEqual(mail.items.map(row => row.id).sort(), ['功勋', '英雄甲', '装备甲', '藏品甲', 'RUBY','徽章甲','补给甲','藏品甲碎片兑换包'].sort());
   assert.equal(mail.items[0].pending, '9007199254741072');
   assert.equal(mail.items[0].claimed, '337');
   assert.deepEqual(mail.merit, { pending: '9007199254741072', claimed: '337' });
@@ -97,11 +100,25 @@ try {
     ['report', '9007199254740993', true, '330'],
     ['report', '43', false, '77'],
   ]);
-  assert.equal(mail.items.find(row => row.id === '英雄甲').pending, '2');
+  assert.equal(mail.items.find(row => row.id === '英雄甲').pending, '3');
+  assert.equal(mail.items.find(row => row.id === '装备甲').pending, '1');
   assert.deepEqual(calls.filter(c => c.owner === 'a' && c.name === 'EmailBoxRequest').map(c => c.body.pageNo), [0, 1]);
-  assert.deepEqual(calls.filter(c => c.owner === 'a' && c.name === 'CampaignReportsRequest').map(c => c.body.pageNo), [0, 1, 2]);
+  assert.deepEqual(calls.filter(c => c.owner === 'a' && c.name === 'CampaignReportsRequest').map(c => c.body.pageNo), [0, 1, 2, 3]);
   const client = app.sessions.get('a').client;
   const original = client.request;
+  let claimedDuringScan = false;
+  client.request = async function (name, body) {
+    if (name === 'EmailBoxRequest' && body.pageNo === 1 && !claimedDuringScan) {
+      this.emit('sent', { name: 'QuickGotReadEmailRequest' });
+      claimedDuringScan = true;
+    }
+    const value = await original.call(this, name, body);
+    if (name === 'EmailBoxRequest' && claimedDuringScan) return { ...value, email: value.email.map(mail => ({ ...mail, got:true })) };
+    return value;
+  };
+  const afterClaim = await get('/api/season/mail?account=a');
+  assert.deepEqual(afterClaim.merit, { pending:'77', claimed:'9007199254741332' });
+  assert.equal(client.listenerCount('sent'), 0);
   const retriedPages = [];
   client.request = function (name, body) {
     if (name !== 'CampaignReportsRequest') return original.call(this, name, body);
@@ -136,22 +153,31 @@ try {
     await summary.getByText('第 94 名', {exact: true}).waitFor();
     await summary.getByText('第 2 名', {exact: true}).waitFor();
     await summary.getByText('未领 9,007,199,254,741,072').waitFor();
+    for (const width of [320, 390, 1180]) {
+      await page.setViewportSize({ width, height: 844 });
+      const stats = await summary.boundingBox();
+      const picker = await panel.getByRole('group', {name:'赛季预览内容'}).boundingBox();
+      assert(stats && picker);
+      assert(width >= 1000 ? picker.x >= stats.x + stats.width : picker.y >= stats.y + stats.height);
+      assert(await panel.evaluate(node => node.scrollWidth <= node.clientWidth));
+    }
+    await page.setViewportSize({ width: 390, height: 844 });
     const previewCalls = () => calls.filter(c => c.name.startsWith('SeasonRank') || c.name === 'EmailBoxRequest' || c.name === 'CampaignReportsRequest').length;
     const initialCalls = previewCalls();
     assert.equal(await panel.locator('tbody tr').count(), 50);
-    await panel.getByRole('button', { name: '科技霸主 · 科技榜' }).click();
+    await panel.getByRole('button', { name: '科技榜' }).click();
     await panel.getByRole('cell', { name: '玩家3', exact: true }).waitFor();
     assert.equal(await panel.locator('tbody tr').count(), 3);
     await panel.getByRole('button', { name: '邮件物品' }).click();
-    const meritMail = panel.locator('details').filter({ has: page.locator('summary', { hasText: /^功勋$/ }) });
+    const meritMail = panel.locator('details').filter({ has: page.locator('summary strong', { hasText: /^功勋$/ }) });
     await meritMail.locator('summary').click();
     await meritMail.getByText(/第一封/).waitFor();
-    await meritMail.getByText('战报 · 货轮49 · 77 · 未领').waitFor();
+    await meritMail.locator('li').filter({ hasText: '货轮49' }).getByText('未领 77').waitFor();
     assert.equal(await meritMail.getByText(/货轮46/).count(), 0);
     assert.equal(await meritMail.getByText(/第二封/).count(), 0);
-    await panel.getByRole('checkbox').check();
+    await panel.getByRole('switch', {name:'包含已领取附件'}).click();
     await meritMail.getByText(/第二封/).waitFor();
-    await meritMail.getByText('战报 · 货轮46 · 330 · 已领').waitFor();
+    await meritMail.locator('li').filter({ hasText: '货轮46' }).getByText('已领 330').waitFor();
     assert.equal(previewCalls(), initialCalls);
     assert.equal(await page.locator('#tabs [data-tab="resources"] + [data-tab="season-preview"] + [data-tab="account"]').count(), 1);
     let release;
