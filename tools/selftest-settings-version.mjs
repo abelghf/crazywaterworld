@@ -756,6 +756,8 @@ try {
       delete expected.merchant.speedUpMinProfit;
       expected.merchant.speedUpMode = 'deadline';
       expected.merchant.fullCargoRoutes = value ?? defaultSettings().merchant.fullCargoRoutes;
+      expected.afk = { claimIntervalHours: 0 };
+      expected.schedule.afkUpgrade = false;
       expected.museum.targetFragments = [];
       expected.museum.unlockCases = false;
       Object.assign(expected.pet, { levelUp: false, levelUids: [] });
@@ -855,7 +857,7 @@ try {
     assert.throws(() => validateSettings(settings), error => !!error.fields['alliance.memberIds']);
   });
   test('版本1升级后重复迁移保持一致，保留有效的用户值', () => {
-    assert.equal(SETTINGS_SCHEMA_VERSION, 60);
+    assert.equal(SETTINGS_SCHEMA_VERSION, 62);
     const settings = legacySettings();
     settings.factory.checkEverySeconds = 270;
     settings.resources.diamondDailyLimit = 1234;
@@ -869,6 +871,32 @@ try {
     assert.equal(exported.version, SETTINGS_SCHEMA_VERSION);
     assert.deepEqual(importAutomationSettings(exported), migrated);
     assert.deepEqual(importAutomationSettings(exportAutomationSettings(importAutomationSettings(exported))), migrated);
+  });
+  test('旧挂机收益设置沿用满额领取，按小时配置可保存并校验', () => {
+    const old = defaultSettings();
+    delete old.afk;
+    old.schedule.afk = true;
+    const settings = importAutomationSettings({ format: SETTINGS_FORMAT, version: 60, settings: old });
+    assert.equal(settings.afk.claimIntervalHours, 0);
+    assert.equal(settings.schedule.afk, true);
+    settings.afk.claimIntervalHours = 6;
+    assert.deepEqual(importAutomationSettings(exportAutomationSettings(settings)), settings);
+    for (const invalid of [-1, 1.5, '']) {
+      settings.afk.claimIntervalHours = invalid;
+      assert.throws(() => validateSettings(settings), error => !!error.fields['afk.claimIntervalHours']);
+    }
+  });
+  test('61 版挂机收益保留领取间隔，升级默认关闭且可独立开启', () => {
+    const old = defaultSettings();
+    old.schedule.afk = true;
+    old.afk.claimIntervalHours = 6;
+    delete old.schedule.afkUpgrade;
+    const migrated = importAutomationSettings({ format: SETTINGS_FORMAT, version: 61, settings: old });
+    assert.equal(migrated.schedule.afkUpgrade, false);
+    assert.equal(migrated.schedule.afk, true);
+    assert.equal(migrated.afk.claimIntervalHours, 6);
+    Object.assign(migrated.schedule, { afk: false, afkUpgrade: true });
+    assert.deepEqual(importAutomationSettings(exportAutomationSettings(migrated)), migrated);
   });
   test('旧配置和已打开的页面移除六项锻造与套装限制，保留其他选择', () => {
     const expected = defaultSettings();

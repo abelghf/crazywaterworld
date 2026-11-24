@@ -245,7 +245,7 @@ ChurnInfo            UltraOpen            BlackList
 ```
 AfkInfoRequest              -> AfkInfoResponse { afkInfo{level, afkStartTime, afkFinishTime, rewardedLevel}, clickGoldInfo }
 DrawAfkRewardRequest        -> DrawAfkRewardResponse { reward, afkStartTime, afkFinishTime }   领取本段收益并重置时间段
-UpgradeAfkLevelRequest{level}  ->  提升挂机等级，消耗 OfflineCfg 里该等级声明的物品
+UpgradeAfkLevelRequest{level}  ->  level 为本次提升的级数。按客户端按钮规则依次检查 1、5、10 级档位，主线能解锁目标等级且定位芯片足够时，发送最大可用档位。消耗为中间各级 OfflineCfg.consume 之和。
 DrawAfkLevelRewardRequest{level}  ->  领取等级奖励，level 取自 OfflineLvRewardCfg
 ```
 

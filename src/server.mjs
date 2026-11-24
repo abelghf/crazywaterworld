@@ -88,6 +88,7 @@ import { iconThumb } from './art-thumbs.mjs';
 import { listWorlds, enterWorld, describeRole } from './worlds.mjs';
 import { collectState, summarize, formatState, ENTRY_QUERIES } from './game.mjs';
 import { claimRewards } from './claim-rewards.mjs';
+import { readAfkUpgrade } from './afk-upgrade.mjs';
 import { newbieView } from './collections.mjs';
 import { normalize } from './worlds.mjs';
 import { pirateTracker, pirateHuntOptions, startPirateHunt } from './pirates.mjs';
@@ -2951,9 +2952,17 @@ export function createConsole({ host = '127.0.0.1', port = 17321, onLog, recover
             }
             const checked = budgetPreview(actions, new Map([['RUBY', daily.ruby]]), settings, usage);
             const dailyNotes = daily.tasks.filter(entry => entry.reason).map(entry => entry.task.title + '：' + entry.reason);
-            return { ...output({ ...checked, notes: [...tasks.notes, ...trialNotes, ...dailyNotes, ...checked.notes,
+            const rewardNotes = [...tasks.notes];
+            if (settings.schedule.afkUpgrade) {
+              const upgrade = await readAfkUpgrade(client, config, session.player, usageFor(session));
+              if (upgrade.action) {
+                checked.actions.push(upgrade.action);
+                rewardNotes.push('挂机升级预览显示下一次升级。实际运行时会连续升级，直到定位芯片用完或达到主线允许的等级。');
+              } else rewardNotes.push('自动升级挂机等级：' + upgrade.reason);
+            }
+            return { ...output({ ...checked, notes: [...rewardNotes, ...trialNotes, ...dailyNotes, ...checked.notes,
               '此处预览日常任务与领奖。限时活动、挑战的开放状态可在对应页面查看。'] }, { dailyTasks: daily.tasks.length }, '日常与任务奖励'),
-              moduleNotes: { 'daily-actions': dailyNotes, 'daily-challenges': trialNotes, rewards: tasks.notes } };
+              moduleNotes: { 'daily-actions': dailyNotes, 'daily-challenges': trialNotes, rewards: rewardNotes } };
           }
           const survey = await surveyWorld(client, protocolFor(client), { config, player: session.player, includeCargo: settings.cargo.enabled || settings.factory.demandPriority.includes('cargo') });
           const extra = await surveyBaseAutomation(client, protocolFor(client), config, session.player, settings, survey, { ledger: usageFor(session), enabled: () => session.client === client && client.connected !== false });
@@ -5035,14 +5044,17 @@ export function createConsole({ host = '127.0.0.1', port = 17321, onLog, recover
           const client = await ensureConnected(session, account);
           const config = loadConfigSafe();
           let nextCheck = 0;
+          let checkedAfkHours;
           return { client, player: session.player, config, schedule: work => enqueue(session, work),
             executeBattle: sessionLineupExecutor(session, client, payload.lineupId ?? ''), async beforeBattle(signal) {
             const enabled = key => key === 'afk' && session.loop.tasks.afk && !session.loop.running && !signal.aborted;
-            if (!enabled('afk') || Date.now() < nextCheck) return;
+            const hours = session.preferences?.afk?.claimIntervalHours;
+            if (!enabled('afk') || (hours === checkedAfkHours && Date.now() < nextCheck)) return;
+            checkedAfkHours = hours;
             nextCheck = Date.now() + 60_000;
             await claimRewards(client, protocolFor(client), config, ({ label, ok, error }) =>
               emit(session, ok ? 'info' : 'error', ok ? label : label + '：' + error),
-              enabled, time => { nextCheck = time; });
+              enabled, time => { nextCheck = time; }, undefined, session.player, { getSettings: () => session.preferences });
           } };
         }, (error) => emit(session, 'error', `主线推关失败：${error.message}`)));
         return;

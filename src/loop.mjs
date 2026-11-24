@@ -74,6 +74,7 @@ import { claimExtraRewards, extraRewardKeys } from './extra-rewards.mjs';
 
 import { setTimeout as pause } from 'node:timers/promises';
 import { claimRewards } from './claim-rewards.mjs';
+import { upgradeAfk } from './afk-upgrade.mjs';
 import { claimWeekly, runLinkage, weekSchedule, readWeekOrder, runAutomaticWeekOrder } from './activities.mjs';
 import { automationTasks, dailyTaskKey, defaultCompassSpinCount, worldTaskKey } from './automation.mjs';
 import { automationControls } from './automation-controls.mjs';
@@ -106,6 +107,7 @@ export async function runLoop(client, protocol, {
   isTrialBusy = () => false, isPirateBusy = () => false,
   challengeRun = createChallengeRun(),
   getSettings = () => null, getHeroSettings = getSettings, getBlockedCollectionTypes, onFishBookComplete,
+  getAfkSettings = getSettings, getAfkClaimHours = () => getAfkSettings()?.afk?.claimIntervalHours,
   usageLedger = null, heroUsageLedger = usageLedger,
   getEveryMs = () => everyMs,
   schedule = work => work(),
@@ -393,8 +395,16 @@ export async function runLoop(client, protocol, {
       try {const value=await work();for(const key of active){if(rewards?.status(key)===before.get(key))rewards?.observe(key,'已检查，当前没有新增可执行动作');rewards?.expect(key,rewards.now()+Math.ceil(getEveryMs()/1000));}return value;}
       catch(error){for(const key of active)rewards?.observe(key,error.message,'error');throw error;}
     }
-    let afkDeadline;
-    const rememberDeadline = time => { afkDeadline = time; };
+    let afkDeadline = Date.now() + 60_000;
+    let scheduledAfkHours = settings?.afk?.claimIntervalHours;
+    const rememberDeadline = time => {
+      afkDeadline = time;
+      scheduledAfkHours = getSettings()?.afk?.claimIntervalHours;
+    };
+    const nextAfkCheck = () => {
+      if (!isEnabled || !enabled('afk')) return Infinity;
+      return scheduledAfkHours === getSettings()?.afk?.claimIntervalHours ? afkDeadline : 0;
+    };
     const logReward = (entry, category = '领奖') => stepLog('tasks')({ title: entry.label, ...entry, taskKey:entry.taskKey||entry.key, category });
     const reportTrial = (key, raids, entry, raidId) => {
       if (entry.pending) entry = { ...entry, status: 'pending' };
@@ -855,7 +865,7 @@ export async function runLoop(client, protocol, {
         try {
            const includeTask = id => id === 1007 || (id === 1010 && settings)
              ? false : !isEnabled || dailyKeys[id]?.some(enabled);
-          const survey = await surveyDailies(client, protocol, { config, player, includeTask, probeGift: !isEnabled, idle: !!isEnabled, allowRecruitTickets: false, settings, ledger: usageLedger });
+          const survey = await surveyDailies(client, protocol, { config, player, includeTask, probeGift: !isEnabled, idle: !!isEnabled, allowRecruitTickets: false, settings, afkClaimHours: getAfkClaimHours(), ledger: usageLedger });
           for (const entry of survey.tasks) for (const key of dailyKeys[entry.task.id]??[]) rewards?.observe(key, entry.reason || (Number.isFinite(entry.task.progress)&&Number.isFinite(entry.task.targetProgress)?entry.task.progress+'/'+entry.task.targetProgress+(entry.task.progress>=entry.task.targetProgress?' · 今日目标已完成':' · 等待执行'):'已读取任务状态'));
            const recruit = survey.tasks.find(entry => entry.task.id === 1002 && entry.status === 'waiting');
            if (recruit && (includeRepeatedWaits || recruit.reason !== lastRecruitWait)) stepLog('dailies')({ title: recruit.task.title, skipped: true, reason: recruit.reason, taskKey: 'freeRecruit' });
@@ -931,6 +941,25 @@ export async function runLoop(client, protocol, {
         try { await claimAfkAdNow(); } catch (error) { phaseFailure('tasks', '闯关挂机广告收益', error); }
       }
       yield;
+      const afkEpoch = client.connectionEpoch;
+      const upgradeEnabled = () => client.connectionEpoch === afkEpoch && client.connected !== false
+        && enabled('afkUpgrade') && getAfkSettings()?.schedule?.afkUpgrade === true;
+      while (upgradeEnabled()) {
+        let entry;
+        try {
+          entry = await upgradeAfk(client, protocol, config, player, { ledger: usageLedger ?? heroUsageLedger, guard, enabled: upgradeEnabled });
+          summary.tasks.results.push(entry);
+          if (!entry.skipped) summary.tasks.planned++;
+          logReward({ ...entry, label: entry.label ?? '自动升级挂机等级', taskKey: 'afkUpgrade' }, '挂机升级');
+          // 升级回包可能更新本段计时，重新核对已开启的领取任务。
+          if (entry.ok || (entry.status === 'pending' && !entry.skipped)) rememberDeadline(0);
+        } catch (error) {
+          phaseFailure('tasks', '自动升级挂机等级', error, 'afkUpgrade');
+          break;
+        }
+        yield;
+        if (entry.status !== 'confirmed') break;
+      }
       if (isEnabled && enabled('adShop')) {
         await observed(['adShop'],()=>claimAdShop(client, config, { ...adChannel, player, getSettings, enabled: () => enabled('adShop'),
           schedule: rewards, report(entry) {
@@ -1404,10 +1433,9 @@ export async function runLoop(client, protocol, {
           const weeklyAt = nextWeeklyActivityBoundary(client, getWeeklySettings(), roundStartedMs);
           const activityAt = activityVersion !== roundActivityVersion ? 0
             : nextActivityBoundary(client, activityConfigured, roundStartedMs);
-          const afkAt = isEnabled && enabled('afk') ? (afkDeadline ?? Date.now() + 60_000) : Infinity;
           const wakeAt = Math.min(nextRound, activityAt, weeklyAt, factorySchedule.nextAt(), dispatchNext(), extendedNext(), merchantNext(), appointmentNext(),
             isEnabled && enabled('upgrade') ? upgradeAt : Infinity,
-            antiqueEnabled(getSettings()) ? antiqueAt : Infinity, afkAt);
+            antiqueEnabled(getSettings()) ? antiqueAt : Infinity, nextAfkCheck());
           if (wakeAt > Date.now()) await scheduler.waitUntil(wakeAt);
           if (!scheduler.active() || Date.now() >= waitStartedAt + getEveryMs()) break;
           if (activityVersion !== roundActivityVersion || activityAt <= Date.now() || weeklyAt <= Date.now()) {
@@ -1426,15 +1454,11 @@ export async function runLoop(client, protocol, {
           await scheduler.runDue('extended', extendedNext, checkExtended);
           await scheduler.runDue('appointments', appointmentNext, checkAppointments);
           await scheduler.runDue('antique', () => antiqueEnabled(getSettings()) ? antiqueAt : Infinity, checkAntique);
-          if (afkAt <= Date.now() && enabled('afk')) {
-            afkDeadline = undefined;
-            await scheduler.runDue('afk', () => enabled('afk') ? afkAt : Infinity, async () => {
-              if (!enabled('afk')) return;
-              await claimRewards(client, protocol, config, logReward, key => key === 'afk' && enabled(key), rememberDeadline, rewards, player, { settings: getSettings() });
-              try { await claimAfkAdNow(); } catch (error) { phaseFailure('tasks', '闯关挂机广告收益', error); }
-            });
-            if (!afkDeadline || afkDeadline <= Date.now()) afkDeadline = Date.now() + 60_000;
-          }
+          await scheduler.runDue('afk', nextAfkCheck, async () => {
+            rememberDeadline(Date.now() + 60_000);
+            await claimRewards(client, protocol, config, logReward, key => key === 'afk' && enabled(key), rememberDeadline, rewards, player, { getSettings });
+            try { await claimAfkAdNow(); } catch (error) { phaseFailure('tasks', '闯关挂机广告收益', error); }
+          });
         }
       }
       catch (error) { if (!stop.aborted) throw error; }

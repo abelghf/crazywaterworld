@@ -142,6 +142,10 @@ export async function captureSpendOperation(client, step, { waterSnapshot } = {}
   const operation = { confirmed: false, request };
   const probe = test => { operation.verify = test; return operation; };
 
+  if (request === 'UpgradeAfkLevelRequest' && integer(verify.level) && verify.level > 0) {
+    return probe(async next => (await read(next, 'AfkInfo'))?.afkInfo?.level >= verify.level);
+  }
+
   if (request === 'PetLevelUpRequest' && verify.petUid && integer(verify.level)) {
     return probe(next => petLevelConfirmed(next, verify));
   }

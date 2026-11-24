@@ -110,6 +110,7 @@ const core = [
   'tools/selftest-pirate-board.mjs',
   ...heroGrowth,
   'tools/selftest-daily-schedule.mjs',
+  'tools/selftest-afk-upgrade.mjs',
   'tools/selftest-daily-combat.mjs',
   'tools/selftest-league-challenge.mjs',
   'tools/selftest-ad-shop.mjs',
