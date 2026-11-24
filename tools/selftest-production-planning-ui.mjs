@@ -242,7 +242,6 @@ await test('满仓插单后刷新可见剩余 340 件，撤回后清除记录', 
   const plan = { forecast: { startAt:1000, endAt:87400, insertKey:'plan', completions:[],
     factories:[factory] } };
   env.render(plan);
-  assert.equal(env.node('production-day-preview').textContent, factory.name);
   for (const warning of [undefined, '工厂队列已变化，插单已撤回']) {
     env.respond = async route => {
       if (route.endsWith('-options')) return { products:[{ id:'淡水', name:'淡水', max:null }], count:1 };
@@ -258,12 +257,11 @@ await test('满仓插单后刷新可见剩余 340 件，撤回后清除记录', 
     await panel.querySelector('.production-batch-insert').onclick();
     descendants(env.node('m-body')).find(node => node.tagName === 'input').value = '340';
     await env.node('m-ok').onclick();
-    const day = env.node('production-day-result'), preview = env.node('production-day-preview');
+    const day = env.node('production-day-result');
     if (warning) {
-      assert.doesNotMatch(day.textContent + preview.textContent, /待入队插单|淡水/);
+      assert.doesNotMatch(day.textContent, /待入队插单|淡水/);
     } else {
       assert.match(day.textContent, /待入队插单.*淡水 ×340.*淡水已满仓/);
-      assert.match(preview.textContent, /待入队插单 · 淡水 ×340/);
       assert.match(day.querySelector('.plan-day-totals').textContent, /运行 0秒.*空闲 24小时/);
     }
     assert.equal(env.node('hint').textContent, '');
@@ -286,7 +284,6 @@ await test('独立卡片只显示一家工厂，切换与刷新保留选中项�
   assert.equal(action.hidden, false);
   assert.deepEqual(picker.children.map(n => [n.value, n.textContent]), [['a', '金属厂-1'], ['b', '食品厂-1']]);
   assert.equal(picker.value, 'a');
-  assert.match(env.node('production-day-preview').textContent,/金属厂-1.*生产中 · 铜锭 ×1.*计划排队中 · 电线 ×1/);
   assert.match(main.textContent, /居民订单/);
   assert.match(box.textContent, /模拟游戏原生 · 北京时间 23:59 起.*预计备齐 0 \/ 1/);
   assert.match(box.querySelector('.plan-day-totals').textContent, /运行 1分.*空闲 23小时58分/);
@@ -297,7 +294,6 @@ await test('独立卡片只显示一家工厂，切换与刷新保留选中项�
   assert.equal(box.querySelector('.plan-day-track'), undefined);
   picker.selectedIndex = 1;
   picker.onchange();
-  assert.match(env.node('production-day-preview').textContent,/食品厂-1.*游戏原生接管/);
   assert.match(box.textContent, /待定 24小时.*游戏原生接管/);
   assert.doesNotMatch(box.textContent, /铜锭|空闲/);
   picker.selectedIndex = 0;

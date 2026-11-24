@@ -253,8 +253,6 @@ html:has(.world-map-detail:modal) { overflow:hidden }
 .world-fuel-summary strong { margin-left:6px; font-weight:500; font-variant-numeric:tabular-nums }
 .world-journey { font-variant-numeric:tabular-nums }
 /* ---- 建筑一览 ---- */
-#production-day-preview { display:flex; flex-wrap:wrap; align-items:baseline; gap:4px 14px; font-size:13px; color:var(--muted-foreground) }
-#production-day-preview strong { color:var(--foreground) }
 #production-plan-result:not(:empty) { display:grid; gap:12px; min-width:0 }
 .production-plan-summary { display:flex; flex-wrap:wrap; align-items:baseline; gap:3px 12px; margin:0; padding:10px 14px; border-inline-start:3px solid var(--primary); background:var(--muted); border-radius:0 6px 6px 0; font-size:13px }
 .production-plan-summary strong { font-size:18px; font-weight:600; font-variant-numeric:tabular-nums }

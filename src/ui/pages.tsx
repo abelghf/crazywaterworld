@@ -210,10 +210,7 @@ export function activitiesPage() {
 
 export function manualPage() {
   return renderToStaticMarkup(<div className="grid gap-3">
-    <div className="flex flex-wrap items-center justify-between gap-2">
-      <div id="production-day-preview" aria-label="排产队列摘要" />
-      <Button id="production-day-jump" variant="outline" size="sm" aria-controls="production-day-card">查看排产清单</Button>
-    </div>
+    <Button id="production-day-jump" className="justify-self-end" variant="outline" size="sm" aria-controls="production-day-card">查看排产清单</Button>
     <div id="world-view" className="dim" role="status" aria-label="海面" />
     <div id="world-factories" />
     <div className="world-orders-panel"><Panel title="居民订单" help="材料已齐时可手动提交，结果见运行日志。「需」为订单需求，「缺」为仍欠的数量，「留」为库存中已预留或被本轮其他操作占用的数量。">

@@ -146,7 +146,6 @@ function forecastDuration(seconds) {
 }
 
 function clearProductionDay() {
-  clear($('production-day-preview'));
   $('production-day-card').hidden = true;
   $('production-day-picker').hidden = true;
   clear($('production-day-factory')).onchange = null;
@@ -158,7 +157,6 @@ function showProductionDayNotice(message) {
   clearProductionDay();
   $('production-day-card').hidden = false;
   $('production-day-result').appendChild(el('p', 'plan-day-note', message));
-  $('production-day-preview').textContent = message;
 }
 
 // The rows are batches, so a one-second run has the same reading and click area as any other.
@@ -362,7 +360,6 @@ function renderProductionDay(day, orders) {
   if (day.partial) box.appendChild(el('p', 'plan-day-note', '部分快照数据或材料扣款待确认，仅按已知条件推演。'));
   if (!factories.length) {
     box.appendChild(el('p', 'plan-day-note', '当前快照中没有已建工厂。'));
-    $('production-day-preview').textContent = '当前没有已建工厂。';
     return;
   }
   const picker = $('production-day-factory');
@@ -378,23 +375,6 @@ function renderProductionDay(day, orders) {
     selectedForecastFactory = factory.id;
     picker.value = String(factory.id);
     renderFactorySchedule(body, day, factory);
-    const preview = clear($('production-day-preview'));
-    preview.appendChild(el('strong', null, factory.name));
-    const pending = factory.pendingInsertions ?? [];
-    if (pending.length) {
-      const first = pending[0];
-      preview.appendChild(el('span', null, '待入队插单 · ' + first.name + ' ×' + first.quantity
-        + (pending.length > 1 ? ' 等 ' + pending.length + ' 批' : '')));
-    }
-    const batches = factory.runs?.slice(0, 3) ?? [];
-    for (const run of batches) {
-      preview.appendChild(el('span', null, forecastStatusLabels[forecastRunStatus(run)] + ' · ' + run.name + ' ×' + run.quantity));
-    }
-    if (!batches.length) {
-      const note = factory.unknown || factory.insertNote ||
-        (!Array.isArray(factory.runs) ? '排期待确认' : factory.disabled && '已停用');
-      if (note) preview.appendChild(el('span', null, note));
-    }
   }
   picker.onchange = () => selectFactory(factories[picker.selectedIndex]);
   selectFactory(factories.find(factory => factory.id === selectedForecastFactory) ?? factories[0]);
