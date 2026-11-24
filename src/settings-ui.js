@@ -505,7 +505,7 @@ const configGroups = [
   { id: 'heroes', title: '英雄养成', category: 'heroes', fields: [
     configField('heroes.enabled', '养成总开关'), configField('loop.heroes', '加入自动挂机'),
     configField('heroes.heroIds', '指定英雄', 'multi', { catalog: 'heroes', empty: '留空则暂停培养，不影响技能展示领奖', help: '可搜索并选择多个英雄。升级、升星等培养操作只处理名单中已拥有的英雄；技能展示领奖覆盖所有已拥有的英雄。' }),
-    configField('heroes.level', '自动升级'), configField('heroes.star', '自动升星'),
+    configField('heroes.level', '自动升级', 'switch', { help: '优先补齐等级最低的所选英雄，同级按勾选顺序各升一级。重启后按实际等级接续。' }), configField('heroes.star', '自动升星'),
     configField('heroes.skill', '技能升级'), configField('heroes.skillAdvance', '技能进阶'),
     configField('heroes.exclusiveLevel', '专武升级'), configField('heroes.exclusiveStar', '专武升星'),
     configField('heroes.showSkillReward', '领取技能展示奖励', 'switch', { help: '领取所有已拥有英雄的技能展示奖励，不受指定英雄名单限制；已领取的英雄自动跳过。' }),
