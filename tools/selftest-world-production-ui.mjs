@@ -101,6 +101,7 @@ function fixture() {
     const $ = env.node, el = env.element, clear = env.clear, table = env.table;
     const document = env.document, Date = class extends globalThis.Date { static now() { return env.now; } };
     const chip = (state, label) => el('span', state, label);
+    const smallButton = label => el('button', '', label);
     const component = id => {
       if (id !== 'ui-building-card') return el('button');
       const card = el('div'), header = el('div'), body = el('div');
@@ -118,7 +119,7 @@ function fixture() {
     const snapshot = { paused: false, connected: true }, disconnected = new Set();
     let current = 'account-a';
     let orderClockOffset = 0;
-    ${script.slice(script.indexOf('function orderState('), script.indexOf('const pendingResidentOrders'))}
+    ${script.slice(script.indexOf('function orderState('), start)}
     env.orderState = orderState;
     ${script.slice(durationStart, durationEnd)}
     ${script.slice(start, end)}
@@ -195,16 +196,23 @@ test('居民订单按账号每日上限显示交付进度，空订单列表也�
   ]) {
     env.render(worldData(env, { orderOfTheDay: { orderNum, dailyLimit: target } }));
     assert(box.textContent.includes(detail));
-    const ring = box.querySelector('[role="progressbar"]');
-    assert.equal(ring.children[0].textContent, orderNum + '/' + target);
-    assert.equal(ring.children[1].textContent, '每日上限');
-    assert.equal(ring.attributes['aria-valuemax'], String(target));
-    assert.equal(ring.attributes['aria-valuenow'], String(Math.min(orderNum, target)));
-    assert.equal(ring.style['--order-fill'], Math.min(orderNum / target, 1) * 100 + '%');
+    assert(box.textContent.includes(orderNum + ' / ' + target + ' 单'));
+    assert.match(box.textContent, /当前没有待处理的居民订单/);
+    const bar = box.querySelector('progress[aria-label="今日居民订单交付进度"]');
+    assert.equal(bar.max, target);
+    assert.equal(bar.value, Math.min(orderNum, target));
   }
   env.render(worldData(env, { orderOfTheDay: { orderNum: 3, tier: 6, reqNums: [6, 12] } }));
-  assert.equal(box.textContent, '今日已完成 3 单 · 每日上限未同步');
-  assert.equal(box.querySelector('[role="progressbar"]'), null);
+  assert.match(box.textContent, /今日已完成 3 单 · 每日上限未同步.*当前没有待处理的居民订单/);
+  assert.equal(box.querySelector('progress[aria-label]'), null);
+  env.render(worldData(env, { orders: undefined }));
+  assert.match(box.textContent, /今日交付进度未同步.*居民订单列表尚未同步/);
+  env.render(worldData(env, { orders: [{index:1, workerName:'小林', requirements:[]}] }));
+  assert.match(box.textContent, /小林.*提交订单/);
+  assert.doesNotMatch(box.textContent, /没有待处理|列表尚未同步/);
+  env.render(worldData(env));
+  assert.match(box.textContent, /当前没有待处理的居民订单/);
+  assert.doesNotMatch(box.textContent, /小林|提交订单/);
   env.refreshUnavailable('account');
   assert.equal(box.textContent, '');
 });

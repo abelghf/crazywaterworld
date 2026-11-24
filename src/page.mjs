@@ -1955,22 +1955,17 @@ function residentOrderProgress(daily) {
   if (!Number.isSafeInteger(target) || target <= 0) return el('p', '', '今日已完成 ' + fmt(count) + ' 单 · 每日上限未同步');
 
   const box = el('div', 'resident-order-progress');
-  const ring = el('div', 'resident-order-ring');
-  const filled = Math.min(count, target);
-  ring.style.setProperty('--order-fill', (filled / target * 100) + '%');
-  ring.setAttribute('role', 'progressbar');
-  ring.setAttribute('aria-label', '今日居民订单交付进度');
-  ring.setAttribute('aria-valuemin', '0');
-  ring.setAttribute('aria-valuemax', String(target));
-  ring.setAttribute('aria-valuenow', String(filled));
-  ring.title = '今日已交付 ' + fmt(count) + ' 单，每日上限 ' + fmt(target) + ' 单';
-  ring.setAttribute('aria-valuetext', ring.title);
-  const fraction = el('strong', '', fmt(count));
-  fraction.appendChild(el('small', '', '/' + fmt(target)));
-  ring.append(fraction, el('span', '', '每日上限'));
-
+  const header = el('div', 'resident-order-summary');
+  const label = el('span', '', '今日已交付 ');
+  label.appendChild(el('strong', '', fmt(count) + ' / ' + fmt(target) + ' 单'));
   const status = count >= target ? '今日已达上限' : '今日还可交 ' + fmt(target - count) + ' 单';
-  box.append(ring, el('span', 'resident-order-remaining', status));
+  header.append(label, el('span', '', status));
+  const bar = el('progress', 'resident-order-bar');
+  bar.max = target;
+  bar.value = Math.min(count, target);
+  bar.setAttribute('aria-label', '今日居民订单交付进度');
+  bar.setAttribute('aria-valuetext', '今日已交付 ' + fmt(count) + ' 单，每日上限 ' + fmt(target) + ' 单');
+  box.append(header, bar);
   return box;
 }
 
@@ -2031,8 +2026,8 @@ function renderWorld(data) {
     (button || $('tab-manual')).focus({ preventScroll: true });
   }
   const obox = clear($('world-orders'));
-  if (data.orderOfTheDay || data.orders.length) obox.appendChild(residentOrderProgress(data.orderOfTheDay));
-  if (data.orders.length) {
+  obox.appendChild(residentOrderProgress(data.orderOfTheDay));
+  if (data.orders?.length) {
     const ordersTable = table(['订单', '居民', '需求', '挂机交付', '手动操作'], data.orders.map((o) => [
       '#' + o.index,
       { cell: o.workerIcon, text: (o.workerName || '未知居民') + (o.isSpecial ? '（特殊）' : '') },
@@ -2041,6 +2036,9 @@ function renderWorld(data) {
       residentOrderActions(o),
     ]), 'sea-records');
     obox.appendChild(ordersTable);
+  } else {
+    obox.appendChild(el('p', 'resident-order-empty', Array.isArray(data.orders)
+      ? '当前没有待处理的居民订单。' : '居民订单列表尚未同步。'));
   }
   renderInventory(data.stock);
 }
