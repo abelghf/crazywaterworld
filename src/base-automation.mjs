@@ -202,7 +202,7 @@ export function baseDemands(snapshot, config, settings) {
   return demands;
 }
 
-export async function previewNativeAutomation(client, config, player, settings, flags, world, usage) {
+export async function previewNativeAutomation(client, config, player, settings, flags, world, usage, cargoLoadLimits) {
   const actions = [], notes = [], moduleNotes = { gather: [], cargo: [] };
   const enabled = key => flags[key] === true && nativePreferenceEnabled(settings, key);
   const reads = new Set(['FishEncyclopediaRequest','OnWaterRequest', 'AllItemRequest', 'AllResourceRequest', 'GameEffectRequest', 'CargoShipsRequest', 'WeekInfoRequest', 'WeekOrderInfoRequest']);
@@ -232,7 +232,7 @@ export async function previewNativeAutomation(client, config, player, settings, 
   if (enabled('antiqueFloaters')) await group('藏品宝箱',()=>collectAntiqueFloaters(readonly,config,{enabled:()=>enabled('antiqueFloaters'),report:record,dryRun:true}));
   if (enabled('floaters')) await group('漂浮物', () => collectFloaters(readonly, config, world.floaters, enabled, record, { settings, dryRun: true }));
   if (enabled('cargo') && player?.level >= (rows(config, 'CargoUnlockCfg')[0]?.playerLevel ?? 9)) await group('贸易港', () => serviceCargo(readonly, config, {
-    enabled: () => enabled('cargo'), getSettings: () => settings, ledger: { snapshot: () => usage }, dryRun: true,
+    enabled: () => enabled('cargo'), getSettings: () => settings, ledger: { snapshot: () => usage }, dryRun: true, cargoLoadLimits,
     log(label, details) { if (details?.action) actions.push(details.action); else if (details?.skipped) notes.push(label); },
   }), 'cargo');
   if (settings.gather.keyOpen && actions.some(action => action.kind === 'autoDive') && world.have('保险箱钥匙') >= 1) {

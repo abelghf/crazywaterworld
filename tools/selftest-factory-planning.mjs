@@ -364,6 +364,53 @@ test('原生自动生产保持原目标，仅明确开启协同才允许切换',
   assert.deepEqual(f.plan().actions.map(step => step.request), ['SetFactoryAutoProduceRequest']);
 });
 
+test('探宝与货船争用氧气瓶时，普通和原生工厂按优先级分配现货', () => {
+  for (const native of [false, true]) {
+    const f = fixture();
+    const recipe = f.config.tables.BuildingProduceCfg.data[1];
+    Object.assign(recipe, { itemId: '水族箱', costItem: [['氧气瓶', 1]] });
+    Object.assign(f.settings.factory, { demandFirst: true, cooperateNative: true, keepStock: 0, demandPriority: ['museum', 'cargo'] });
+    if (native) {
+      f.survey.autoProduceForever = true;
+      f.factory.factory.autoProductId = '短时品';
+    }
+    f.survey.cargoOrder.set('氧气瓶', 1);
+    const demand = { source: 'museum', requirements: [{ id: '水族箱', num: 1 }] };
+    const plan = () => planWorld(f.survey, { config: f.config, settings: f.settings, extraDemand: [demand], enabled: k => k === 'startProduce' });
+    const wantsTank = result => result.actions.some(step => step.body.productId === '水族箱'
+      && step.request === (native ? 'SetFactoryAutoProduceRequest' : 'StartFactoryProduceRequest'));
+    assert.equal(wantsTank(plan()), false);
+    f.stock.set('氧气瓶', 1);
+    const first = plan();
+    assert.equal(wantsTank(first), true);
+    assert.equal(first.cargoLoadLimits.get('氧气瓶'), 0);
+    assert.equal(new Map(first.reserved).get('氧气瓶'), 1);
+    const weekly = planWorld(f.survey, { config: f.config, settings: f.settings, extraDemand: [demand],
+      enabled: () => false, reserveFactoryInputs: true });
+    assert.equal(wantsTank(weekly), false);
+    assert.equal(weekly.cargoLoadLimits.get('氧气瓶'), 0);
+    const control = native ? 'cooperateNative' : 'produce';
+    f.settings.factory[control] = false;
+    assert.equal(plan().cargoLoadLimits.has('氧气瓶'), false);
+    f.settings.factory[control] = true;
+    f.settings.factory.demandPriority.reverse();
+    assert.equal(wantsTank(plan()), false);
+    f.settings.factory.demandPriority.reverse();
+    f.stock.set('氧气瓶', 2);
+    const surplus = plan();
+    assert.equal(wantsTank(surplus), true);
+    assert.equal(surplus.cargoLoadLimits.get('氧气瓶'), 1);
+    f.stock.set('氧气瓶', 1);
+    f.factory.factory.factoryQ.push({ idx: 1, productId: '水族箱', finishTime: 200 });
+    const queued = plan();
+    assert.equal(wantsTank(queued), false);
+    assert.equal(queued.cargoLoadLimits.has('氧气瓶'), false, '已有在产水族箱的原料已扣除');
+    f.factory.factory.factoryQ.length = 0;
+    recipe.unlockLevel = 2;
+    assert.equal(plan().cargoLoadLimits.has('氧气瓶'), false, '未解锁的配方不能占用货船材料');
+  }
+});
+
 test('商人整单缺少未解锁材料时释放库存，其他需求继续排产', () => {
   const f = fixture();
   f.settings.factory.keepStock = 0;

@@ -2961,7 +2961,7 @@ export function createConsole({ host = '127.0.0.1', port = 17321, onLog, recover
           const worldPlan = planWorld(survey, { config, settings, usage, extraDemand: baseDemands(extra, config, settings),
             enabled: kind => flags[worldTaskKey(kind)] === true, allowSpeedUp: flags.speedUp, allowReroll: settings.resident.reroll, minOrderExp: settings.resident.minExp });
           const extraPlan = planBaseAutomation(extra, config, settings, usage);
-          const nativePlan = await previewNativeAutomation(client, config, session.player, settings, flags, survey, usage);
+          const nativePlan = await previewNativeAutomation(client, config, session.player, settings, flags, survey, usage, worldPlan.cargoLoadLimits);
           const plan = budgetPreview([...worldPlan.actions, ...extraPlan.actions, ...nativePlan.actions], survey.stock, settings, usage);
           const moduleNotes = { ...nativePlan.moduleNotes, building: worldPlan.upgradeReasons,
             factory: [...worldPlan.factoryReasons].map(([id, reason]) => id+'：'+reason),
