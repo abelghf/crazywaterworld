@@ -758,6 +758,7 @@ try {
       expected.merchant.fullCargoRoutes = value ?? defaultSettings().merchant.fullCargoRoutes;
       expected.museum.targetFragments = [];
       expected.museum.unlockCases = false;
+      Object.assign(expected.pet, { levelUp: false, levelUids: [] });
       expected.treasure.chasePlayerIds = [];
       expected.alliance.memberIds = [];
       Object.assign(expected.factory,{strategy:'smart',simulatedTargets:[]});
@@ -854,7 +855,7 @@ try {
     assert.throws(() => validateSettings(settings), error => !!error.fields['alliance.memberIds']);
   });
   test('版本1升级后重复迁移保持一致，保留有效的用户值', () => {
-    assert.equal(SETTINGS_SCHEMA_VERSION, 58);
+    assert.equal(SETTINGS_SCHEMA_VERSION, 60);
     const settings = legacySettings();
     settings.factory.checkEverySeconds = 270;
     settings.resources.diamondDailyLimit = 1234;

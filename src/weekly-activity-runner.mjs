@@ -73,7 +73,7 @@ export function weeklyActivityActionSettings(context, config) {
   settings.pet.release = false;
   settings.forge.decompose = false;
   if (context.kind === 'pet') {
-    settings.pet.feed = false; settings.pet.advance = false;
+    settings.pet.feed = false; settings.pet.advance = false; settings.pet.levelUp = false;
     settings.museum.enabled = false; settings.museum.upgrade = false; settings.museum.runEnabled = false;
     settings.gold.enabled = false; settings.events.enabled = false; settings.gather.enabled = false;
   }

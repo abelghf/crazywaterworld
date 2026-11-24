@@ -71,7 +71,8 @@ import { readHeroEquipment, equipHeroEmptySlots, enhanceHeroEquipment, uidText }
 import { readEquipmentCrafting, startEquipmentCraft, collectEquipmentCraft } from './equipment-crafting.mjs';
 import { readLineups, applyLineup, editorLineupRecommendations } from './lineups.mjs';
 import { moveLeagueTeam, readManualLeagueOrder, recoverLeagueOrder } from './league-order.mjs';
-import { getLineupCatalog, normalizeFormation, readLineupEditor, validateLineupSettings } from './saved-lineups.mjs';
+import { describePets, getLineupCatalog, normalizeFormation, readLineupEditor, validateLineupSettings } from './saved-lineups.mjs';
+import { readPetLevelRoster } from './pet-leveling.mjs';
 import { readLineupRuntime, recoverLineup } from './lineup-runtime.mjs';
 import { createLineupExecutor, lineupRole, selectedSavedLineup } from './lineup-execution.mjs';
 import { lineupArt } from './lineup-art.mjs';
@@ -2527,6 +2528,24 @@ export function createConsole({ host = '127.0.0.1', port = 17321, onLog, recover
         adoptPreferences(session, entry);
         emit(session, 'info', '登录设置已保存，后续连接恢复将使用新策略');
         json(loginSettingsView(session));
+        return;
+      }
+      if (route === 'GET /api/settings/stationed-pets') {
+        const { session } = scoped_(parsed);
+        const { client, generation } = session;
+        const check = () => {
+          if (!client?.connected || session.client !== client || session.generation !== generation || session.paused)
+            throw Error('请先连接当前账号，再读取值守海兽');
+        };
+        check();
+        json(await readJob(session, async () => {
+          check();
+          const roster = await readPetLevelRoster(client);
+          check();
+          const stationed = [...roster.values()].filter(row => row.buildingId);
+          const pets = describePets(stationed.map(row => row.pet), loadConfigSafe());
+          return { pets: pets.map(({ uid, name }) => ({ value: uid, label: name + ' · ' + roster.get(uid).buildingId })) };
+        }, { recoverFormation: false }));
         return;
       }
       if (route === 'GET /api/settings/player-names') {

@@ -231,6 +231,7 @@ const extra = [
   'tools/selftest-module-controls.mjs',
   'tools/selftest-switch-ownership.mjs',
   'tools/selftest-pet-queue.mjs',
+  'tools/selftest-pet-leveling.mjs',
   'tools/selftest-pirate-recovery.mjs',
   'tools/selftest-pirate-sweeps.mjs',
   'tools/selftest-radar-confirmation.mjs',

@@ -1,6 +1,7 @@
 import { caseWorkObserved } from './museum-cases.mjs';
 import { normalize } from './worlds.mjs';
 import { uidText } from './hero-equipment.mjs';
+import { petLevelConfirmed } from './pet-leveling.mjs';
 import { emitDiagnostic } from './trace-log.mjs';
 
 const integer = value => Number.isSafeInteger(value) && value >= 0;
@@ -141,6 +142,9 @@ export async function captureSpendOperation(client, step, { waterSnapshot } = {}
   const operation = { confirmed: false, request };
   const probe = test => { operation.verify = test; return operation; };
 
+  if (request === 'PetLevelUpRequest' && verify.petUid && integer(verify.level)) {
+    return probe(next => petLevelConfirmed(next, verify));
+  }
   if (request === 'PetUpgradeFeedRequest' && verify.petUid && integer(verify.fed) && integer(verify.grade)) {
     return probe(async next => {
       const raw = await next.request('AllPetRequest', {}, 'AllPetResponse');

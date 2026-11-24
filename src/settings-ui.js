@@ -334,11 +334,13 @@ const configGroups = [
   { id: 'pet', title: '海兽培育室', category: 'base', fields: [
     configField('pet.enabled', '总开关'), configField('pet.claim', '自动领取'), configField('pet.breed', '自动培育'),
     configField('pet.species', '培育种类', 'multi', { parent: 'pet.breed', catalog: 'petSpecies', empty: '未选择品种，不自动培育', when: d => d.pet.breed }),
-    configField('pet.release','自动放生','switch',{help:'放生所选品质的海兽，包括已养成的海兽。已编队或值守的海兽会跳过。工具无法读取游戏客户端的本地锁定名单。'}),
+    configField('pet.release','自动放生','switch',{help:'放生所选品质的海兽，包括已养成的海兽。已编队、值守或列入升级名单的海兽会跳过。工具无法读取游戏客户端的本地锁定名单。'}),
     configField('pet.releaseQualities','处理品质','multi',{ parent: 'pet.release',catalog:'petQualities',empty:'未选择，不处理',when:d=>d.pet.release}),
     configField('pet.quality', '培育品质上限', 'choice', { parent: 'pet.breed', options: [['BLUE', '蓝色'], ['PURPLE', '紫色'], ['ORANGE', '橙色'], ['RED', '红色']], when: d => d.pet.breed, help: '在所选品质及以下，从材料足够的低品质开始尝试。' }),
     configField('pet.universal', '允许消耗万能基因', 'switch', { parent: 'pet.breed', help: '仅在普通基因不足时，用对应的已有自选基因补足。', when: d => d.pet.breed }),
     configField('pet.feed', '自动喂养', 'switch', { help: '消耗服务器列出的喂养材料，加快当前培育。' }),
+    configField('pet.levelUp', '自动升级', 'switch', { help: '消耗海兽经验。所选海兽全部达到 30 级后升向 65 级，全部达到 65 级后升向 100 级。' }),
+    configField('pet.levelUids', '升级海兽', 'multi', { parent: 'pet.levelUp', catalog: 'stationedPets', empty: '选择值守海兽', when: d => d.pet.levelUp }),
     configField('pet.advance', '自动进阶', 'switch', { help: '对已入驻的海兽投喂进阶材料；达到喂养和等级要求后进阶。' }),
   ] },
   { id: 'forge', title: '装备自动锻造', category: 'equipment', fields: [
@@ -1230,7 +1232,8 @@ function configRenderField(spec) {
   } else if (spec.kind === 'players') {
     control = configPlayerPicker(spec, id); box.append(control);
   } else if (spec.kind === 'multi') {
-    control = configMultiselect(spec, id); box.append(control);
+    control = spec.catalog === 'stationedPets' ? configStationedPetPicker(spec, id) : configMultiselect(spec, id);
+    box.append(control);
   } else if (spec.kind === 'cityWarRoles') {
     control = configCityWarRoles(spec, id); box.append(control);
   } else if (spec.kind === 'sortableOrder') {
@@ -2100,11 +2103,37 @@ function configCityWarRoles(spec, id) {
   root.refresh(); return root;
 }
 
+function configStationedPetPicker(spec, id) {
+  const owner = configEditor.owner;
+  const catalog = { stationedPets: configEditor.stationedPets?.owner === owner ? configEditor.stationedPets.options : [] };
+  let status = '', pending = false;
+  const picker = configMultiselect(spec, id, { catalog, missingLabel: uid => '已选海兽 · ' + uid,
+    listMessage: () => status || (!catalog.stationedPets.length ? '暂无值守海兽，请先在游戏中安排值守。' : '') });
+  picker.addEventListener('toggle', async () => {
+    if (!picker.open || pending || owner !== current) return;
+    pending = true; status = '正在读取值守海兽…'; picker.refresh();
+    try {
+      const data = await call('/api/settings/stationed-pets');
+      if (!picker.isConnected || owner !== current) return;
+      catalog.stationedPets = data.pets;
+      configEditor.stationedPets = { owner, options: data.pets };
+      status = '';
+    } catch (error) {
+      status = error.message + '。重新展开可重试。';
+    } finally {
+      pending = false;
+      if (picker.isConnected && owner === current) picker.refresh();
+    }
+  });
+  return picker;
+}
+
 function configMultiselect(spec, id, options = {}) {
   const read = options.read ?? (() => configGet(spec.key));
   const write = options.write ?? (value => configSet(spec.key, value));
   const catalog = options.catalog ?? configEditor.data.catalog;
   const disabled = options.disabled === true;
+  const missingLabel = options.missingLabel ?? (value => value + '（当前配置中未找到）');
   const root = el('details', 'config-multi'); root.id = id; root.setAttribute('aria-label', spec.label); root.tabIndex = -1;
   const summary = el('summary'); summary.setAttribute('aria-label', spec.label); root.append(summary);
   const panel = el('div', 'config-multi-panel');
@@ -2116,7 +2145,7 @@ function configMultiselect(spec, id, options = {}) {
     const choices = spec.options?.map(([value,label])=>({value,label})) ?? catalog[spec.catalog] ?? [];
     const options = choices.filter(item =>
       spec.key !== 'heroes.heroIds' || !item.hidden || read().includes(item.value));
-    if (spec.catalog!=='expeditionFleets') for (const value of read()) if (!options.some(item => item.value === value)) options.unshift({ value, label: value + '（当前配置中未找到）' });
+    if (spec.catalog!=='expeditionFleets') for (const value of read()) if (!options.some(item => item.value === value)) options.unshift({ value, label: missingLabel(value) });
     return options;
   };
   function paintSummary() {
@@ -2154,7 +2183,8 @@ function configMultiselect(spec, id, options = {}) {
       };
       label.append(input, el('span', '', item.label)); list.append(label);
     }
-    if (!matches.length) list.append(el('p', 'config-help', '没有匹配项，试试其他名称。'));
+    const message = options.listMessage?.() || (!matches.length ? '没有匹配项，试试其他名称。' : '');
+    if (message) list.append(el('p', 'config-help', message));
     paintFooter(available, matches.length, selected);
     more.hidden = matches.length <= limit; list.scrollTop = oldScroll;
   }

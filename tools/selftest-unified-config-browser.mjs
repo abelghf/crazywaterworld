@@ -100,6 +100,42 @@ try {
   await page.screenshot({ path: path.join(output, 'config-navigation-desktop.png'), animations: 'disabled',
     clip: { x: toolbarBounds.x, y: toolbarBounds.y, width: toolbarBounds.width, height: tabBounds.y + tabBounds.height - toolbarBounds.y + 8 } });
   {
+    await group('pet');
+    const pet = page.locator('#config-group-pet');
+    const enable = pet.getByRole('switch', { name: '自动升级', exact: true });
+    await enable.click(); await saved();
+    const expand = pet.getByRole('button', { name: '自动升级，展开下级设置' });
+    await expand.click();
+    const picker = pet.locator('#config-field-pet-levelUids');
+    const previous = { client: bossSession.client, paused: bossSession.paused };
+    const roster = [1, 2, 3].map(low => ({ uid: { high: 2097152, low }, petId: '海豚', level: 29, star: 2 }));
+    const reads = [];
+    try {
+      bossSession.paused = false;
+      bossSession.client = { connected: true, async request(name) {
+        reads.push(name);
+        if (name === 'AllPetRequest') return { pets: roster };
+        assert.equal(name, 'OnWaterRequest');
+        return { building: roster.slice(0, 2).map((p, i) => ({ buildingId: (i + 1) + '号值守建筑', level: 1, petServe: { petUid: p.uid } })) };
+      } };
+      await picker.locator('summary').click();
+      await picker.getByRole('checkbox', { name: /海豚.*1号值守建筑/ }).check();
+      await picker.getByRole('checkbox', { name: /海豚.*2号值守建筑/ }).check();
+      assert.equal(await picker.getByRole('checkbox').count(), 2);
+      await picker.locator('summary').click();
+    } finally { Object.assign(bossSession, previous); }
+    assert.deepEqual(reads, ['AllPetRequest', 'OnWaterRequest']);
+    assert.equal(await pet.getByRole('radiogroup', { name: '目标阶段' }).count(), 0);
+    await saved();
+    const storedPet = loadAutomationSettings('config-a').settings.pet;
+    assert.deepEqual(storedPet.levelUids, ['9007199254740993', '9007199254740994']);
+    assert(!Object.hasOwn(storedPet, 'targetLevel'));
+    await page.reload(); await openConfig(); await group('pet'); await expand.click();
+    assert.match(await picker.locator('summary').innerText(), /9007199254740993/);
+    await enable.click(); await saved();
+    assert.deepEqual(loadAutomationSettings('config-a').settings.pet.levelUids, storedPet.levelUids);
+  }
+  {
     await group('progression');
     const card = page.getByRole('region', { name: '主线推关进度' });
     await card.waitFor();
