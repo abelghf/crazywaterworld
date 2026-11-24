@@ -66,7 +66,8 @@ export function museumPreview(snapshot, antiques, config, settings, usage) {
         remaining != null ? `距 ${next.star} 星还差 ${remaining} 进度` : '当前星级无已确认掉落') });
     }
   }
-  const display = antiques ? museumBoothAdvice(museum, antiques, config, world.stock) : { upgrades: [], placement: null, notes: ['藏品清单未同步，暂无法估算展柜收益'] };
+  const display = museumBoothAdvice(museum, antiques ?? [], config, world.stock);
+  if (!antiques) display.notes.push('藏品清单未同步，暂无法估算摆放收益');
   return { maps, drops, display, actions: plan.actions.filter(a => a.setting.startsWith('museum.')),
     notes: [...(plan.notesBySetting.museum ?? []), ...Object.entries(plan.notesBySetting).filter(([k]) => k.startsWith('museum.')).flatMap(([,v]) => v), ...display.notes] };
 }

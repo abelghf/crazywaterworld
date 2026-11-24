@@ -355,6 +355,7 @@ const configGroups = [
   ] },
   { id: 'museum', title: '博物馆探宝', category: 'base', fields: [
     configField('museum.runEnabled', '博物馆探宝总开关', 'switch', { help: '统一暂停博物馆升级、领奖、藏品上架和探宝，保留细项选择。未选择任何执行动作时不会操作。' }),
+    configField('museum.unlockCases', '自动解锁展位', 'switch', { help: '展区和前置展位达标后，用现有金币、人气币和建筑蓝图解锁新展位，保留已设置的蓝图数量。到期自动完工，无需开启广告加速。' }),
     configField('museum.upgrade', '自动升级技能与展区'),
     configField('museum.revenue', '自动领取人气币', 'switch', { help: '领取博物馆已积累的营收。' }),
     configField('museum.achievements', '自动领取人气奖励', 'switch', { help: '领取已达成人气档位的成就奖励。' }),

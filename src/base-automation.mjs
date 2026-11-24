@@ -1,3 +1,5 @@
+import { planMuseumCaseWork } from './museum-cases.mjs';
+import { museumCaseActor, reconcileMuseumCaseWork, runMuseumCaseWork } from './museum-case-unlock.mjs';
 import { reconcileMuseumClaims, settleMuseumTrip } from './museum-settlement.mjs';
 import { cleanupAfterClaim } from './claim-cleanup.mjs';
 import { collectAntiqueFloaters } from './antique-floaters.mjs';
@@ -87,7 +89,7 @@ export async function surveyBaseAutomation(client, protocol, config, player, set
   };
   const member = !!exactAutomationId(player?.guildId);
   const [museum, heroes, pets, gold, guildOrder, guildShip, radar] = await Promise.all([
-    settings.museum.runEnabled !== false && (['enabled', 'upgrade', 'revenue', 'achievements', 'display'].some(key => settings.museum[key]) || needs.has('museum')) ? get('MuseumInfoRequest', 'museum') : null,
+    settings.museum.runEnabled !== false && (['enabled', 'upgrade', 'revenue', 'achievements', 'display', 'unlockCases'].some(key => settings.museum[key]) || needs.has('museum')) ? get('MuseumInfoRequest', 'museum') : null,
     settings.museum.runEnabled !== false && settings.museum.enabled ? get('AllHeroRequest', 'museum.enabled') : null,
     settings.pet.enabled && settings.pet.advance ? get('AllPetRequest', 'pet.advance') : null,
     settings.gold.enabled ? get('ClickGoldInfoRequest', 'gold.enabled') : null,
@@ -242,6 +244,7 @@ export function planBaseAutomation(snapshot, config, settings, usage = {}, { div
   const notesBySetting = Object.fromEntries(Object.entries(snapshot.notesBySetting ?? {}).map(([key, values]) => [key, [...values]]));
   const note = (setting, text) => addBaseNote(notes, notesBySetting, setting, text);
   const { world, now, player } = snapshot;
+  let caseMuseum;
   const working = new Map(world.stock);
   const free = id => (working.get(id) ?? 0) - resourceReserve(settings, id);
   const add = step => {
@@ -283,6 +286,7 @@ export function planBaseAutomation(snapshot, config, settings, usage = {}, { div
     (notesBySetting[setting] ??= []).push(...values);
   }
   return { actions: checked.actions, notes: [...notes, ...checked.notes], notesBySetting, demands: baseDemands(snapshot, config, settings),
+    caseMuseum,
     museumStages: settings.loop.world && settings.museum.runEnabled && settings.museum.enabled ? snapshot.museum?.exploreStages : null,
     goldInfo: settings.loop.dailies && settings.gold.enabled ? snapshot.gold?.info : null, pendingPaidGold: usage.pendingPaidGold === true };
 
@@ -333,7 +337,7 @@ export function planBaseAutomation(snapshot, config, settings, usage = {}, { div
 
   function planMuseum() {
     const pref = settings.museum, data = snapshot.museum;
-    if (pref.runEnabled === false || !['enabled', 'upgrade', 'revenue', 'achievements', 'display'].some(key => pref[key])) return;
+    if (pref.runEnabled === false || !['enabled', 'upgrade', 'revenue', 'achievements', 'display', 'unlockCases'].some(key => pref[key])) return;
     if (!data) { note('museum', '博物馆：本轮未取得状态，待开放或连接恢复后再检查'); return; }
     if (!data.exhibitions?.length && !data.exploreStages?.length) {
       const unlockLevels = rows(config, 'BuildingUnlockCfg').filter(row => row.buildingType === '博物馆').map(row => row.playerLevel);
@@ -386,6 +390,12 @@ export function planBaseAutomation(snapshot, config, settings, usage = {}, { div
           freeTeams--; for (const heroId of team.heroIds) busy.add(heroId);
         }
       }
+    }
+    if (pref.unlockCases) {
+      try {
+        for (const step of planMuseumCaseWork(data, config, now)) add(step);
+        caseMuseum = { actor: museumCaseActor(player), exhibitions: data.exhibitions };
+      } catch (error) { note('museum.unlockCases', error.message); }
     }
     if (pref.upgrade) for (const ex of data.exhibitions ?? []) {
       const levels = Array.from({ length: 3 }, (_, index) => Number(ex.keywordLevels?.[index] ?? 0));
@@ -506,7 +516,7 @@ export function planBaseAutomation(snapshot, config, settings, usage = {}, { div
 export function observeBaseAutomationPlan(rewards, plan, settings, everyMs) {
   if (!rewards) return;
   const groups = {
-    museum: ['runEnabled', 'enabled', 'upgrade', 'revenue', 'achievements', 'display', 'useGuide'],
+    museum: ['runEnabled', 'enabled', 'upgrade', 'revenue', 'achievements', 'display', 'unlockCases', 'useGuide'],
     pet: ['enabled', 'claim', 'breed', 'feed', 'advance'],
     events: ['enabled'],
     gold: ['enabled'],
@@ -514,7 +524,7 @@ export function observeBaseAutomationPlan(rewards, plan, settings, everyMs) {
   for (const [group, fields] of Object.entries(groups)) {
     const preferences = settings[group];
     const active = group === 'museum'
-      ? preferences.runEnabled !== false && ['enabled', 'upgrade', 'revenue', 'achievements', 'display'].some(key => preferences[key])
+      ? preferences.runEnabled !== false && ['enabled', 'upgrade', 'revenue', 'achievements', 'display', 'unlockCases'].some(key => preferences[key])
       : preferences.enabled;
     if (!active || !(group === 'gold' ? settings.loop.dailies : settings.loop.world)) continue;
     const activeFields = fields.filter(field => (field === 'runEnabled' ? preferences[field] !== false : preferences[field] === true)
@@ -569,6 +579,9 @@ async function checkPaidGoldReceipt(client, step, body, ledger, ticket) {
 export async function runBaseAutomation(client, protocol, config, plan, { player = null, getSettings, ledger, enabled = () => true, onStep } = {}) {
   const guard = createActionGuard(client, getSettings, ledger, { enabled, player });
   const results = [];
+  if (enabled() && getSettings()?.loop.world && getSettings()?.museum.unlockCases && getSettings()?.museum.runEnabled) {
+    reconcileMuseumCaseWork(ledger, player, plan.caseMuseum);
+  }
   if (enabled()) reconcileMuseumClaims(ledger, player, plan.museumStages);
   if (plan.pendingPaidGold && plan.goldInfo && enabled() && ledger.reconcilePaidGold(plan.goldInfo, player ? goldAccountKey(player) : null)) {
     const row = { step: { kind: 'paidGold', setting: 'gold.enabled', label: '核对上次付费点金' }, ok: true, status: 'confirmed',
@@ -587,6 +600,13 @@ export async function runBaseAutomation(client, protocol, config, plan, { player
       if (dispatchChanged()) throw new AutomationSkip('探宝派遣设置已变化，等待重新规划');
       if (!protocol[step.request]) throw new Error('当前协议不支持此动作');
       if (step.kind === 'museumRevenue' && !protocol.MuseumCollectRevenueResponse) throw new AutomationSkip('当前协议不能确认人气币领取');
+      if (step.setting === 'museum.unlockCases') {
+        entry = await runMuseumCaseWork(client, protocol, config, step, { player, ledger, guard,
+          enabled: () => enabled() && getSettings() === current && current.loop.world && current.museum.runEnabled
+            && current.museum.unlockCases && museumCaseActor(player) === plan.caseMuseum?.actor });
+        results.push(entry); onStep?.(entry);
+        continue;
+      }
       if (step.kind === 'museumComplete') {
         const body = await settleMuseumTrip(client, protocol, config, step, { ledger, player,
           enabled: () => enabled() && getSettings().loop.world && getSettings().museum.runEnabled && getSettings().museum.enabled });
