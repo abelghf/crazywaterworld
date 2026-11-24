@@ -2502,15 +2502,26 @@ export function createConsole({ host = '127.0.0.1', port = 17321, onLog, recover
             throw new Error('角色连接已变化，请重新读取名单');
         };
         const world = parsed.searchParams.get('scope') === 'world';
-        const result = await readJob(session, () => {
+        const next = parsed.searchParams.get('rankPage');
+        const result = await readJob(session, async () => {
           check();
-          return world ? readWorldListPlayers(client, player, check) : readGuildMembers(client, loadConfigSafe(), player);
+          const cached = playerPickerLists.get(client);
+          const lists = cached?.player === player && cached.generation === generation ? cached : { player, generation };
+          if (next !== null) {
+            const page = Number(next), last = lists.world;
+            if (!world || !last || !Number.isSafeInteger(page) || page < 2 || String(page) !== next || page > last.rankPages || page > last.rankPage + 1)
+              throw Error('战力榜页码已变化，请刷新玩家名单');
+            if (page <= last.rankPage) return last;
+          }
+          const data = world
+            ? await readWorldListPlayers(client, player, check, protocolFor(client).RankType?.PLAYER_POWER, next !== null ? lists.world : undefined)
+            : await readGuildMembers(client, loadConfigSafe(), player);
+          check();
+          lists[world ? 'world' : 'guild'] = data;
+          playerPickerLists.set(client, lists);
+          return data;
         }, { recoverFormation: false });
         check();
-        const cached = playerPickerLists.get(client);
-        const lists = cached?.player === player ? cached : { player };
-        lists[world ? 'world' : 'guild'] = result.members;
-        playerPickerLists.set(client, lists);
         try { recordListNames(session, effectiveSettings(session), result.members, true); }
         catch (error) { emit(session, 'warn', '名单昵称记录失败：' + error.message); }
         json(result);
@@ -2581,7 +2592,8 @@ export function createConsole({ host = '127.0.0.1', port = 17321, onLog, recover
         adoptPreferences(session, entry);
         try {
           const lists = playerPickerLists.get(session.client);
-          if (lists && lists.player === session.player) recordListNames(session, entry.settings, [...(lists.guild ?? []), ...(lists.world ?? [])], true);
+          if (lists && lists.player === session.player && lists.generation === session.generation)
+            recordListNames(session, entry.settings, [...(lists.guild?.members ?? []), ...(lists.world?.members ?? [])], true);
           prunePlayerNames(session.id, entry.settings);
         }
         catch (error) { emit(session, 'warn', '配置已保存，名单昵称记录清理失败：' + error.message); }
