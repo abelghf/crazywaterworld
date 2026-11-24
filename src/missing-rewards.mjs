@@ -3,6 +3,7 @@ import { normalize } from './worlds.mjs';
 import { claimOnce } from './extra-free-rewards.mjs';
 import { exactAutomationId, automationWireId } from './automation-policy.mjs';
 import { weeklyActivityEnabled } from './activity-automation.mjs';
+import { readReportSnapshot } from './campaign-reports.mjs';
 
 const signature=values=>createHash('sha256').update(JSON.stringify(values)).digest('hex');
 const rows=(config,name)=>config?.tables?.[name]?.data??[];
@@ -60,37 +61,6 @@ export async function claimFestivalActive(client,config,{enabled,ledger,report})
  }
  if(!found)wait(report,label,'当前未同步到开放的酆都签到活动');
 }
-// 每个正常分页必须增加唯一 UID，总数固定在本次首包；无需限制为 200 页。
-// 空页、重复或总数变化只重扫一次，第二次快照不与第一次的旧状态混合。
-async function readReportSnapshot(client, enabled) {
-  const scan = async () => {
-    const reports = new Map();
-    let total;
-    const partial = (pageNo, reason) => ({ reports, total, complete: false,
-      reason: `战报列表仅读取 ${reports.size}/${total} 条（第 ${pageNo + 1} 页${reason}）` });
-    for (let pageNo = 0; ; pageNo++) {
-      if (!enabled()) throw Error('战报领取已暂停');
-      const page = await read(client, 'CampaignReports', { pageNo });
-      if (!Array.isArray(page?.reports) || !integer(page.total)) throw Error('战报列表或总数未完整返回');
-      total ??= page.total;
-      if (page.total !== total) return partial(pageNo, '总数发生变化');
-      const pageIds = new Set();
-      for (const row of page.reports) {
-        const id = exactAutomationId(row?.uid);
-        if (!id || typeof row.received !== 'boolean') throw Error('战报编号或领取状态未确认');
-        if (reports.has(id) || pageIds.has(id)) return partial(pageNo, '出现重复编号');
-        pageIds.add(id);
-      }
-      for (const row of page.reports) reports.set(exactAutomationId(row.uid), row);
-      if (reports.size > total) throw Error('战报总数与列表不一致');
-      if (reports.size === total) return { reports, total, complete: true };
-      if (!page.reports.length) return partial(pageNo, '返回空列表');
-    }
-  };
-  const first = await scan();
-  return first.complete ? first : scan();
-}
-
 const reportClaimsActive = new WeakSet();
 export async function claimReportRewards(client,config,{enabled,ledger,report}){
   const label = '邮件战报一键领取', request = 'QuickGotCampaignReportRequest';
@@ -107,7 +77,7 @@ export async function claimReportRewards(client,config,{enabled,ledger,report}){
       else return wait(report, label, '前次战报领取结果未确认，新增战报也暂不重复提交领取');
     }
     const pending = [...snapshot.reports].filter(([, row]) => row.received === false && (
-      row.rewards?.assetPackage?.asset?.some(asset => Number(asset.num) > 0)
+      row.rewards?.assetPackage?.asset?.some(asset => Number(normalize(asset.num)) > 0)
       || ['heroes','equips','badge','antiques','supplies'].some(key => row.rewards?.[key]?.length > 0)
     )).map(([id]) => id);
     if (!pending.length) return wait(report, label, snapshot.complete ? '当前战报没有待领取奖励'

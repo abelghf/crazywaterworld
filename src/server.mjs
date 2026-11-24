@@ -17,6 +17,7 @@ import {readGuildTech,upgradeGuildTech} from './guild-tech.mjs';
 import {resourceFieldRows,resourceFieldTotals} from './resource-fields.mjs';
 import { readResourceFieldsOverview, previewResourceField, runResourceFieldShortcut, previewResourceFieldPlan, previewResourceFieldGiveUp, runResourceFieldGiveUp } from './resource-field-automation.mjs';
 import {activityRankCatalog,readActivityRanking} from './activity-rankings.mjs';
+import { readSeasonRanking, readSeasonMail, readSeasonGuildRank } from './season-preview.mjs';
 import {readActivityStatistics} from './activity-statistics.mjs';
 import { merchantActivity, readMerchantStatus, readMerchantOverview, readMerchantJournal, merchantJournalSummary } from './merchant-activity.mjs';
 import { saveMerchantIntel } from './merchant-intel.mjs';
@@ -3706,6 +3707,37 @@ export function createConsole({ host = '127.0.0.1', port = 17321, onLog, recover
           const value=await readActivityStatistics(client,loadConfigSafe(),session.player,usageFor(session),session.preferences);
           session.activityStatistics={client,at:Date.now(),value};return value;
         },{read:true});json(result);return;
+      }
+      if (['GET /api/season/rank', 'GET /api/season/mail', 'GET /api/season/guild'].includes(route)) {
+        if (!parsed.searchParams.get('account')) throw Error('请选择赛季预览账号');
+        const { session } = scoped_(parsed);
+        const { client, player, generation } = session;
+        const current = () => client?.connected && !session.paused && player && session.player === player
+          && session.client === client && session.generation === generation;
+        if (!current()) throw Error('请先连接当前账号，再读取赛季预览');
+        const verifyConnection = () => {
+          if (!current()) throw Error('账号连接已变化，请刷新赛季预览');
+        };
+        if (parsed.pathname === '/api/season/mail') {
+          // A long mailbox scan yields the read slot between pages.
+          const reader = { request: (...args) => readJob(session, async () => {
+            verifyConnection();
+            return client.request(...args);
+          }, { recoverFormation: false }) };
+          const mail = await readSeasonMail(reader, player, loadConfigSafe({ allowStale: true }));
+          verifyConnection();
+          json(mail);
+          return;
+        }
+        json(await readJob(session, async () => {
+          verifyConnection();
+          const result = route.endsWith('/rank')
+            ? await readSeasonRanking(client, player, parsed.searchParams.get('kind'))
+            : await readSeasonGuildRank(client, player);
+          verifyConnection();
+          return result;
+        }, { recoverFormation: false }));
+        return;
       }
       if(route==='GET /api/activity-ranks'||route==='GET /api/activity-ranks/view'){
         const {account,session}=scoped_(parsed);

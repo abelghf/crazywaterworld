@@ -19,6 +19,7 @@ const cases = [
   ['selftest-chat.mjs'],
   ['selftest-shops.mjs'],
   ['selftest-shops-http.mjs'],
+  ['selftest-season-preview.mjs'],
   ['selftest-account-backup-http.mjs'],
   ['selftest-account-backup-ui.mjs'],
   ['selftest-fleet-speed.mjs'],
