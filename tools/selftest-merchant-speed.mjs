@@ -68,6 +68,20 @@ function fixture(at = now) {
 async function test(name, run) { await run(); passed++; console.log('通过：' + name); }
 
 try {
+  await test('已确认的隔夜航程自然到港可赶上开市时，即使全速模式也保留库存', async () => {
+    const f = fixture(), c = f.state.cargo, opening = now + 12 * 3600 + 45 * 60;
+    f.event.endTime = opening + 86400;
+    Object.assign(f.settings.merchant, { speedUpMode: 'full', autoBuyPointers: true, keepPointers: 0 });
+    f.ledger.confirm(f.ledger.reserve({}, {}, {}, { uniqueKey: 'opening-leg', details: {
+      scope: 'merchant:' + f.event.startTime + ':' + f.event.period, expected: {
+        request: 'TradeMoveRequest', city: c.cityId, destination: c.moveToCityId, start: c.moveStartTime, plannedOpening: opening } } }));
+    assert.equal(f.plan({ plannedOpening: c.moveEndTime - 1 }).kind, 'speed');
+    await f.run();
+    assert.equal(f.calls.length, 0);
+    c.moveStartTime += 30;
+    await f.run();
+    assert.equal(f.sent().length, 1, '手动改航后，旧航程的开市计划不影响新航程');
+  });
   await test('整期总针数跨日、跨重启核对，未知扣针占额，下期重新开始', async () => {
     const f = fixture(), settings = { ...f.settings.merchant, speedUpMode: 'full', keepPointers: 0, dailyPointerLimit: 45, periodPointerLimit: 12 };
     Object.assign(f.settings.merchant, settings);

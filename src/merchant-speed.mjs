@@ -94,6 +94,8 @@ export function planMerchantSpeed(config, event, state, radar, stock, settings, 
   if (!cargo || !positive(cargo.cityId) || !positive(cargo.moveToCityId) || cargo.cityId === cargo.moveToCityId
     || !positive(cargo.moveStartTime) || !positive(cargo.moveEndTime) || cargo.moveStartTime > time
     || cargo.moveEndTime <= time) return none('商船当前不在可确认的航程中');
+  if (positive(options.plannedOpening) && cargo.moveEndTime <= options.plannedOpening)
+    return none('自然航行即可赶上开市，保留指针');
   const timing = merchantTiming(config, event, time);
   if (!timing.tradingOpen) return none('不在开放交易时段');
   const deadline = timing.tradeEndTime;
@@ -406,13 +408,13 @@ export async function runMerchantSpeed(client, config, ctx, event, state, freePo
     await reconcileMerchantAction(client, ctx, pending, state, allowed);
     return true;
   }
-  const exploratoryLeg = records.some(([, record]) => {
+  const departure = records.find(([, record]) => {
     const expected = record.details?.expected, cargo = state.cargo;
     return record.confirmed && record.details?.scope === 'merchant:' + event.startTime + ':' + event.period
-      && expected?.request === 'TradeMoveRequest' && expected.exploration === true
+      && expected?.request === 'TradeMoveRequest'
       && expected.city === cargo.cityId && expected.destination === cargo.moveToCityId
-      && Math.abs(expected.start - cargo.moveStartTime) <= 2;
-  });
+      && (record.details.after?.cargo?.moveStartTime === cargo.moveStartTime || Math.abs(expected.start - cargo.moveStartTime) <= 2);
+  })?.[1].details.expected;
   // 不需要加速时不查询库存；其余缺失输入会在获取新快照后校验。
   const actionSeconds = () => positive(ctx.merchantCadenceSeconds) ? Math.max(60, ctx.merchantCadenceSeconds)
     : merchantActionSeconds(fullSettingsOf(ctx), Math.ceil((ctx.everyMs ?? 0) / 1000));
@@ -426,7 +428,8 @@ export async function runMerchantSpeed(client, config, ctx, event, state, freePo
         && e.period === event.period && e.city === cargo.cityId && e.destination === cargo.moveToCityId
         && e.moveStartTime === cargo.moveStartTime && positive(e.useNum) ? sum + e.useNum : sum;
     }, 0);
-    return { actionSeconds: actionSeconds(), usedPointers, actor: ctx.player, exploration: exploratoryLeg, counter,
+    return { actionSeconds: actionSeconds(), usedPointers, actor: ctx.player, exploration: departure?.exploration === true,
+      plannedOpening: departure?.plannedOpening, counter,
       periodRemaining: merchantPeriodPointers(all, event, settings, freePointers, stock?.get(pointer) ?? 0),
       marketHistory: records.find(record => record.details?.merchantJournal?.event?.startTime === event.startTime &&
         record.details.merchantJournal.event.period === event.period)?.details.merchantJournal.snapshots?.map(entry => ({

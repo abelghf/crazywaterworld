@@ -2,21 +2,36 @@ import { exactAutomationId } from './automation-policy.mjs';
 import { merchantTiming, planMerchant } from './merchant-planner.mjs';
 
 // worldCargo 只描述航程。停港者以及对方的货舱、资金和采购意图均不可见。
-export function merchantCompetitorArrivals(state, actor, time, refreshAt) {
-  const arrivals = [];
+function visibleGuildVoyages(state, actor, time) {
+  const voyages = new Map();
   const self = exactAutomationId(actor?.playerId), guild = exactAutomationId(actor?.guildId);
-  if (!self || !guild || !Array.isArray(state.worldCargo)) return arrivals;
+  if (!self || !guild || !Array.isArray(state.worldCargo)) return [];
   const guildIdx = Number(BigInt(guild) % 1000n);
-  if (!guildIdx) return arrivals;
+  if (!guildIdx) return [];
   for (const other of state.worldCargo) {
     const id = exactAutomationId(other?.playerId), voyage = other?.cargo;
-    if (!id || id === self || other.guildIdx !== guildIdx || voyage?.moveToCityId !== state.cargo.moveToCityId ||
+    if (!id || id === self || other.guildIdx !== guildIdx || !Number.isSafeInteger(voyage?.moveToCityId) || voyage.moveToCityId <= 0 ||
       !Number.isSafeInteger(voyage.cityId) || voyage.cityId <= 0 || voyage.cityId === voyage.moveToCityId ||
       !Number.isSafeInteger(voyage.moveStartTime) || voyage.moveStartTime <= 0 || voyage.moveStartTime > time ||
-      !Number.isSafeInteger(voyage.moveEndTime) || voyage.moveEndTime <= time || voyage.moveEndTime < refreshAt) continue;
-    arrivals.push(voyage.moveEndTime);
+      !Number.isSafeInteger(voyage.moveEndTime) || voyage.moveEndTime <= time) continue;
+    if (!voyages.has(id) || voyage.moveStartTime > voyages.get(id).moveStartTime) voyages.set(id, voyage);
   }
-  return arrivals.sort((a, b) => a - b);
+  return [...voyages.values()];
+}
+
+export function merchantCompetitorArrivals(state, actor, time, refreshAt) {
+  return visibleGuildVoyages(state, actor, time).filter(v => v.moveToCityId === state.cargo.moveToCityId && v.moveEndTime >= refreshAt)
+    .map(v => v.moveEndTime).sort((a, b) => a - b);
+}
+
+export function merchantOpeningRadar(radar, state, actor, time, opening) {
+  if (!Array.isArray(radar?.radar)) return radar;
+  const counts = new Map();
+  for (const v of visibleGuildVoyages(state, actor, time)) {
+    if (v.moveEndTime <= opening) counts.set(v.moveToCityId, (counts.get(v.moveToCityId) ?? 0) + 1);
+  }
+  if (!counts.size) return radar;
+  return { ...radar, radar: radar.radar.map(p => counts.has(p?.cityId) ? { ...p, openingShips: counts.get(p.cityId) } : p) };
 }
 
 // 在相同本人资金、批次和设置下，用以往到访的库存重算到港卖旧货、再配新货的机会。

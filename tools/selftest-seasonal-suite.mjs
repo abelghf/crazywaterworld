@@ -218,6 +218,122 @@ await test('无紧缺共享时仍可买入并走普通港，到港出售不依�
   await empty.run(merchantActivity, 'merchantTrade');
   assert.equal(empty.state.writes.length, 0, '港口列表完全未知时不盲目装货或选取世界城市');
 });
+await test('休市期间预览与执行均可提前出航，抵港后等到开市重新核价出售', async () => {
+  const f = setup();
+  const setHour = hour => { f.client.serverClockOffsetMs = (f.now + (hour - 12) * 3600) * 1000 - Date.now(); };
+  const run = () => f.run(merchantActivity, 'merchantTrade');
+  setHour(21.75);
+  await run();
+  assert.equal(f.state.writes[0].name, 'TradeBuyRequest');
+  setHour(23);
+  Object.assign(f.settings.merchant, { autoUpgrade: true, autoShareIntel: true, autoSpeedUp: true, speedUpMode: 'full' });
+  f.state.trade.player.profit = 10000;
+  f.state.diamonds = 300;
+  f.state.stock['海商王加速'] = 4;
+  f.state.markets[10].isReport = false;
+  const preview = await merchantProgress(f.config, f.client.tradeWindow, f.state.trade, f.player, f.now + 11 * 3600,
+    async name => name === 'TradeGuildRadar' ? f.state.radar : f.state.markets[10], f.ledger, f.settings);
+  assert.match(preview, /提前出航/);
+  await run();
+  await run();
+  assert.deepEqual(f.state.writes.map(row => row.name), ['TradeBuyRequest', 'TradeMoveRequest']);
+  setHour(25);
+  Object.assign(f.state.trade.cargo, { cityId: 20, moveToCityId: 0, moveEndTime: 0 });
+  f.state.markets[20].isReport = false;
+  await run();
+  assert.match(f.reports.at(-1).reason, /开市后重新核价/);
+  assert.equal(f.state.writes.length, 2);
+  setHour(34);
+  f.settings.merchant.autoUpgrade = false;
+  f.settings.merchant.autoShareIntel = false;
+  f.state.markets[20].goods[0].price = 72;
+  await run();
+  assert.deepEqual(f.state.writes.map(row => row.name), ['TradeBuyRequest', 'TradeMoveRequest', 'TradeSellRequest']);
+  assert.equal(f.state.trade.player.coins, 18240, '开市报价 72，按 1 级船的 3% 利润加成结算');
+});
+await test('活动首日零点空船提前避开同盟在途船，等到十点读取新价采购', async () => {
+  const f = setup(), start = f.now - 12 * 3600, opening = start + 10 * 3600;
+  f.client.tradeWindow.startTime = start;
+  f.settings.merchant.autoShareIntel = false;
+  const setTime = t => { f.client.serverClockOffsetMs = t * 1000 - Date.now(); };
+  const run = () => f.run(merchantActivity, 'merchantTrade');
+  f.state.trade.worldCargo = [{ playerId: '1234', guildIdx: 1, cargo: {
+    cityId: 30, moveToCityId: 10, moveStartTime: start, moveEndTime: start + 7200 } }];
+  setTime(start);
+  await run();
+  assert.deepEqual(f.state.writes.map(w => w.name), ['TradeMoveRequest']);
+  assert.equal(f.state.trade.cargo.moveToCityId, 20);
+  const snapshot = readMerchantJournal(f.ledger, f.client.tradeWindow).find(r => r.type === 'snapshot');
+  assert.equal(snapshot.radar.radar.find(p => p.cityId === 10).openingShips, 1);
+  Object.assign(f.state.trade.cargo, { cityId: 20, moveToCityId: 0, moveEndTime: 0 });
+  setTime(opening - 1);
+  await run();
+  assert.equal(f.state.writes.length, 1);
+  f.state.markets[20] = { specGoodsId: 1002, rareGoodsId: 1001, isReport: true, goods: [{ goodsId: 1002, price: 10, stock: 0 }] };
+  setTime(opening);
+  await run();
+  assert.deepEqual(f.state.writes.map(w => w.name), ['TradeMoveRequest', 'TradeBuyRequest'], JSON.stringify(f.reports.at(-1)));
+  assert.deepEqual([f.state.trade.player.goods[0].goodsId, f.state.trade.player.goods[0].buyPrice], [1002, 10]);
+});
+await test('为次日备货的买单在发送前跨过今日收盘时撤销', async () => {
+  const f = setup();
+  const close = f.now + 10 * 3600;
+  f.client.serverClockOffsetMs = (close - 10) * 1000 - Date.now();
+  const reserve = f.ledger.reserve;
+  let checked = false;
+  f.ledger.reserve = (...args) => {
+    const ticket = reserve(...args);
+    if (args[3]?.details?.expected?.request === 'TradeBuyRequest') {
+      checked = true;
+      f.client.serverClockOffsetMs = close * 1000 - Date.now();
+    }
+    return ticket;
+  };
+  await f.run(merchantActivity, 'merchantTrade');
+  assert(checked);
+  assert.equal(f.state.writes.length, 0);
+  assert.equal(f.ledger.snapshot().uncertain, 0);
+});
+await test('隔夜满舱跨重启按开市实价清完亏损和平价批次，再买首轮新货', async () => {
+  for (const stopAtProfitLimit of [false, true]) {
+    const f = setup(), trade = f.state.trade;
+    const setHour = hour => { f.client.serverClockOffsetMs = (f.now + (hour - 12) * 3600) * 1000 - Date.now(); };
+    const run = () => merchantActivity(f.client, f.config, { player: f.player, key: 'merchantTrade', label: '海商王',
+      ledger: createUsageLedger('fixture', { file: f.store }), settings: () => f.settings, enabled: () => true,
+      report: r => f.reports.push(r) });
+    trade.player.coins = 100000;
+    f.settings.merchant.maxLossPercent = 0;
+    f.state.markets[10].goods = [{ goodsId: 1001, price: 70, stock: 59400 }, { goodsId: 1004, price: 80, stock: 59600 }];
+    setHour(21.5);
+    await run();
+    await run();
+    assert.deepEqual(trade.player.goods.map(b => b.num), [600, 400]);
+    await run();
+    assert.deepEqual(f.state.writes.map(w => w.name), ['TradeBuyRequest', 'TradeBuyRequest', 'TradeMoveRequest']);
+    setHour(25);
+    Object.assign(trade.cargo, { cityId: 20, moveToCityId: 0, moveEndTime: 0 });
+    await run();
+    assert.equal(f.state.writes.length, 3);
+    setHour(34);
+    if (stopAtProfitLimit) f.settings.merchant.profitLimit = trade.player.profit;
+    f.state.markets[20].goods = [{ goodsId: 1001, price: 20, stock: 0 }, { goodsId: 1003, price: 10, stock: 0 }];
+    const profit = trade.player.profit;
+    await run();
+    assert.equal(f.sent('TradeSellRequest')[0].body.sellNum, 600);
+    assert.equal(trade.player.profit, profit, '亏损只影响周转本金');
+    await run();
+    assert.equal(f.state.writes.length, 4, '剩余隔夜货暂缺实价时先等报价，不能抢先采购或换港');
+    f.state.markets[20].goods.push({ goodsId: 1004, price: 80, stock: 0 });
+    await run();
+    assert.deepEqual(trade.player.goods, []);
+    assert.equal(trade.player.coins, 70000);
+    await run();
+    const afterArrival = f.state.writes.slice(3).map(w => w.name);
+    assert.deepEqual(afterArrival, stopAtProfitLimit ? ['TradeSellRequest', 'TradeSellRequest'] :
+      ['TradeSellRequest', 'TradeSellRequest', 'TradeBuyRequest']);
+    if (!stopAtProfitLimit) assert.equal(trade.player.goods[0].goodsId, 1003);
+  }
+});
 await test('大跌幅但少量库存不再压过整船收益，售罄商品不进入组合', async () => {
   for (const remaining of [1, 0]) {
     const f = setup();

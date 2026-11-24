@@ -3,7 +3,7 @@ import { claimOnce } from './extra-free-rewards.mjs';
 import { checkedAction, clock, dayOf, digest, hasReward, moduleOpen, natural, positive, read, table, waiting, windowOpen } from './activity-actions.mjs';
 import { claimPass } from './seasonal-activities.mjs';
 import { observeFreePointers } from './merchant-free-pointers.mjs';
-import { merchantSpeedMode, merchantActionSeconds, merchantFinalCargoStart, merchantPointerSeconds, merchantSettings, merchantTiming, planMerchant } from './merchant-planner.mjs';
+import { merchantSpeedMode, merchantActionSeconds, merchantFinalCargoStart, merchantOpeningCargo, merchantPointerSeconds, merchantSettings, merchantTiming, planMerchant } from './merchant-planner.mjs';
 import { merchantClosingRoute, readMerchantDockBudget, runMerchantSpeed } from './merchant-speed.mjs';
 import { merchantActionMatches, merchantActionState, merchantFingerprint as fingerprint, quantity } from './merchant-action-state.mjs';
 import { rewardData } from './missing-rewards.mjs';
@@ -14,10 +14,10 @@ import { merchantStrategyPlan, reconcileMerchantAction } from './merchant-strate
 import { runMerchantReport } from './merchant-report.mjs';
 import { MERCHANT_PROFIT_GOAL, merchantGoal } from './merchant-goal.mjs';
 import { resolveMerchantIntel, merchantEditView, portRevision } from './merchant-intel.mjs';
+import { merchantOpeningRadar } from './merchant-race.mjs';
 import { materialIcon } from './art.mjs';
 
 export { planMerchant } from './merchant-planner.mjs';
-const param = (config, key) => table(config, 'ActivityTradeCfg').find(row => row.key === key)?.value;
 function tradingHours(config, time) {
   return merchantTiming(config, null, time).tradingOpen;
 }
@@ -28,11 +28,15 @@ function marketEpoch(config, time) {
 }
 function voyageHistory(ledger, scope, epoch, state, time) {
   const signature = cargoSignature(state);
-  const legs = Object.values(ledger?.keyRecords() ?? {}).filter(r => r.confirmed && r.details?.scope === scope)
-    .map(r => r.details.expected).filter(e => e?.request === 'TradeMoveRequest' && (!positive(e.start) || e.start <= time));
-  const previous = legs.filter(e => positive(e.start) && e.destination === state.cargo.cityId).sort((a, b) => b.start - a.start)[0];
+  const records = Object.values(ledger?.keyRecords() ?? {}).filter(r => r.confirmed && r.details?.scope === scope &&
+    r.details.expected?.request === 'TradeMoveRequest' && (!positive(r.details.expected.start) || r.details.expected.start <= time))
+    .map(r => r.details).sort((a, b) => (b.expected.start ?? 0) - (a.expected.start ?? 0));
+  const legs = records.map(r => r.expected);
+  const previous = legs.find(e => positive(e.start) && e.destination === state.cargo.cityId);
+  const lastArrival = legs[0]?.destination === state.cargo.cityId ? records[0] : null;
   const visited = [...new Set(legs.filter(e => e.cargoSignature ? e.cargoSignature === signature : e.marketEpoch === epoch).map(e => e.city))];
-  return { visited, preferredPort: previous?.city };
+  return { visited, preferredPort: previous?.city, plannedOpening: lastArrival?.expected.plannedOpening,
+    openingCargoPids: merchantOpeningCargo(lastArrival, state) };
 }
 // 每期每港仅留一个亲自读取的快照。展示页只读，不能借展示更新采集时间。
 function rememberMarket(ledger, snapshot) {
@@ -46,6 +50,11 @@ function rememberMarket(ledger, snapshot) {
 }
 async function readMerchantPlan(config, event, state, time, ask, voyage, options = {}) {
   const observedAt = options.now?.() ?? time;
+  if (observedAt < voyage.plannedOpening && voyage.plannedOpening < event.endTime && !tradingHours(config, observedAt)) {
+    const plan = { kind: 'wait', mode: 'WAIT_OPENING', reason: '已提前抵达目的港，等待开市后重新核价', nextCheckAt: voyage.plannedOpening };
+    options.observed?.({ state, plan });
+    return plan;
+  }
   const quoteRevision = options.quoteRevision?.();
   let market;
   try { market = await ask('TradeCity', { cityId: state.cargo.cityId }); }
@@ -59,12 +68,15 @@ async function readMerchantPlan(config, event, state, time, ask, voyage, options
     return { kind: 'wait', reason: '读取期间本港行情已刷新，等待重新报价' };
   options.remember?.(marketSnapshot);
   const intel = options.intel ?? resolveMerchantIntel(config, event, options.player, radar, plannedAt, options.ledger);
-  const effective = intel.radar;
-  const inputs = { ...options, preferredPort: voyage.preferredPort }, policy = merchantSettings(options.settings);
-  let plan = planMerchant(config, event, state, marketSnapshot, effective, plannedAt, voyage.visited, inputs);
   const timing = merchantTiming(config, event, plannedAt), per = merchantPointerSeconds(config);
   const step = merchantActionSeconds({}, options.actionSeconds);
-  if ((plan.kind === 'wait' || plan.exploration) && policy.autoSpeedUp && merchantSpeedMode(policy.speedUpMode) === 'goal' && !policy.fullCargoRoutes &&
+  const opening = timing.tradeStartTime + (plannedAt < timing.tradeStartTime ? 0 : 86400);
+  const effective = !timing.tradingOpen || plannedAt + timing.travelSeconds + step >= timing.tradeEndTime
+    ? merchantOpeningRadar(intel.radar, state, options.player, plannedAt, opening) : intel.radar;
+  const inputs = { ...options, preferredPort: voyage.preferredPort, plannedOpening: voyage.plannedOpening,
+    openingCargoPids: voyage.openingCargoPids }, policy = merchantSettings(options.settings);
+  let plan = planMerchant(config, event, state, marketSnapshot, effective, plannedAt, voyage.visited, inputs);
+  if (!voyage.openingCargoPids?.length && (plan.kind === 'wait' || plan.exploration) && policy.autoSpeedUp && merchantSpeedMode(policy.speedUpMode) === 'goal' && !policy.fullCargoRoutes &&
     timing.tradingOpen && positive(timing.travelSeconds) && positive(per) && event.endTime <= timing.tradeStartTime + 2 * 86400 &&
     state.player?.profit < Math.min(MERCHANT_PROFIT_GOAL, policy.profitLimit || Infinity) &&
     plannedAt + timing.travelSeconds + (1 + 2 * (marketSnapshot.goods?.length ?? 0) + (state.player.goods?.length ?? 0)) * step >= timing.tradeEndTime) {
@@ -186,7 +198,7 @@ function expectedProfitFact(amount, exploration = false, discountedProfit) {
 }
 
 function departureProfit(config, event, state, scope, leg, ledger) {
-  if (!leg || leg.exploration) return null;
+  if (!leg || leg.exploration || leg.plannedOpening) return null;
   if (Number.isSafeInteger(leg.estimatedProfit)) return { expectedProfit: leg.estimatedProfit, discountedProfit: leg.discountedProfit };
   // 旧出航记录没有保存估值，只用出发前已观察的商情还原同一程。
   const snapshots = readMerchantJournal(ledger, event).filter(entry => entry.type === 'snapshot' && entry.time <= leg.start);
@@ -264,7 +276,8 @@ async function readMerchantVoyage(config, event, state, player, time, ask, ledge
     if (positive(cargo.cityId)) facts.push(['出发港', cityName(cargo.cityId)]);
     facts.push(['目标城池', positive(cargo.moveToCityId) ? cityName(cargo.moveToCityId) : '未同步']);
     const estimate = departureProfit(config, event, state, scope, leg, ledger);
-    facts.push(expectedProfitFact(estimate?.expectedProfit, leg?.exploration, estimate?.discountedProfit));
+    facts.push(leg?.plannedOpening && !leg.exploration ? ['预期收益', '待开市实价，可能亏损'] :
+      expectedProfitFact(estimate?.expectedProfit, leg?.exploration, estimate?.discountedProfit));
     return { facts, status: cargo.moveEndTime > time ? '航行中，预计 ' + new Date(cargo.moveEndTime * 1000)
       .toLocaleTimeString('zh-CN', { timeZone: 'Asia/Shanghai', hour12: false }) + ' 到港' + (leg?.priceNote ? '；出发时' + leg.priceNote : '') : '等待到港确认' };
   }
@@ -276,7 +289,6 @@ async function readMerchantVoyage(config, event, state, player, time, ask, ledge
   }
   if (positive(cargo.cityId)) facts.push(['所在城池', cityName(cargo.cityId)]);
   const wait = status => ({ facts: [...facts, ['目标城池', '待定'], expectedProfitFact(null)], status });
-  if (!tradingHours(config, time)) return wait('等待开放交易时段');
   if (!exactGuild(player.guildId)) return wait('需加入联盟后参与贸易');
   if (!positive(cargo.cityId)) return wait('等待商船位置同步');
   const pending = records.find(r => !r.confirmed);
@@ -291,13 +303,14 @@ async function readMerchantVoyage(config, event, state, player, time, ask, ledge
     });
   if (plan.kind === 'wait') return wait(plan.reason);
   if (plan.kind === 'buy' || plan.kind === 'sell') facts.push([plan.kind === 'buy' ? '计划买入' : '计划卖出', goodsName(plan.goodsId)]);
-  if (plan.exploration) facts.push(['计划走商', '换港寻价']);
+  if (plan.exploration) facts.push(['计划走商', plan.mode === 'FIRST_OPENING' ? '首日提前到港采购' : '换港寻价']);
   facts.push(['目标城池', cityName(plan.destination ?? plan.city)]);
-  facts.push(expectedProfitFact(plan.expectedProfit, plan.exploration, plan.discountedProfit));
+  facts.push(plan.mode === 'OVERNIGHT' ? ['预期收益', '待开市实价，可能亏损'] :
+    expectedProfitFact(plan.expectedProfit, plan.exploration, plan.discountedProfit));
   return { facts, status: plan.label, ...(plan.purchaseDetails && { purchaseDetails: plan.purchaseDetails }) };
 }
 const samePlan = (a, b) => a.kind === b.kind &&
-  ['city', 'destination', 'goodsId', 'pid', 'count', 'price', 'gain', 'mode', 'exploration', 'accelerationRequired'].every(k => a[k] === b[k]);
+  ['city', 'destination', 'goodsId', 'pid', 'count', 'price', 'gain', 'mode', 'exploration', 'accelerationRequired', 'plannedOpening'].every(k => a[k] === b[k]);
 export async function merchantActivity(client, config, ctx) {
   if (ctx.key === 'merchantTrade')
     return watchMerchant(client).trackQuotes(quoteRevision => runMerchantActivity(client, config, ctx, quoteRevision));
@@ -350,47 +363,49 @@ async function runMerchantActivity(client, config, ctx, quoteRevision) {
   // 先核对上次写入，再检查航行/盈亏，避免已售批次消失后永久停在未知状态。
   const pending = Object.entries(ctx.ledger?.keyRecords() ?? {}).find(([, r]) => !r.confirmed && !r.expired && r.details?.scope === scope);
   if (pending) return reconcileMerchantAction(client, ctx, pending, info, allowed);
-  if (!tradingHours(config, clock(client))) return waiting(ctx, '等待游戏规定的贸易时段 ' + param(config, '海商王贸易时间'));
-  const profitLimit = ctx.settings?.()?.merchant?.profitLimit ?? 0;
-  const profitReached = profitLimit > 0 && info.player.profit >= profitLimit;
-  if (profitReached && (!merchantSettings(ctx.settings?.()?.merchant).autoShareIntel ||
-    info.cargo.moveEndTime > clock(client) || info.cargo.moveToCityId && info.cargo.moveToCityId !== info.cargo.cityId))
-    return waiting(ctx, '已达本期累计利润上限，领奖仍按独立开关执行');
-  if (info.cargo.moveEndTime > clock(client)) {
-    if (await runMerchantSpeed(client, config, ctx, event, info, freePointers)) return;
+  const policy = merchantSettings(ctx.settings?.()?.merchant);
+  const profitReached = policy.profitLimit > 0 && info.player.profit >= policy.profitLimit;
+  const moving = info.cargo.moveEndTime > clock(client);
+  if (moving || (info.cargo.moveToCityId && info.cargo.moveToCityId !== info.cargo.cityId)) {
+    if (profitReached) return waiting(ctx, '已达本期累计利润上限，领奖仍按独立开关执行');
+    if (!moving) return waiting(ctx, '等待服务端确认到港');
+    if (tradingHours(config, clock(client)) && await runMerchantSpeed(client, config, ctx, event, info, freePointers)) return;
     return waiting(ctx, '航行中，预计 ' + new Date(info.cargo.moveEndTime * 1000)
       .toLocaleTimeString('zh-CN', { timeZone: 'Asia/Shanghai' }) + ' 到港');
   }
-  if (info.cargo.moveToCityId && info.cargo.moveToCityId !== info.cargo.cityId)
-    return waiting(ctx, '等待服务端确认到港');
-  const policy = merchantSettings(ctx.settings?.()?.merchant);
-  const dockedAt = clock(client);
-  const finalStart = merchantFinalCargoStart(merchantTiming(config, event, dockedAt), event, policy, info.player.goods, info.cargo.cityId);
-  const unloading = finalStart !== null && dockedAt >= finalStart;
-  const upgrade = () => runMerchantUpgrade(client, config, Object.assign(Object.create(ctx), { enabled: allowed }), event, info);
-  if (!profitReached && !unloading && await upgrade()) return;
   const epoch = () => marketEpoch(config, clock(client));
   const currentEpoch = epoch();
+  const voyage = state => voyageHistory(ctx.ledger, scope, currentEpoch, state, clock(client));
+  const firstVoyage = voyage(info);
+  const openingCargo = firstVoyage.openingCargoPids.length > 0;
+  if (profitReached && !openingCargo && !policy.autoShareIntel)
+    return waiting(ctx, '已达本期累计利润上限，领奖仍按独立开关执行');
+  const dockedAt = clock(client);
+  const finalStart = merchantFinalCargoStart(merchantTiming(config, event, dockedAt), event, policy, info.player.goods, info.cargo.cityId);
+  const unloading = openingCargo || finalStart !== null && dockedAt >= finalStart;
+  const upgrade = () => tradingHours(config, clock(client)) &&
+    runMerchantUpgrade(client, config, Object.assign(Object.create(ctx), { enabled: allowed }), event, info);
+  if (!profitReached && !unloading && await upgrade()) return;
   const policyStamp = JSON.stringify(policy);
   const actionSeconds = () => positive(ctx.merchantCadenceSeconds)
     ? Math.max(60, ctx.merchantCadenceSeconds)
     : merchantActionSeconds(ctx.settings?.(), Math.ceil((ctx.everyMs ?? 0) / 1000));
   const actionInterval = actionSeconds();
-  const snapshot = state => readMerchantPlan(config, event, state, clock(client),
-    (name, body) => read(client, name, body), voyageHistory(ctx.ledger, scope, currentEpoch, state, clock(client)), {
+  const snapshot = (state, history = voyage(state)) => readMerchantPlan(config, event, state, clock(client),
+    (name, body) => read(client, name, body), history, {
       settings: policy, ledger: ctx.ledger, freePointers, player: ctx.player, markets: knownMerchantMarkets(ctx.ledger, event), now: () => clock(client), quoteRevision, actionSeconds: actionInterval,
       remember: market => rememberMarket(ctx.ledger, market),
       observed: observed => {
-        recordMerchantSnapshot(ctx.ledger, { ...observed, event, time: clock(client), config, settings: ctx.settings?.(), actionSeconds: actionInterval });
+        if (observed.market) recordMerchantSnapshot(ctx.ledger, { ...observed, event, time: clock(client), config, settings: ctx.settings?.(), actionSeconds: actionInterval });
         watchMerchant(client).observe({ ...observed, event, time: clock(client), config, settings: ctx.settings?.() });
       }
     });
-  const plan = await snapshot(info);
-  if (!profitReached && unloading && plan.kind !== 'sell' && await upgrade()) return;
+  const plan = await snapshot(info, firstVoyage);
+  if (!profitReached && !openingCargo && unloading && plan.kind !== 'sell' && await upgrade()) return;
   if (plan.marketSnapshot) await runMerchantReport(client, config,
     Object.assign(Object.create(ctx), { enabled: allowed }), event, info, { market: plan.marketSnapshot });
   if (!allowed()) return waiting(ctx, '开关、账号或活动状态已变化');
-  if (profitReached) return waiting(ctx, '已达本期累计利润上限，本港共享已检查，领奖仍按独立开关执行');
+  if (profitReached && !openingCargo) return waiting(ctx, '已达本期累计利润上限，本港共享已检查，领奖仍按独立开关执行');
   if (plan.kind === 'wait') return waiting(ctx, plan.reason);
   const fresh = await getState();
   if (fresh.period !== event.period || !allowed()) return waiting(ctx, '期数或活动状态已变化');
@@ -408,18 +423,19 @@ async function runMerchantActivity(client, config, ctx, quoteRevision) {
   };
   const common = {
     scope, before: state, label: verified.label, retainEvidence: true, attemptedAt: clock(client), onOutcome, now: () => clock(client),
-    allowed: () => allowed() && tradingHours(config, clock(client)) && epoch() === currentEpoch && quoteRevision?.() === verified.quoteRevision &&
+    allowed: () => allowed() && (plan.kind === 'move' || tradingHours(config, clock(client))) &&
+      epoch() === currentEpoch && quoteRevision?.() === verified.quoteRevision &&
       JSON.stringify(merchantSettings(ctx.settings?.()?.merchant)) === policyStamp &&
       digest(ctx.ledger?.merchantEdits?.(verified.intelScope) ?? {}) === verified.intelVersion &&
       actionSeconds() === actionInterval &&
       clock(client) - verified.marketSnapshot.observedAt <= policy.quoteMaxAgeSeconds &&
-      ((plan.kind === 'sell' && verified.latestActionAt == null) || (positive(verified.latestActionAt) && clock(client) < verified.latestActionAt)) &&
-      (plan.kind === 'sell' || clock(client) + (verified.travelSeconds ?? merchantTiming(config, event, clock(client)).travelSeconds) + actionInterval <
-        Math.min(event.endTime, merchantTiming(config, event, clock(client)).tradeEndTime)),
+      ((plan.kind === 'sell' && verified.latestActionAt == null) || (positive(verified.latestActionAt) && clock(client) < verified.latestActionAt)),
     inspect: async () => {
       const current = await getState();
       if (current.period !== event.period) return null;
-      if (unloading && plan.kind === 'sell' && current.player?.goods?.some(g => g.cityId !== current.cargo?.cityId))
+      if (plan.mode === 'OPENING_SALE' && Array.isArray(current.player?.goods) && !current.player.goods.some(g => g.pid === plan.pid))
+        watchMerchant(client).observe({ event, state: current, time: clock(client), config, settings: ctx.settings?.(), openingBatchRemoved: true });
+      else if (unloading && plan.kind === 'sell' && current.player?.goods?.some(g => g.cityId !== current.cargo?.cityId))
         watchMerchant(client).observe({ event, state: current, time: clock(client), config, settings: ctx.settings?.(), expedite: true });
       return fingerprint(current);
     },
@@ -462,6 +478,7 @@ async function runMerchantActivity(client, config, ctx, quoteRevision) {
   }
   const expected = { request: 'TradeMoveRequest', city: plan.city, destination: plan.destination, goodsId: plan.goodsId,
     start: clock(client), marketEpoch: currentEpoch, cargoSignature: cargoSignature(fresh), exploration: !!plan.exploration,
+    ...(verified.plannedOpening && { plannedOpening: verified.plannedOpening }),
     ...(!verified.exploration && { estimatedProfit: verified.expectedProfit, priceNote: verified.priceNote }),
     ...(natural(verified.discountedProfit) && { discountedProfit: verified.discountedProfit }) };
   return checkedAction(ctx, { ...common, expected,

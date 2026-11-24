@@ -1,11 +1,14 @@
 // 海商王的纯决策层。异地卖价依据已知商情估算，成交使用到港实价。
-import { fullMerchantLoad } from './merchant-loading.mjs';
+import { fillRankedMerchantLoad, fullMerchantLoad } from './merchant-loading.mjs';
 const natural = value => Number.isSafeInteger(value) && value >= 0;
 const positive = value => natural(value) && value > 0;
 const rows = (config, name) => config?.tables?.[name]?.data ?? [];
 const param = (config, key) => rows(config, 'ActivityTradeCfg').find(row => row.key === key)?.value;
 const dayOf = time => Math.floor((time + 28800) / 86400);
 const safe = value => Number.isSafeInteger(value) && Math.abs(value) <= Number.MAX_SAFE_INTEGER;
+const tradeDate = new Intl.DateTimeFormat('zh-CN', {
+  timeZone: 'Asia/Shanghai', month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false
+});
 
 export const MERCHANT_DEFAULTS = Object.freeze({
   fullCargoRoutes: false,
@@ -326,6 +329,64 @@ const profit = (price, batch, ship) => {
   return difference > 0 ? Math.ceil(difference * (10000 + ship.profitMargin) / 10000) : difference;
 };
 
+// 用已确认的出航快照辨认隔夜货。到港后新买的批次不能继承这趟的亏损出售规则。
+export function merchantOpeningCargo(leg, state) {
+  const e = leg?.expected, cargo = state?.cargo;
+  if (!positive(e?.plannedOpening) || e.destination !== cargo?.cityId || !Array.isArray(state?.player?.goods)) return [];
+  const started = leg.after?.cargo?.moveStartTime;
+  if (positive(cargo.moveStartTime) && (positive(started) ? cargo.moveStartTime !== started :
+    positive(e.start) && Math.abs(cargo.moveStartTime - e.start) > 2)) return [];
+  const loaded = leg.before?.goods ?? leg.before?.player?.goods;
+  if (!Array.isArray(loaded)) return [];
+  return state.player.goods.filter(b => b && b.cityId !== cargo.cityId && loaded.some(old => old?.pid === b.pid &&
+    old.goodsId === b.goodsId && old.cityId === b.cityId && old.buyPrice === b.buyPrice && b.num <= old.num)).map(b => b.pid);
+}
+
+function openingLoad(market, shortage, definitions, space, cash, maxTypes, held, ports) {
+  if (!space || !cash || maxTypes < 1) return [];
+  const salePorts = ports.filter(p => definitions.has(p.specGoodsId) && held.every(b => b.goodsId !== p.specGoodsId));
+  const canAvoidSpecialty = id => salePorts.some(p => p.specGoodsId !== id);
+  const offers = market.goods.flatMap(({ goodsId, price, stock }) => {
+    const def = definitions.get(goodsId);
+    if (goodsId === shortage || !positive(price) || price > cash || !natural(stock) ||
+      !positive(def?.capacity) || def.capacity > space || !positive(def.unitPrice) ||
+      !positive(def.maxCount) || stock >= def.maxCount) return [];
+    return [{ goodsId, price, capacity: def.capacity, basePrice: def.unitPrice, count: def.maxCount - stock }];
+  }).sort((a, b) => a.price / a.basePrice - b.price / b.basePrice ||
+    Number(canAvoidSpecialty(b.goodsId)) - Number(canAvoidSpecialty(a.goodsId)) ||
+    a.price / a.capacity - b.price / b.capacity || a.goodsId - b.goodsId);
+  let load = fillRankedMerchantLoad(offers, space, cash, maxTypes);
+  if (!load.length) {
+    // 无法满舱时先求可装格数，再在同等格数下优先挑折价货。
+    const partial = optimizePurchasePlan(offers.map(item => ({ ...item, unitProfit: item.capacity })), space, cash, { maxTypes });
+    load = fillRankedMerchantLoad(offers, partial.capacity, cash, maxTypes);
+  }
+  if (load.length !== 1) return load;
+  const [item] = load, aboard = id => held.reduce((n, b) => n + (b.goodsId === id ? b.num : 0), 0);
+  // 同成本、同基准价、同占舱且有合适销港时，用第二个品种分担单一货价下跌的风险。
+  const other = offers.find(o => o.goodsId !== item.goodsId && o.price === item.price && o.basePrice === item.basePrice &&
+    o.capacity === item.capacity && salePorts.some(p => p.specGoodsId !== o.goodsId && p.specGoodsId !== item.goodsId));
+  if (!other) return load;
+  const n = Math.min(other.count, item.count, Math.max(0, Math.floor((aboard(item.goodsId) + item.count - aboard(other.goodsId)) / 2)));
+  if (!n || (n < item.count && maxTypes < 2)) return load;
+  return [...(n < item.count ? [{ ...item, count: item.count - n }] : []), { ...other, count: n }];
+}
+
+// 首轮采购前只有固定特产可作比较。基准价只衡量这笔本金与舱位能承接多少货值。
+function openingPurchasePort(ports, city, specialty, definitions, coins, space) {
+  const candidates = [{ ...ports.find(p => p.cityId === city), cityId: city, specGoodsId: specialty },
+    ...ports.filter(p => p.cityId !== city)];
+  const ranked = candidates.map(port => {
+    const def = definitions.get(port.specGoodsId);
+    const units = positive(def?.unitPrice) && positive(def.capacity) && positive(def.maxCount)
+      ? Math.min(def.maxCount, Math.floor(coins / def.unitPrice), Math.floor(space / def.capacity)) : 0;
+    return { port, value: units ? units * def.unitPrice : 0 };
+  });
+  return ranked.filter(c => c.value > 0).sort((a, b) =>
+    (a.port.openingShips ?? 0) - (b.port.openingShips ?? 0) || b.value - a.value ||
+    Number(b.port.cityId === city) - Number(a.port.cityId === city) || a.port.cityId - b.port.cityId)[0]?.port;
+}
+
 // 有多批可卖且单卖一批即可升级时，把升级后能多赚最多的批次留在船上。
 function saleToUnlockShip(sales, config, event, state, ship, settings, timing, time, actionSeconds) {
   if (!settings.autoUpgrade || sales.length < 2 || !natural(state.player.profit)) return null;
@@ -356,7 +417,7 @@ export function planMerchant(config, event, state, market, radar, time, visited 
   const mode = liquidation ? 'FINAL_LIQUIDATION' : 'TRADE';
   const wait = (reason, extra = {}) => ({ kind: 'wait', mode, reason, ...extra });
   if (!positive(event?.startTime) || !positive(event.endTime) || event.startTime > time || event.endTime <= time ||
-    state?.period !== event.period || !timing.tradingOpen) return wait('等待本期开放交易时段');
+    state?.period !== event.period || timing.tradeStartTime === null) return wait('等待本期开放交易时段');
   const cargo = state.cargo, player = state.player;
   if (!positive(cargo?.cityId) || !positive(cargo.cargoLv) || !natural(cargo.moveEndTime)) return wait('商船位置未同步');
   if (cargo.moveEndTime > time || (cargo.moveToCityId && cargo.moveToCityId !== cargo.cityId)) return wait('商船航行中，等待到港确认');
@@ -375,29 +436,130 @@ export function planMerchant(config, event, state, market, radar, time, visited 
   const occupied = player.goods.reduce((sum, g) => sum + g.num * definitions.get(g.goodsId).capacity, 0);
   if (!natural(occupied) || occupied > ship.capacity) return wait('船舱容量与持货批次不一致');
   const free = ship.capacity - occupied, quotes = new Map(market.goods.map(row => [row.goodsId, row]));
+  const openingCargo = player.goods.filter(b => b.cityId !== cargo.cityId && options.openingCargoPids?.includes(b.pid));
+  if (openingCargo.length && positive(options.plannedOpening)) {
+    if (time < options.plannedOpening)
+      return wait('隔夜船货留在目的港，等待开市后重新核价', { nextCheckAt: options.plannedOpening });
+    if (!timing.tradingOpen || market.observedAt < options.plannedOpening)
+      return wait('隔夜船货留在目的港，等待开市后的本港报价');
+    const batch = openingCargo.find(b => positive(quotes.get(b.goodsId)?.price));
+    if (!batch) return wait('等待隔夜船货的本港实价，清舱后开始采购');
+    const price = quotes.get(batch.goodsId).price, gain = profit(price, batch, ship);
+    if (!safe(gain)) return wait('隔夜船货的实际收益待核对');
+    return { kind: 'sell', mode: 'OPENING_SALE', city: cargo.cityId, pid: batch.pid, goodsId: batch.goodsId, count: batch.num,
+      price, gain, expectedProfit: gain, estimated: false,
+      label: '开市清舱，出售' + definitions.get(batch.goodsId).itemName + ' ×' + batch.num +
+        '，本港实价 ' + price + '，本批盈亏 ' + gain + ' 商会币，成交后剩余 ' + (openingCargo.length - 1) + ' 批隔夜货' };
+  }
   const { ports, history, pastRounds } = portsAndHistory(config, event, radar, options.markets, time, settings, timing.marketEpoch);
-  const observedMarkets = new Map(history).set(cargo.cityId, market);
-  const peers = comparableQuotes(observedMarkets, definitions);
   const closing = positive(options.closingPointers) && settings.autoSpeedUp && merchantSpeedMode(settings.speedUpMode) === 'goal';
   const travel = closing ? Math.max(actionSeconds, timing.travelSeconds - options.closingPointers * merchantPointerSeconds(config)) :
     timing.travelSeconds ?? Infinity;
   const arrival = time + travel;
-  const sameRound = merchantTiming(config, event, arrival).marketEpoch === timing.marketEpoch;
-  const canArrive = count => positive(timing.travelSeconds) && arrival + Math.max(1, count) * actionSeconds < timing.tradeEndTime;
+  // 买货看出发港当前的收盘，航行经过休市时段仍计时，卖货从目的港实际开市起计。
+  let saleWindow = timing;
+  if (positive(timing.travelSeconds)) {
+    saleWindow = merchantTiming(config, event, arrival);
+    // 同一时刻，无论船已买了几批，备货与出航都必须面向同一次开市。
+    if (arrival + actionSeconds >= saleWindow.tradeEndTime) {
+      const next = merchantTiming(config, event, arrival + 86400);
+      if (next.tradeStartTime < next.tradeEndTime) saleWindow = next;
+    }
+  }
+  const saleAt = Math.max(arrival, saleWindow.tradeStartTime), saleEnd = saleWindow.tradeEndTime;
+  const advance = !timing.tradingOpen || saleWindow.tradeStartTime > timing.tradeStartTime;
+  const sameRound = !advance && Number.isFinite(saleAt) && merchantTiming(config, event, saleAt).marketEpoch === timing.marketEpoch;
+  const opening = saleWindow.tradeStartTime;
+  const openLabel = advance ? tradeDate.format(opening * 1000) : '';
+  const nextOpen = time < timing.tradeStartTime ? timing.tradeStartTime : timing.tradeStartTime + 86400;
+  const waitForOpen = () => wait('商船留港，等 ' + tradeDate.format(nextOpen * 1000) + ' 开市后重新核价', { nextCheckAt: nextOpen });
+  const canArrive = count => positive(timing.travelSeconds) && saleAt + Math.max(1, count) * actionSeconds < saleEnd;
+  if (!timing.tradingOpen) {
+    if (nextOpen >= event.endTime) return wait('本期贸易已收盘');
+    if (!canArrive(1)) return waitForOpen();
+  }
   const strict = settings.fullCargoRoutes;
   const localIntel = ports.find(port => port.cityId === cargo.cityId);
   const specialty = market.specGoodsId || localIntel?.specGoodsId;
   const shortage = market.rareGoodsId || localIntel?.rareGoodsId;
-  const destinations = ports.filter(port => port.cityId !== cargo.cityId && (!strict ||
+  const slotsAt = arrivalTime => Math.max(0, Math.floor((saleEnd - arrivalTime - 1) / actionSeconds));
+  const saleSlots = slotsAt(saleAt), routeSlots = slotsAt(arrival);
+  const buyEnd = Math.min(timing.tradeEndTime, event.endTime - settings.liquidationMinutes * 60);
+  const buySlots = timing.tradingOpen ? Math.max(0, Math.ceil((buyEnd - time) / actionSeconds)) : 0;
+  if (!occupied && !timing.tradingOpen) {
+    const start = merchantTiming(config, event, event.startTime);
+    const firstOpening = start.tradeStartTime + (event.startTime >= start.tradeEndTime ? 86400 : 0);
+    if (time < firstOpening && nextOpen === firstOpening) {
+      const stay = reason => wait(reason + '，留在本港等首次开市重新核价', { nextCheckAt: firstOpening });
+      if (arrival > firstOpening) return stay('现在换港会错过首轮开市');
+      if (firstOpening + travel + 3 * actionSeconds >= saleEnd ||
+        firstOpening >= event.endTime - settings.liquidationMinutes * 60) return stay('首轮剩余时间不足以采购并运往销港');
+      const port = openingPurchasePort(ports, cargo.cityId, specialty, definitions, player.coins, ship.capacity);
+      if (!port) return stay('尚未找到按基准价可购的固定特产');
+      if (port.cityId === cargo.cityId) return stay('按可见同盟船和可购特产货值比较，本港适合首轮采购');
+      return { kind: 'move', mode: 'FIRST_OPENING', city: cargo.cityId, destination: port.cityId, goodsId: port.specGoodsId,
+        exploration: true, plannedOpening: firstOpening, arrival, latestActionAt: firstOpening - travel + 1,
+        expectedProfit: null, estimated: true, label: '首日空船提前前往 ' + port.cityId + ' 号港，准备采购特产' +
+          definitions.get(port.specGoodsId).itemName + '。开市前可见同盟在途船 ' + (port.openingShips ?? 0) + ' 艘，开市后核对实价和库存' };
+    }
+  }
+  if (advance && time < opening && canArrive(1) && !closing && (occupied || buySlots)) {
+    const portsForSale = ports.filter(p => p.cityId !== cargo.cityId && player.goods.every(b => b.cityId !== p.cityId));
+    if (portsForSale.length) {
+      const held = player.goods.length;
+      const maxTypes = Math.min(buySlots, saleSlots - held, Math.floor((routeSlots - held - 1) / 2));
+      const purchases = openingLoad(market, shortage, definitions, free, player.coins, maxTypes, player.goods, portsForSale);
+      // 卖到同种特产港时，有多少买货本金暴露在该品种上。不同货物每格占用的本金可能相差很大。
+      const costs = new Map();
+      let capital = 0, reference = 0;
+      for (const b of [...player.goods, ...purchases]) {
+        const count = b.num ?? b.count, cost = count * (b.buyPrice ?? b.price);
+        costs.set(b.goodsId, (costs.get(b.goodsId) ?? 0) + cost);
+        capital += cost;
+        reference += count * definitions.get(b.goodsId).unitPrice;
+      }
+      const port = portsForSale.sort((a, b) => (costs.get(a.specGoodsId) ?? 0) - (costs.get(b.specGoodsId) ?? 0) ||
+        Number(definitions.has(b.specGoodsId)) - Number(definitions.has(a.specGoodsId)) || (a.openingShips ?? 0) - (b.openingShips ?? 0) ||
+        Number(b.cityId === options.preferredPort) - Number(a.cityId === options.preferredPort) || a.cityId - b.cityId)[0];
+      const costNote = '整船进货成本 ' + capital + ' 商会币' +
+        (positive(reference) ? '，相当于基准货值的 ' + Number((capital * 100 / reference).toFixed(1)) + '%' : '');
+      const base = { mode: 'OVERNIGHT', city: cargo.cityId, destination: port.cityId, plannedOpening: opening,
+        arrival, estimated: true, expectedProfit: null, purchaseDetails: [['隔夜本金', costNote],
+          ['目的港', '同种特产涉及的本金 ' + (definitions.has(port.specGoodsId) ? (costs.get(port.specGoodsId) ?? 0) + ' 商会币' : '待确认') +
+            '，开市前可见同盟在途船 ' + (port.openingShips ?? 0) + ' 艘']] };
+      if (purchases.length) {
+        const [item] = purchases;
+        const load = occupied + purchases.reduce((n, p) => n + p.capacity * p.count, 0);
+        return { ...base, kind: 'buy', goodsId: item.goodsId, count: item.count, price: item.price, purchases,
+          latestActionAt: Math.min(buyEnd - (purchases.length - 1) * actionSeconds,
+            saleEnd - travel - (held + 2 * purchases.length + 1) * actionSeconds),
+          label: '隔夜备货，买入' + definitions.get(item.goodsId).itemName + ' ×' + item.count +
+            '，单价 ' + item.price + '，预计装舱 ' + load + '/' + ship.capacity + ' 格。开市后按实价清舱，可能亏损' };
+      }
+      if (held) {
+        const sales = player.goods.slice(0, saleSlots);
+        return { ...base, kind: 'move', goodsId: sales[0].goodsId, salePids: sales.map(b => b.pid),
+          accelerationRequired: 0, latestActionAt: saleEnd - travel - sales.length * actionSeconds,
+          priceNote: costNote + '，开市价格待定，届时按实价逐批清舱',
+          label: '隔夜备货 ' + occupied + '/' + ship.capacity + ' 格，提前出航前往港口 ' + port.cityId +
+            '，' + openLabel + ' 开市后按实价逐批清舱，再采购' };
+      }
+    }
+  }
+  const destinations = ports.filter(port => port.cityId !== cargo.cityId &&
+    (!advance || player.goods.every(b => b.cityId !== port.cityId)) && (!strict ||
     (positive(specialty) && positive(shortage) && specialty !== shortage &&
       port.rareGoodsId === specialty && port.specGoodsId === shortage)));
   const estimates = new Map();
+  const peers = comparableQuotes(new Map(history).set(cargo.cityId, market), definitions);
   const estimate = (definition, port) => {
     const key = port.cityId + ':' + definition.goodsId;
     if (!estimates.has(key)) {
       const snapshot = history.get(port.cityId);
-      let value = expectedPrice(definition, port, snapshot, pastRounds.get(port.cityId), peers, cargo.cityId,
-        sameRound && snapshot && arrival - snapshot.observedAt <= settings.quoteMaxAgeSeconds, settings.estimateDiscountPercent);
+      // 紧缺每天开市重置，昨日的紧缺溢价不能用来估算开市后的售价。
+      const salePort = advance ? { ...port, rareGoodsId: 0 } : port;
+      let value = expectedPrice(definition, salePort, snapshot, pastRounds.get(port.cityId), peers, cargo.cityId,
+        sameRound && snapshot && saleAt - snapshot.observedAt <= settings.quoteMaxAgeSeconds, settings.estimateDiscountPercent);
       if (closing && value) {
         const known = snapshot?.goods.find(g => g.goodsId === definition.goodsId)?.price;
         const price = merchantGoalSalePrice(definition, port, known, settings.estimateDiscountPercent);
@@ -448,9 +610,10 @@ export function planMerchant(config, event, state, market, radar, time, visited 
   const saleAllowed = (batch, gain) => gain > 0 || (liquidation && gain === 0) || lossAllowed(batch, gain);
   const eligible = route => {
     if (!visited.includes(route.port.cityId)) return true;
+    // 提前空船到港后，本轮新货可运回出发港。下面的空船寻价仍单独排除已访问港口。
+    if (!occupied && timing.tradingOpen && timing.tradeStartTime === options.plannedOpening) return true;
     const snapshot = history.get(route.port.cityId);
-    if (!snapshot || arrival - snapshot.observedAt > settings.quoteMaxAgeSeconds ||
-      merchantTiming(config, event, arrival).marketEpoch !== timing.marketEpoch) return false;
+    if (!snapshot || saleAt - snapshot.observedAt > settings.quoteMaxAgeSeconds || !sameRound) return false;
     return route.batches.some(row => {
       const local = quotes.get(row.batch.goodsId)?.price;
       return row.gain > 0 && positive(local) && row.price > local;
@@ -458,8 +621,6 @@ export function planMerchant(config, event, state, market, radar, time, visited 
   };
   // 指针不足时仍可自然航行并出售高价值子集，不能因其余批次来不及出售而放弃整条路线。
   // 规划从不依赖尚未确认能够使用的指针；来源与止损不满足的批次继续保留。
-  const slotsAt = arrivalTime => Math.max(0, Math.floor((timing.tradeEndTime - arrivalTime - 1) / actionSeconds));
-  const saleSlots = slotsAt(arrival);
   const bestBatches = (batches, slots) => [...batches].sort((a, b) => b.gain - a.gain || b.space - a.space || a.batch.pid - b.batch.pid)
     .slice(0, Math.max(0, slots));
   // 每笔盈利累计活动积分，亏损只减少周转资金。积分相同时优先保住本金。
@@ -477,20 +638,22 @@ export function planMerchant(config, event, state, market, radar, time, visited 
 
   // 新货每种需要一轮买入和一轮出售，旧货只占出售轮数。纯出航沿用当前轮即可发船的余量。
   const loadFor = (port, held, space, cash, slots, reset = false, reference = false) => {
-    const ranked = bestBatches(held, slots);
+    const ranked = bestBatches(held, Math.min(slots, saleSlots));
     let best = { batches: ranked, purchases: [], profit: 0, approximate: false, ...outcome(ranked) };
-    if (liquidation || !space || !cash) return best;
+    // 空船休市时也比较留在本港采购的机会，实际买入必须到开市后重算。
+    const maxBuys = !timing.tradingOpen && !occupied ? Infinity : buySlots;
+    if (liquidation || !space || !cash || !maxBuys) return best;
     if (strict) {
-      const types = Math.floor((slots - 1 - held.length) / 2);
+      const types = Math.min(maxBuys, saleSlots - held.length, Math.floor((slots - 1 - held.length) / 2));
       if (types < 1) return best;
       const purchase = optimize(port, space, cash, types, reset, reference);
       return { ...purchase, batches: ranked, ...outcome(ranked, 0, purchase.profit) };
     }
-    let types = Math.min(market.goods.length, Math.floor((slots - 1) / 2));
+    let types = Math.min(maxBuys, market.goods.length, saleSlots, Math.floor((slots - 1) / 2));
     while (types > 0) {
       const purchase = optimize(port, space, cash, types, reset, reference), used = purchase.purchases.length;
       if (!used) break;
-      const batches = ranked.slice(0, slots - 1 - used * 2);
+      const batches = ranked.slice(0, Math.min(saleSlots - used, slots - 1 - used * 2));
       const candidate = { ...purchase, batches, ...outcome(batches, 0, purchase.profit) };
       if (byOutcome(candidate, best) < 0) best = candidate;
       if (batches.length === ranked.length) break;
@@ -510,7 +673,7 @@ export function planMerchant(config, event, state, market, radar, time, visited 
     (!free || route.purchases.length))).sort((a, b) =>
     (strict && (Number(b.port.cityId === options.preferredPort) - Number(a.port.cityId === options.preferredPort))) ||
     byOutcome(a, b) || b.released - a.released || b.matched - a.matched || a.port.cityId - b.port.cityId);
-  const routes = buildRoutes(saleSlots), best = routes[0];
+  const routes = buildRoutes(routeSlots), best = routes[0];
   const bestHold = routes.find(route => route.batches.length || route.purchases.length);
   const sales = [];
   for (const batch of player.goods) {
@@ -565,6 +728,7 @@ export function planMerchant(config, event, state, market, radar, time, visited 
   }
   sales.sort((a, b) => b.gain - a.gain || (b.swap?.extra ?? 0) - (a.swap?.extra ?? 0) || a.batch.pid - b.batch.pid);
   if (sales.length) {
+    if (!timing.tradingOpen) return waitForOpen();
     const unlock = !liquidation && saleToUnlockShip(sales, config, event, state, ship, settings, timing, time, actionSeconds);
     const sale = unlock || sales[0], batch = sale.batch;
     return { kind: 'sell', mode: sale.swap ? 'SWAP' : mode, city: cargo.cityId, pid: batch.pid, goodsId: batch.goodsId, count: batch.num,
@@ -576,12 +740,12 @@ export function planMerchant(config, event, state, market, radar, time, visited 
           sale.swap ? '，换货比继续持有预计多赚 ' + sale.swap.extra : sale.opportunity > 0 ? '，再采购预计收益 ' + sale.opportunity : '') };
   }
   // 一程未必出售全部持货；具体路线已按可出售批次数检查，不能用无关滞销批次阻塞它。
-  if (!canArrive(1)) return wait('本时段剩余时间不足以航行并完成出售', { mode: 'FINAL_LIQUIDATION' });
+  if (!canArrive(1)) return wait('本期剩余交易时段不足以完成航行和出售', { mode: 'FINAL_LIQUIDATION' });
 
   // 刷新会改变价格，不能把补货当成确定收益：仅以本港已见折价做再折扣估算。
   const refreshIn = timing.nextRefreshAt === null ? Infinity : timing.nextRefreshAt - time;
   let stagedRoute;
-  if (strict && !liquidation && free && refreshIn > 0 && (!best || refreshIn <= settings.refreshWaitSeconds) &&
+  if (timing.tradingOpen && strict && !liquidation && free && refreshIn > 0 && (!best || refreshIn <= settings.refreshWaitSeconds) &&
     timing.nextRefreshAt + actionSeconds < event.endTime - settings.liquidationMinutes * 60 &&
     arrival + refreshIn + 3 * actionSeconds < timing.tradeEndTime) {
     const after = buildRoutes(slotsAt(arrival + refreshIn) - 2, true)[0];
@@ -594,7 +758,7 @@ export function planMerchant(config, event, state, market, radar, time, visited 
       stagedRoute = { ...after, purchases: [{ ...main, count: available, gain }], net: after.cargoOutcome.net + gain };
     }
   }
-  if (!strict && !liquidation && free > 0 && refreshIn > 0 && refreshIn <= settings.refreshWaitSeconds &&
+  if (timing.tradingOpen && !strict && !liquidation && free > 0 && refreshIn > 0 && refreshIn <= settings.refreshWaitSeconds &&
     market.goods.some(quote => positive(quote.stock))) {
     const afterRefresh = buildRoutes(slotsAt(arrival + refreshIn), true)[0], currentProfit = Math.max(0, best?.score ?? 0);
     if (afterRefresh && afterRefresh.profit > (best?.profit ?? 0) &&
@@ -613,12 +777,12 @@ export function planMerchant(config, event, state, market, radar, time, visited 
   let moveRoute = routes.find(worthSailing);
   const hasDiscountedRoute = !!moveRoute;
   let reference = false;
-  const canLoad = free > 0 && player.coins > 0 && saleSlots >= 3;
+  const canLoad = free > 0 && player.coins > 0 && routeSlots >= 3;
   const allowReference = !closing && !liquidation && settings.estimateDiscountPercent > 0 && settings.estimateDiscountPercent < 100;
   if (!buyRoute && allowReference && (canLoad || occupied > 0)) {
     // 已有载货航线时只补同港货物，并为原本能卖的所有批次留足操作时间。
     const ports = moveRoute ? [moveRoute.port] : destinations;
-    const alternatives = buildRoutes(saleSlots, false, cargoRoutesFor(ports, true), true);
+    const alternatives = buildRoutes(routeSlots, false, cargoRoutesFor(ports, true), true);
     const extra = alternatives.find(route => worthBuying(route) && (!moveRoute ||
       moveRoute.batches.every(old => route.batches.some(row => row.batch.pid === old.batch.pid))));
     if (extra) {
@@ -650,6 +814,7 @@ export function planMerchant(config, event, state, market, radar, time, visited 
   const saleEstimate = (def, basis, source, price) => def.itemName + '参考涨跌 ' + changeLabel(basis, def.unitPrice) +
     '（' + source + '），预计卖价 ' + price;
   if (buyRoute) {
+    if (!timing.tradingOpen) return waitForOpen();
     const purchase = strict ? buyRoute.purchases[0] : [...buyRoute.purchases].sort((a, b) => b.gain - a.gain || a.goodsId - b.goodsId)[0];
     const definition = definitions.get(purchase.goodsId);
     const space = purchase.count * purchase.capacity;
@@ -668,16 +833,17 @@ export function planMerchant(config, event, state, market, radar, time, visited 
       ...(stagedRoute && { nextCheckAt: timing.nextRefreshAt }),
       ...(reference && !hasDiscountedRoute && { waitForFirstDeparture: true }),
       approximate: buyRoute.approximate, arrival,
-      latestActionAt: timing.tradeEndTime - travel - (buyRoute.batches.length + buyRoute.purchases.length * 2 + 1) * actionSeconds,
+      latestActionAt: Math.min(buyEnd - (buyRoute.purchases.length - 1) * actionSeconds,
+        saleEnd - travel - (buyRoute.batches.length + buyRoute.purchases.length * 2 + 1) * actionSeconds),
       purchaseDetails,
       label: (buyRoute.purchases.length > 1 ? '组合 ' + buyRoute.purchases.length + ' 种，本笔' : '') +
         (stagedRoute ? '刷新前买入' : '买入') + definition.itemName + ' ×' + amount.format(purchase.count) +
         '，单价 ' + amount.format(purchase.price) + '，' + buyRoute.port.cityId + ' 号港预计卖价 ' + amount.format(purchase.expectedPrice) +
         '。每格价差 ' + amount.format(purchase.marginPerSlot) + ' 商会币，' + (stagedRoute ? '已配货预计净收益 ' : '整船预计净收益 ') +
-        amount.format(buyRoute.net) + ' 商会币' + riskNote };
+        amount.format(buyRoute.net) + ' 商会币' + riskNote + (advance ? '，为 ' + openLabel + ' 开市备货' : '') };
   }
   if (moveRoute) {
-    if (strict) {
+    if (strict && !advance) {
       // 抵港留出售和首笔采购的时间。若对齐刷新会少跑一趟、或已经进入刷新窗口，则直接发船。
       const atArrival = merchantTiming(config, event, arrival);
       const leadTime = (moveRoute.batches.length + 1) * actionSeconds;
@@ -694,11 +860,13 @@ export function planMerchant(config, event, state, market, radar, time, visited 
       ...(reference && !hasDiscountedRoute && { waitForFirstDeparture: true }),
       goodsId: lead.batch.goodsId, priceNote,
       arrival, expectedProfit: moveRoute.cargoOutcome.net, ...discountedOutcome(moveRoute), expectedScore: moveRoute.cargoOutcome.score, estimated: true,
-      latestActionAt: timing.tradeEndTime - travel - Math.max(1, moveRoute.batches.length) * actionSeconds,
+      latestActionAt: saleEnd - travel - Math.max(1, moveRoute.batches.length) * actionSeconds,
+      ...(advance && { plannedOpening: opening }),
       salePids: moveRoute.batches.map(row => row.batch.pid), accelerationRequired: 0,
       label: (strict ? '满舱 ' + occupied + '/' + ship.capacity + ' 格，商船从港口 ' : '商船从港口 ') + cargo.cityId + ' 前往 ' + moveRoute.port.cityId + '，' + estimateLabel + moveRoute.cargoOutcome.net +
         (moveRoute.cargoOutcome.net !== moveRoute.cargoOutcome.score ? '，预计累计利润增加 ' + moveRoute.cargoOutcome.score : '') +
-        '，预计释放舱位 ' + moveRoute.released + '；' + priceNote + '；到港重读实价' };
+        '，预计释放舱位 ' + moveRoute.released + '；' + priceNote +
+        (advance ? '；提前出航，' + openLabel + ' 开市且到港后重读实价' : '；到港重读实价') };
   }
 
   if (strict) {
@@ -720,16 +888,19 @@ export function planMerchant(config, event, state, market, radar, time, visited 
       .sort((a, b) => Number(player.goods.some(g => g.goodsId === b.rareGoodsId)) - Number(player.goods.some(g => g.goodsId === a.rareGoodsId)) || a.cityId - b.cityId)[0];
     const possibleBatches = explore && player.goods.filter(batch => batch.cityId !== explore.cityId && explore.specGoodsId !== batch.goodsId).length;
     const explorationBuffer = player.goods.length ? timing.travelSeconds + Math.max(1, possibleBatches) * actionSeconds : timing.travelSeconds * 2 + actionSeconds * 4;
-    let latestDeparture = timing.tradeEndTime - explorationBuffer;
+    let latestDeparture = saleEnd - explorationBuffer;
     if (!player.goods.length) {
       if (player.coins === 0) return wait('空船没有采购本金，留港等待');
       latestDeparture = Math.min(latestDeparture, event.endTime - settings.liquidationMinutes * 60 - timing.travelSeconds - actionSeconds);
     }
-    if (explore && time < latestDeparture) return {
+    // 提前到港的等待时间不能充作采购、第二程航行或售货时间。
+    if (explore && Math.max(time, opening - travel) < latestDeparture) return {
       kind: 'move', mode, city: cargo.cityId, destination: explore.cityId, goodsId: player.goods[0]?.goodsId ?? explore.specGoodsId,
       expectedProfit: 0, estimated: true, exploration: true, arrival,
       latestActionAt: latestDeparture,
-      label: '商船从港口 ' + cargo.cityId + ' 前往 ' + explore.cityId + ' 寻价，暂无可确认的盈利路线；到港读取实价'
+      ...(advance && { plannedOpening: opening }),
+      label: '商船从港口 ' + cargo.cityId + ' 前往 ' + explore.cityId + ' 寻价，暂无可确认的盈利路线' +
+        (advance ? '；提前出航，' + openLabel + ' 开市且到港后询价' : '；到港读取实价')
     };
   }
   return wait(liquidation ? '清仓阶段，停止新采购，等待符合止损上限的可执行卖价' :
