@@ -77,6 +77,8 @@ export function estimateMerchantRace(config, event, state, radar, time, settings
       const before = rows.find(row => row.offset >= early - epoch);
       const after = rows.findLast(row => row.offset <= natural - epoch);
       if (!before || !after || before.offset >= after.offset || before.visitStart !== after.visitStart) continue;
+      if (before.rareGoodsId && after.rareGoodsId && before.rareGoodsId !== after.rareGoodsId) continue;
+      const rareGoodsId = before.rareGoodsId || after.rareGoodsId || port.rareGoodsId;
       // 同一批挂牌货比较早晚已购量。换价、缺项或库存倒退不能作为耗库证据。
       const old = new Map(before.goods.map(row => [row.goodsId, row]));
       if (old.size !== before.goods.length || old.size !== after.goods.length || new Set(after.goods.map(row => row.goodsId)).size !== old.size ||
@@ -88,9 +90,9 @@ export function estimateMerchantRace(config, event, state, radar, time, settings
       const laterGoods = after.goods.map(row => ({ ...row, stock: Math.max(old.get(row.goodsId).stock,
         row.stock - Math.max(0, held(after, row.goodsId) - held(before, row.goodsId))) }));
       if (!laterGoods.some(row => old.get(row.goodsId).stock < row.stock)) return null;
-      const initial = modelPurchase(config, event, state, radar, { goods: before.goods }, early, settings, actionSeconds);
+      const initial = modelPurchase(config, event, state, radar, { goods: before.goods, rareGoodsId }, early, settings, actionSeconds);
       if (!initial.profit || initial.readyAt >= rival) return null;
-      const later = modelPurchase(config, event, state, radar, { goods: laterGoods }, natural, settings, actionSeconds);
+      const later = modelPurchase(config, event, state, radar, { goods: laterGoods, rareGoodsId }, natural, settings, actionSeconds);
       if (later.profit === null) return null;
       const gain = initial.profit - later.profit;
       return gain > 0 ? { gain, baseline: later.profit,

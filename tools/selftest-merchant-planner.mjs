@@ -227,6 +227,28 @@ test('单位容量收益与组合采购取代单商品跌幅优先', () => {
   assert.equal(plan.expectedProfit, 93);
 });
 
+test('本港紧缺货从采购组合剔除，普通货仍可采购，外港带来的紧缺货仍可出售', () => {
+  const f = fixture();
+  f.market.specGoodsId = 3;
+  f.radar.radar[0].specGoodsId = 3;
+  for (const source of [f.market, f.radar.radar[0]]) {
+    source.rareGoodsId = 1;
+    for (const price of [50, 95]) {
+      f.market.goods[0].price = price;
+      assert.notEqual(f.plan().kind, 'buy', '折后和参考价方案均跳过本港紧缺货');
+    }
+    f.market.goods.push({ goodsId: 2, price: 170, stock: 0 });
+    assert.deepEqual(f.plan().purchases.map(item => item.goodsId), [2]);
+    f.market.goods.pop();
+    source.rareGoodsId = 0;
+  }
+  f.market.rareGoodsId = 1;
+  f.market.goods[0].price = 130;
+  f.state.player.goods = [f.batch({ cityId: 20 })];
+  const sale = f.plan();
+  assert.deepEqual([sale.kind, sale.goodsId, sale.price], ['sell', 1, 130]);
+});
+
 test('采购估值相同优先运往共享紧缺港，实价估算更差时不追紧缺', () => {
   const f = fixture();
   f.radar.radar.find(row => row.cityId === 30).rareGoodsId = 1;

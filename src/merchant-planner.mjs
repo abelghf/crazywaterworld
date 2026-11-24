@@ -418,6 +418,7 @@ export function planMerchant(config, event, state, market, radar, time, visited 
     return { batch, ...estimated, price, gain, space: batch.num * definitions.get(batch.goodsId).capacity };
   };
   const offersAt = (port, reset, reference) => market.goods.flatMap(quote => {
+    if (quote.goodsId === shortage) return [];
     const definition = definitions.get(quote.goodsId), target = definition && estimate(definition, port);
     if (!definition || !positive(quote.price) || !natural(quote.stock) || !positive(definition.capacity) || !natural(definition.maxCount) ||
       quote.stock > definition.maxCount || !target) return [];

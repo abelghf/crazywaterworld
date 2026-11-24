@@ -210,9 +210,9 @@ await test('无紧缺共享时仍可买入并走普通港，到港出售不依�
   await f.run(merchantActivity, 'merchantTrade');
   assert.equal(f.sent('TradeSellRequest').length, 1);
   f.state.radar.radar = radar;
-  f.state.markets[20].goods = [{ goodsId: 1002, price: 35, stock: 0 }];
+  f.state.markets[20].goods = [{ goodsId: 1002, price: 10, stock: 0 }, { goodsId: 1004, price: 35, stock: 0 }];
   await f.run(merchantActivity, 'merchantTrade');
-  assert.equal(f.sent('TradeBuyRequest')[1].body.goodsId, 1002);
+  assert.equal(f.sent('TradeBuyRequest')[1].body.goodsId, 1004);
   const empty = setup();
   empty.state.radar.radar = [];
   await empty.run(merchantActivity, 'merchantTrade');
@@ -224,11 +224,11 @@ await test('大跌幅但少量库存不再压过整船收益，售罄商品不�
     f.state.radar.radar[1].specGoodsId = 1003;
     f.state.markets[10].goods = [
       { goodsId: 1001, price: 10, stock: 60000 - remaining },
-      { goodsId: 1002, price: 35, stock: 0 }
+      { goodsId: 1004, price: 35, stock: 0 }
     ];
     await f.run(merchantActivity, 'merchantTrade');
     const buy = f.sent('TradeBuyRequest')[0].body;
-    assert.equal(buy.goodsId, 1002);
+    assert.equal(buy.goodsId, 1004);
     assert.equal(buy.buyNum, 285);
     await f.run(merchantActivity, 'merchantTrade');
     if (remaining) assert.deepEqual(f.sent('TradeBuyRequest')[1].body, { cityId: 10, goodsId: 1001, buyNum: 1 });
@@ -240,12 +240,12 @@ await test('多商品组合逐笔复查采购，夹具更新库存并为每批�
   f.state.radar.radar[1].specGoodsId = 1003;
   f.state.markets[10].goods = [
     { goodsId: 1001, price: 20, stock: 59990 },
-    { goodsId: 1002, price: 30, stock: 59980 }
+    { goodsId: 1004, price: 30, stock: 59980 }
   ];
   await f.run(merchantActivity, 'merchantTrade');
   assert(f.reports.some(row => /组合 2 种/.test(row.label)));
   await f.run(merchantActivity, 'merchantTrade');
-  assert.deepEqual(f.sent('TradeBuyRequest').map(row => [row.body.goodsId, row.body.buyNum]), [[1002, 20], [1001, 10]]);
+  assert.deepEqual(f.sent('TradeBuyRequest').map(row => [row.body.goodsId, row.body.buyNum]), [[1004, 20], [1001, 10]]);
   assert.equal(f.state.trade.player.coins, 9200);
   assert.equal(new Set(f.state.trade.player.goods.map(g => g.pid)).size, 2);
   assert.deepEqual(f.state.markets[10].goods.map(g => g.stock), [60000, 60000]);
@@ -328,6 +328,7 @@ await test('发送前库存变化、暂停和策略变化均撤销旧采购计�
   for (const update of [
     f => { f.state.markets[10].goods[0].stock = 59999; },
     f => { f.state.markets[10].goods[0].price = 41; },
+    f => { Object.assign(f.state.markets[10], { specGoodsId: 1003, rareGoodsId: 1001 }); },
     f => f.pause(),
     f => { f.settings.merchant.minExpectedProfit = 100000; }
   ]) {
@@ -374,9 +375,9 @@ await test('同批货无利润寻价跨刷新与重载后不往返，换新货�
   g.state.markets[20].goods[0].price = 120;
   await g.run(merchantActivity, 'merchantTrade');
   assert.equal(g.sent('TradeSellRequest').length, 1);
-  g.state.markets[20].goods = [{ goodsId: 1002, price: 20, stock: 0 }];
+  g.state.markets[20].goods = [{ goodsId: 1004, price: 20, stock: 0 }];
   await g.run(merchantActivity, 'merchantTrade');
-  assert.equal(g.sent('TradeBuyRequest')[0].body.goodsId, 1002);
+  assert.equal(g.sent('TradeBuyRequest')[0].body.goodsId, 1004);
   await g.run(merchantActivity, 'merchantTrade');
   assert.deepEqual(g.sent('TradeMoveRequest').map(row => row.body.mvToCityId), [20, 10]);
   const legs = Object.values(g.ledger.keyRecords()).filter(row => row.details?.expected?.request === 'TradeMoveRequest');
@@ -761,12 +762,12 @@ await test('收盘前仅够买卖一种货时，按自然航行完成最高收�
   const f = setup();
   f.client.serverClockOffsetMs += (7 * 3600 + 56 * 60 + 45) * 1000;
   f.state.radar.radar[1].specGoodsId = 1008;
-  f.state.markets[10].goods = [{ goodsId: 1001, price: 40, stock: 59900 }, { goodsId: 1002, price: 30, stock: 59700 }];
-  f.state.markets[20].goods = [{ goodsId: 1002, price: 45, stock: 0 }];
+  f.state.markets[10].goods = [{ goodsId: 1001, price: 40, stock: 59900 }, { goodsId: 1004, price: 30, stock: 59700 }];
+  f.state.markets[20].goods = [{ goodsId: 1004, price: 45, stock: 0 }];
   const before = f.state.trade.player.profit;
   await f.run(merchantActivity, 'merchantTrade');
   const [buy] = f.sent('TradeBuyRequest');
-  assert.equal(buy.body.goodsId, 1002); assert.equal(buy.body.buyNum, 300);
+  assert.equal(buy.body.goodsId, 1004); assert.equal(buy.body.buyNum, 300);
   f.client.serverClockOffsetMs += 60000;
   await f.run(merchantActivity, 'merchantTrade');
   assert.equal(f.sent('TradeMoveRequest').length, 1);
@@ -806,7 +807,7 @@ await test('平价换货遵守首趟时间，原价回款后按新行情采购�
   const f = setup(), trade = f.state.trade;
   trade.player.coins = 0;
   trade.player.goods = [{ pid: 701, goodsId: 1001, cityId: 20, buyPrice: 45, num: 100 }];
-  f.state.markets[10].goods = [{ goodsId: 1001, price: 45, stock: 60000 }, { goodsId: 1002, price: 10, stock: 0 }];
+  f.state.markets[10].goods = [{ goodsId: 1001, price: 45, stock: 60000 }, { goodsId: 1004, price: 10, stock: 0 }];
   f.state.radar.radar[1].specGoodsId = 1003;
   const initialProfit = trade.player.profit;
   Object.assign(f.settings.merchant, { firstDepartureMode: 'time', firstDepartureTime: '16:00' });
@@ -820,7 +821,7 @@ await test('平价换货遵守首趟时间，原价回款后按新行情采购�
   f.state.markets[10].goods[1].price = 11;
   await f.run(merchantActivity, 'merchantTrade');
   assert.equal(f.sent('TradeBuyRequest').length, 1);
-  assert.equal(trade.player.goods[0].goodsId, 1002); assert.equal(trade.player.goods[0].buyPrice, 11);
+  assert.equal(trade.player.goods[0].goodsId, 1004); assert.equal(trade.player.goods[0].buyPrice, 11);
 });
 await test('期末保本清仓允许零收益成交，累计利润零字段可确认', async () => {
   const f = setup();
