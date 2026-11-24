@@ -323,6 +323,7 @@ export function nativeTaskValues(settings, current) {
 }
 
 export function hasExtraWork(settings) {
+  if (settings?.seasonMerit?.enabled) return true;
   if (settings?.radar?.runEnabled && (settings.radar.enabled || settings.radar.repairIdle)) return true;
   if (settings?.weeklyActivity?.enabled && ['farm', 'pet', 'antique', 'order', 'forge', 'hero'].some(kind => settings.weeklyActivity[kind + 'Enabled'])) return true;
   if (fleetSpeedEnabled(settings) || settings?.appointments?.enabled || settings?.alliance?.enabled || settings?.guildShip?.enabled || settings?.heroRaid?.enabled || settings?.silicon?.enabled || settings?.resourceFields?.enabled) return true;

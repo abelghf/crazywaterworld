@@ -34,7 +34,7 @@ const reports = [
     antiques: [{antiqueId:'藏品甲'}, {antiqueId:'藏品甲',frag:true}] } },
 ];
 function fakeClient(owner) {
-  return Object.assign(new EventEmitter(), {
+  return Object.assign(new EventEmitter().setMaxListeners(32), {
     connected: true, stop() { this.connected = false; }, snapshot() { return { state: 'READY' }; },
     async request(name, body) {
       calls.push({ owner, name, body });
@@ -223,7 +223,12 @@ try {
     await panel.getByRole('table', { name: '最强个人 · 功勋榜' }).waitFor();
     assert.equal(await panel.getByText('S4 赛季').count(), 0);
   }
-  console.log('通过：赛季编号、两榜分页与本人名次、邮件汇总与来源、账号隔离' + (browser ? '、手机浏览器页面' : ''));
+  const start = await fetch(base + '/api/loop/start?account=a', { method:'POST',
+    headers:{'content-type':'application/json'}, body:JSON.stringify({confirm:true, rounds:1}) });
+  const startedLoop = await start.json();
+  assert(start.ok, startedLoop.error);
+  await app.sessions.get('a').loop.job;
+  console.log('通过：赛季编号、两榜分页与本人名次、邮件汇总与来源、账号隔离、独立启动偷榜挂机' + (browser ? '、手机浏览器页面' : ''));
 } finally {
   await browser?.close();
   app.server.closeAllConnections();
