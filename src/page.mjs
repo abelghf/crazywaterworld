@@ -226,10 +226,12 @@ async function call(path, options) {
   versionGuard.assertWritable(path, method);
   const headers = new Headers(opts.headers); headers.set('X-CW-Console-Version', versionGuard.version); opts.headers = headers;
   let url = path;
-  if (current && url.indexOf('/api/') === 0 && url.indexOf('account=') < 0) {
+  const params = new URL(path, location.href).searchParams;
+  let account = params.get('account');
+  if (current && path.startsWith('/api/') && account === null && params.get('scope') !== 'all') {
+    account = current;
     url += (url.indexOf('?') < 0 ? '?' : '&') + 'account=' + encodeURIComponent(current);
   }
-  const account = new URL(url, location.href).searchParams.get('account');
   trackCall(1);
   try {
     const res = await fetch(url, opts);
@@ -482,8 +484,10 @@ function updateLogAccounts() {
   }
 }
 function clearedLog(entry) {
-  const watermark = logClearWatermarks.get(entry.account || '');
-  return watermark && (entry.id ? entry.id <= watermark.before : entry.t <= watermark.at);
+  return ['all', entry.account].some(key => {
+    const watermark = logClearWatermarks.get(key);
+    return watermark && (entry.id ? entry.id <= watermark.before : entry.t <= watermark.at);
+  });
 }
 let guildRefreshTimer;
 const featureOrder = new Intl.Collator('zh-CN', { numeric: true });
@@ -554,9 +558,11 @@ function updateLogSummary() {
     const label = (option.value === 'all' ? '全部分类' : option.value) + ' · ' + (groupCounts[option.value] || 0);
     if (option.textContent !== label) option.textContent = label;
   }
-  const account = accounts.find(item => item.id === logAccount);
-  $('log-clear').disabled = logClearing || !account;
-  $('log-clear').title = account ? '清空“' + logAccountLabel(logAccount) + '”的全部运行日志（不限当前分类）' : '选择一个账号后可清空该账号的全部运行日志';
+  const clearButton = $('log-clear');
+  clearButton.disabled = logClearing || (logAccount !== 'all' && !accounts.some(item => item.id === logAccount));
+  const clearLabel = logAccount === 'all' ? '清空全部账号和系统的运行日志' : '清空“' + logAccountLabel(logAccount) + '”的运行日志';
+  clearButton.title = clearLabel + '（包含被筛选隐藏的记录）';
+  clearButton.setAttribute('aria-label', clearLabel);
   $('log-top-count').textContent = logEl.children.length;
   $('log-count').textContent = String(count);
   $('log-empty').hidden = logEl.childElementCount > 0 || logAccount !== 'all' || logGroup !== 'all' || logFeature !== 'all' || onlyIssues;
@@ -654,23 +660,25 @@ function appendLog(entry) {
   }
 }
 function clearLogBefore(data) {
-  if (!data.account) return;
-  const previous = logClearWatermarks.get(data.account);
-  logClearWatermarks.set(data.account, { before: Math.max(previous?.before || 0, data.before || 0), at: Math.max(previous?.at || 0, data.at || 0) });
+  const key = data.scope === 'all' ? 'all' : data.account;
+  if (!key) return;
+  const previous = logClearWatermarks.get(key);
+  logClearWatermarks.set(key, { before: Math.max(previous?.before || 0, data.before || 0), at: Math.max(previous?.at || 0, data.at || 0) });
   for (const row of [...logEl.children]) {
-    if (row.dataset.account !== data.account) continue;
-    if (clearedLog(row.logEntry)) row.remove();
+    if (clearedLog(row.logEntry)) {
+      seen.delete(row.logEntry.id);
+      row.remove();
+    }
   }
-  seen.clear();
-  for (const row of logEl.children) if (row.logEntry.id) seen.add(row.logEntry.id);
   updateLogSummary();
 }
 $('log-clear').onclick = async () => {
-  if (logClearing || !accounts.some(account => account.id === logAccount)) return;
-  const account = logAccount;
+  if ($('log-clear').disabled) return;
+  const account = logAccount === 'all' ? null : logAccount;
+  const query = account === null ? 'scope=all' : 'account=' + encodeURIComponent(account);
   logClearing = true; updateLogSummary();
   try {
-    const data = await call('/api/logs/clear?account=' + encodeURIComponent(account), { method: 'POST', body: JSON.stringify({ confirm: true }) });
+    const data = await call('/api/logs/clear?' + query, { method: 'POST', body: JSON.stringify({ confirm: true }) });
     clearLogBefore(data);
   } catch (error) { reportError(error, undefined, account); }
   finally { logClearing = false; updateLogSummary(); }
@@ -2226,13 +2234,20 @@ function renderWorld(data) {
   const obox = clear($('world-orders'));
   renderOrderProgress(data.orderProgress);
   if (data.orders?.length) {
-    const ordersTable = table(['订单', '居民', '需求', '挂机交付', '手动操作'], data.orders.map((o) => [
-      '#' + o.index,
-      { cell: o.workerIcon, text: (o.workerName || '未知居民') + (o.isSpecial ? '（特殊）' : '') },
-      o.requirements.length && o.decision?.status !== 'refreshing' ? planMaterialList(o.requirements, recipes, 'resident-order-products-' + o.index) : '—',
-      orderState(o, data),
-      residentOrderActions(o),
-    ]), 'sea-records');
+    const headers = ['订单', '居民', '需求', { label: '经验', num: true }, { label: '金币', num: true }, '挂机交付', '手动操作'];
+    const ordersTable = table(headers, data.orders.map((o) => {
+      const refreshing = o.refreshPending || o.refreshTime || o.decision?.status === 'refreshing';
+      const rewardCell = value => ({ num: true, text: !refreshing && Number.isFinite(value) ? fmt(value) : '—' });
+      return [
+        '#' + o.index,
+        { cell: o.workerIcon, text: (o.workerName || '未知居民') + (o.isSpecial ? '（特殊）' : '') },
+        o.requirements.length && !refreshing ? planMaterialList(o.requirements, recipes, 'resident-order-products-' + o.index) : '—',
+        rewardCell(o.rewardExp),
+        rewardCell(o.rewardGold),
+        orderState(o, data),
+        residentOrderActions(o),
+      ];
+    }), 'sea-records');
     obox.appendChild(ordersTable);
   } else {
     obox.appendChild(el('p', 'resident-order-empty', Array.isArray(data.orders)

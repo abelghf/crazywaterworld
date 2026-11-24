@@ -21,6 +21,7 @@ import { readSeasonRanking, readSeasonMail, readSeasonGuildRank } from './season
 import {readActivityStatistics} from './activity-statistics.mjs';
 import { merchantActivity, readMerchantStatus, readMerchantOverview, readMerchantJournal, merchantJournalSummary } from './merchant-activity.mjs';
 import { saveMerchantIntel } from './merchant-intel.mjs';
+import { merchantPresets, merchantPresetOptions } from './merchant-presets.mjs';
 import { watchMerchant } from './merchant-monitor.mjs';
 import { giftCodeStatus, giftCodeSummary, startGiftCodes, startGiftCodeBatch } from './gift-codes.mjs';
 import { publicGiftCodes } from './gift-code-library.mjs';
@@ -208,6 +209,7 @@ export function createConsole({ host = '127.0.0.1', port = 17321, onLog, recover
   const traceLog = createTraceLog(TRACE_PATH, { maxBytes: TRACE_MAX_BYTES });
   const protocolDiagnostics = createProtocolDiagnostics(path.join(DATA_DIR, 'protocol-errors'));
   const globalLog = [];
+  let allLogsCleared = null;
   const streams = new Set();
   const sessions = new Map();
   const hostingChanges = new Map();
@@ -616,6 +618,9 @@ export function createConsole({ host = '127.0.0.1', port = 17321, onLog, recover
   function terminal(entry) {
     try { if (onLog) Promise.resolve(onLog(entry)).catch(() => {}); } catch { /* Logging is an observer. */ }
   }
+  function sendLogClear(stream, cleared) {
+    return writeStream(stream, `event: logs-cleared\ndata: ${JSON.stringify(cleared)}\n\n`);
+  }
   function flushBatch(session) {
     if (!session?.batchOutput) return;
     clearTimeout(session.batchOutput.timer);
@@ -780,8 +785,7 @@ export function createConsole({ host = '127.0.0.1', port = 17321, onLog, recover
       progressionJobs: new Map(),
       log: [],
       upgradeRevision: 0,
-      logClearBefore: 0,
-      logClearAt: 0,
+      logsCleared: null,
       dailySingle: dailySingleState(),
       shops: createShopState(),
       loop: {
@@ -1128,6 +1132,7 @@ export function createConsole({ host = '127.0.0.1', port = 17321, onLog, recover
         merchant: current.settings.merchant,
         schedule: Object.fromEntries(merchantTaskKeys.map(key => [key, current.settings.schedule[key]])),
       },
+      presets: merchantPresetOptions(current.settings),
       rules: { numbers: Object.fromEntries(Object.entries(current.rules.numbers).filter(([key]) => key.startsWith('merchant.'))) },
       revision: current.revision,
       baseRevision: current.baseRevision,
@@ -1332,7 +1337,7 @@ export function createConsole({ host = '127.0.0.1', port = 17321, onLog, recover
       if (name === 'SCPlayerExpUpdate' && session.client === instance && session.player && body.level > 0) {
         if (session.player.level !== body.level) {
           for (const key of ['adShop', 'afkAd', 'adSpeedUpProduce', 'adSpeedUpBuilding', 'adSpeedUpMuseum', 'weekPass', 'trialSweep', 'dailyRewards', 'chests',
-            'museumCollect', 'museumExplore', 'petCollect', 'petBreed', 'worldOnline', 'tradeTasks', 'seasonTasks',
+            'museumCollect', 'museumExplore', 'petCollect', 'petBreed', 'worldOnlineRewards', 'tradeTasks', 'seasonTasks',
             'museumRevenue', 'museumAchievements', 'heroGrowth', 'stageAuto', 'treasureLoot', 'comicDrama', 'tournamentDailyGift']) rewardSchedule(instance).clearTask(key);
         }
         session.player.level = body.level;
@@ -2493,14 +2498,19 @@ export function createConsole({ host = '127.0.0.1', port = 17321, onLog, recover
           ...Object.keys(current.settings.merchant).map(key => 'merchant.' + key),
           ...merchantTaskKeys.map(key => 'schedule.' + key),
         ]);
-        if (!fields.has(payload.key)) throw new SettingsError({ settings: '请选择有效的海商王活动设置' });
+        const preset = payload.key === 'preset' && merchantPresets.find(row => row.id === payload.value);
+        if (!preset && !fields.has(payload.key)) throw new SettingsError({ settings: '请选择有效的海商王活动设置' });
         if (!Number.isSafeInteger(payload.revision) || payload.revision !== current.revision
           || !current.revision && payload.baseRevision !== current.baseRevision) {
           throw new SettingsError({ revision: '海商王活动设置已变化，请重新读取后再保存' });
         }
         const next = structuredClone(current.settings);
-        const [group, field] = payload.key.split('.');
-        next[group][field] = payload.value;
+        if (preset) {
+          for (const [group, values] of Object.entries(preset.settings)) Object.assign(next[group], values);
+        } else {
+          const [group, field] = payload.key.split('.');
+          next[group][field] = payload.value;
+        }
         adoptPreferences(session, saveAutomationSettings(session.id, next, { revision: current.revision }));
         if (session.client) {
           for (const key of merchantTaskKeys) rewardSchedule(session.client).clearTask(key);
@@ -2849,7 +2859,7 @@ export function createConsole({ host = '127.0.0.1', port = 17321, onLog, recover
             const online = await readWorldOnlineReward(client, config, session.player);
             if (!settings.schedule.worldOnlineRewards) plan.notes.push('城战在线奖励自动领取未开启');
             else if (online.ready && worldOnlineRewardKey(session.player, online)) {
-              if (ledger.hasKey(worldOnlineRewardKey(session.player, online))) plan.notes.push('本档在线奖励已发送，等待计数确认，不重复领取');
+              if (ledger.hasKey(worldOnlineRewardKey(session.player, online))) plan.notes.push('本档已有领取记录，挂机将核对服务器计数');
               else plan.actions.push({ kind: 'worldOnlineReward', label: `领取城战在线奖励第 ${online.stage} 档`, costs: [] });
             }
             if (online.reason) plan.notes.push('城战在线奖励：' + online.reason);
@@ -3027,17 +3037,23 @@ export function createConsole({ host = '127.0.0.1', port = 17321, onLog, recover
       }
       if (route === 'POST /api/logs/clear') {
         needConfirm(jsonBody());
-        const { session } = scoped_(parsed);
-        const cleared = { account: session.id, before: logId, at: Date.now() };
-        session.log.length = 0;
-        session.operations.clear();
-        clearTimeout(session.batchOutput?.timer);
-        session.batchOutput = null;
-        session.upgradeInspection = null;
-        session.logClearBefore = cleared.before;
-        session.logClearAt = cleared.at;
+        const all = parsed.searchParams.get('scope') === 'all';
+        const selected = all ? null : scoped_(parsed).session;
+        const cleared = { ...(all ? { scope: 'all' } : { account: selected.id }), before: logId, at: Date.now() };
+        if (all) {
+          globalLog.length = 0;
+          allLogsCleared = cleared;
+        }
+        for (const session of all ? sessions.values() : [selected]) {
+          session.log.length = 0;
+          session.operations.clear();
+          clearTimeout(session.batchOutput?.timer);
+          session.batchOutput = null;
+          session.upgradeInspection = null;
+          session.logsCleared = all ? null : cleared;
+        }
         for (const stream of streams) {
-          if (stream.allAccounts || stream.account === session.id) writeStream(stream, `event: logs-cleared\ndata: ${JSON.stringify(cleared)}\n\n`);
+          if (all || stream.allAccounts || stream.account === cleared.account) sendLogClear(stream, cleared);
         }
         json(cleared);
         return;
@@ -3055,9 +3071,10 @@ export function createConsole({ host = '127.0.0.1', port = 17321, onLog, recover
         res.once('close', () => streams.delete(res));
         const logSession = sessions.get(res.account);
         const logSessions = res.allAccounts ? [...sessions.values()] : logSession ? [logSession] : [];
-        const since = Math.max(Number(req.headers['last-event-id'] ?? 0) || 0, res.allAccounts ? 0 : logSession?.logClearBefore ?? 0);
+        const since = Math.max(Number(req.headers['last-event-id'] ?? 0) || 0, res.allAccounts ? 0 : logSession?.logsCleared?.before ?? 0);
+        if (allLogsCleared && !sendLogClear(res, allLogsCleared)) return;
         for (const item of logSessions) {
-          if (item.logClearAt && !writeStream(res, `event: logs-cleared\ndata: ${JSON.stringify({ account: item.id, before: item.logClearBefore, at: item.logClearAt })}\n\n`)) return;
+          if (item.logsCleared && !sendLogClear(res, item.logsCleared)) return;
         }
         const entries = [...globalLog, ...logSessions.flatMap(item => item.log)]
           .sort((a, b) => a.id - b.id).slice(-LOG_LIMIT);

@@ -445,7 +445,8 @@ export async function surveyWorld(client, protocol, { config = null, player = nu
     let rewardExp = null;
     if (raw.isSpecial) {
       const row = specOrderCfg.get(raw.textId) ?? specOrderCfg.get(String(raw.textId));
-      rewardExp = Number((row?.reward ?? []).find((x) => x[0] === 'EXP')?.[1] ?? 0) || null;
+      const exp = (row?.reward ?? []).find((x) => x[0] === 'EXP')?.[1];
+      rewardExp = exp == null ? null : Number(exp);
     } else {
       let total = 0;
       let known = requirements.length > 0;

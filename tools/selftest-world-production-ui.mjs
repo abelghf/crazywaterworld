@@ -272,6 +272,23 @@ test('居民订单以材料标签和逐项需缺留数量展示缺口，关闭�
   assert.match(env.orderState(unknown, { autoDeliverOrders: true }).textContent, /等待核对.*库存读取失败/);
 });
 
+test('居民订单逐单显示经验和金币，区分零奖励、未知奖励和换单中的旧奖励', () => {
+  const env = fixture();
+  const orders = [
+    { rewardExp: 120, rewardGold: 480 },
+    { isSpecial: true, rewardExp: 0, rewardGold: null },
+    { rewardGold: 0 },
+    { decision: { status: 'refreshing' }, rewardExp: 120, rewardGold: 480 },
+    { refreshPending: true, rewardExp: 120, rewardGold: 480 },
+  ].map((order, index) => ({ index, requirements: [{ id: '烤鱼', num: 1 }], ...order }));
+  env.render(worldData(env, { orders }));
+  const { headers, rows } = env.tables[0];
+  const labels = headers.map(header => header.label ?? header);
+  assert.deepEqual(rows.map(row => ['经验', '金币'].map(label => cellText(row[labels.indexOf(label)]))), [
+    ['120', '480'], ['0', '—'], ['—', '0'], ['—', '—'], ['—', '—'],
+  ]);
+});
+
 {
   const env = fixture();
   const order = { index: 2, orderKey: 'slot-two', workerName: '蛙人',

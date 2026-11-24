@@ -185,6 +185,10 @@ export async function runLoop(client, protocol, {
     && isEnabled('merchantTrade'));
   const merchantActive = () => merchantSelected() && runtimeActive();
   const serverNowSeconds = () => Math.floor((Date.now() + (client.serverClockOffsetMs || 0)) / 1000);
+  const worldOnlineNext = () => {
+    if (!isEnabled?.('worldOnlineRewards')) return Infinity;
+    return (rewards.scheduledAt('worldOnlineRewards') ?? 0) * 1000 - (client.serverClockOffsetMs || 0);
+  };
   let merchantRunAfter = 0;
   const merchantNext = () => merchantSelected()
     ? Math.max(merchantRunAfter, merchantMonitor.nextCheckAt * 1000 - (client.serverClockOffsetMs || 0)) : Infinity;
@@ -270,6 +274,10 @@ export async function runLoop(client, protocol, {
         .some(member => member && !member.isNpc && (p.chasePlayerIds?.length || p.chaseNames.includes(member.name))))) treasureScan.invalidate();
     }
     if (name === 'SCWarDeclaration' || name === 'SCCityWarTime') { recallStarts.cityWar = null; cityWarScan.invalidate(); }
+    if (name === 'SCCityWarTime' || name === 'SCDailyTaskReset') {
+      rewards?.clearTask('worldOnlineRewards');
+      if (isEnabled?.('worldOnlineRewards')) scheduler.wake();
+    }
     const now = serverNowSeconds();
     const inWar = cityWarState?.startTime <= now && now < cityWarState?.endTime;
     if (inWar && name === 'SCity') cityWarScan.invalidate();
@@ -343,7 +351,7 @@ export async function runLoop(client, protocol, {
   scheduler.addCleanup(() => watchFleetMaintenance(client).hold([]));
   // Main-round checkpoints and the idle wait consult the same fleet deadlines.
   const mainScanNext = () => Math.min(treasureScan.nextAt(), cityWarScan.nextAt(), radarScan.nextAt(), resourceFieldsNext());
-  scheduler.listen(client, 'pong', () => scheduler.wakeIfEarlier(Math.min(treasureScan.nextAt(), cityWarScan.nextAt())));
+  scheduler.listen(client, 'pong', () => scheduler.wakeIfEarlier(Math.min(treasureScan.nextAt(), cityWarScan.nextAt(), worldOnlineNext())));
   const dispatchNext = () => dispatchSettingsPending ? 0 : Math.min(
     mainScanNext(), siliconNext(),
     fleetMaintenanceEnabled(getSettings()) ? maintenanceAt : Infinity,
@@ -416,8 +424,7 @@ export async function runLoop(client, protocol, {
     const allowDaily = (id, action) => !(getSettings() && action.request === 'ClickGoldRequest' && !action.body.free) && enabled(dailyTaskKey(id, action));
     const allowWorld = kind => enabled(worldTaskKey(kind));
     const active = key => !!isEnabled && selected(key) && runtimeActive();
-    const aliases = { worldOnlineRewards:['worldOnline'],
-      festivalActiveRewards:['festivalActive'], battleReportRewards:['campaignReports'],
+    const aliases = { festivalActiveRewards:['festivalActive'], battleReportRewards:['campaignReports'],
       weekSupplyFree:['weekChipFree','weekUniqueFree'],
       merchantRewards:['tradeTasks'], festivalFreeGift:['festivalGifts'],
       riverScore:['snowballFree'], riverHelp:['snowballFree'],
@@ -427,6 +434,19 @@ export async function runLoop(client, protocol, {
       && (enabled(key) || Boolean((getSettings() || key === 'battleReportRewards') && aliases[key]?.some(enabled)));
     const serviceActive = key => isActivityTaskAvailable(key, client) && nativePreferenceEnabled(getSettings(), key)
       && (active(key) || Boolean((getSettings() || key === 'battleReportRewards') && aliases[key]?.some(active)));
+    async function checkWorldOnline() {
+      if (worldOnlineNext() > Date.now()) return;
+      // 读取失败时也留出退避时间。确定的开场、档位或重试时间由领取流程覆盖。
+      rewards.defer('worldOnlineRewards', rewards.now() + 60);
+      try {
+        const entry = await claimWorldOnlineReward(client, config, player, {
+          ledger: usageLedger, enabled: () => serviceActive('worldOnlineRewards'), scheduler: rewards,
+        });
+        summary.tasks.results.push(entry);
+        if (!entry.skipped) summary.tasks.planned++;
+        logReward({ ...entry, taskKey: 'worldOnlineRewards' }, '联盟/城战');
+      } catch (error) { phaseFailure('tasks', '城战在线奖励', error, 'worldOnlineRewards'); }
+    }
     const takeoverReason = key => {
       if (key === 'heroGrowth') return '指定英雄养成';
       return null;
@@ -937,7 +957,8 @@ export async function runLoop(client, protocol, {
       }
       if (isEnabled && groupEnabled('领奖')) {
         const results = await observed(['tasks','dailyRewards','chests','gift','mail','afk'],()=>claimRewards(client, protocol, config, logReward, enabled, rememberDeadline, rewards, player, { settings, getSettings }));
-        summary.tasks = { planned: results.length, results };
+        summary.tasks.planned += results.length;
+        summary.tasks.results.push(...results);
         try { await claimAfkAdNow(); } catch (error) { phaseFailure('tasks', '闯关挂机广告收益', error); }
       }
       yield;
@@ -996,14 +1017,6 @@ export async function runLoop(client, protocol, {
           report: (entry, id, mode) => reportTrial(mode === 'paid' ? 'trialPaidSweep' : 'trialAdSweep', raids, entry, id) });
       }
       yield;
-      if (isEnabled && serviceEnabled('worldOnlineRewards')) {
-        try {
-          const entry = await claimWorldOnlineReward(client, config, player, { ledger: usageLedger, enabled: () => serviceActive('worldOnlineRewards'), scheduler: rewards });
-          summary.tasks.results.push(entry);
-          if (!entry.skipped) summary.tasks.planned++;
-          logReward({...entry,taskKey:'worldOnlineRewards'}, '联盟/城战');
-        } catch (error) { phaseFailure('tasks', '城战在线奖励', error, 'worldOnlineRewards'); }
-      }
       if (isEnabled) {
         const extraReport=entry=>{summary.tasks.results.push(entry);if(!entry.skipped)summary.tasks.planned++;logReward(entry,'免费领奖');};
         for(const [key,service] of [['vipDaily',claimVipDaily],['guildTitleReward',claimGuildTitleReward],['limitedFreeGifts',claimLimitedFree],['weekHeroStar',claimWeekHeroStar],['pirateRankRewards',(c,f,o)=>claimOpenRank(c,f,o,3)],['warRankRewards',(c,f,o)=>claimOpenRank(c,f,o,4)],['festivalActiveRewards',claimFestivalActive],['battleReportRewards',claimReportRewards],['leagueCollect',claimLeagueCollect],['leaguePassRewards',claimLeaguePass],['weekSupplyFree',claimWeekSupply],['worldBossRewards',claimWorldBossDamage],['comicDrama',claimComicDrama],['tournamentDailyGift',claimTournamentDaily]]) {
@@ -1065,7 +1078,7 @@ export async function runLoop(client, protocol, {
       if (isEnabled) {
         // 保存的旧开关仍可用；有详细配置时，重叠协议统一走新账本，防止跨入口重发。
         const report = serviceReport('tasks', '兼容领奖');
-        const mapped = new Set(['worldOnline','tradeTasks','worldBossDamage','vipDaily','campaignReports','weekChipFree','weekUniqueFree','festivalActive','snowballFree']);
+        const mapped = new Set(['tradeTasks','worldBossDamage','vipDaily','campaignReports','weekChipFree','weekUniqueFree','festivalActive','snowballFree']);
         const rewardActive = key => legacyActive(key) &&
           !['guildTitleReward','heroRecruitRewards'].includes(key) &&
           !(getSettings() && (mapped.has(key) || ['festivalSign','compassSpin','weekHeroStar','weekOrderSubmit'].includes(key)));
@@ -1414,7 +1427,11 @@ export async function runLoop(client, protocol, {
       await checkDispatch();
     }
     await scheduler.runSteps(mainSteps(), {
-      nextAt: mainScanNext, runPending: checkDispatch,
+      nextAt: () => Math.min(mainScanNext(), worldOnlineNext()),
+      runPending: async () => {
+        if (mainScanNext() <= Date.now()) await checkDispatch();
+        await checkWorldOnline();
+      },
       afterStep: () => checkFactoryDue({ checkpoint: true }),
     });
     mainRoundFinished = true;
@@ -1433,7 +1450,7 @@ export async function runLoop(client, protocol, {
           const weeklyAt = nextWeeklyActivityBoundary(client, getWeeklySettings(), roundStartedMs);
           const activityAt = activityVersion !== roundActivityVersion ? 0
             : nextActivityBoundary(client, activityConfigured, roundStartedMs);
-          const wakeAt = Math.min(nextRound, activityAt, weeklyAt, factorySchedule.nextAt(), dispatchNext(), extendedNext(), merchantNext(), appointmentNext(),
+          const wakeAt = Math.min(nextRound, activityAt, weeklyAt, factorySchedule.nextAt(), dispatchNext(), extendedNext(), merchantNext(), appointmentNext(), worldOnlineNext(),
             isEnabled && enabled('upgrade') ? upgradeAt : Infinity,
             antiqueEnabled(getSettings()) ? antiqueAt : Infinity, nextAfkCheck());
           if (wakeAt > Date.now()) await scheduler.waitUntil(wakeAt);
@@ -1444,6 +1461,7 @@ export async function runLoop(client, protocol, {
           }
           // 推送或保存设置可能早于原定时间唤醒；必须重读当前到期时间与开关。
           await scheduler.runDue('dispatch', dispatchNext, checkDispatch);
+          await scheduler.runDue('worldOnlineRewards', worldOnlineNext, checkWorldOnline);
           const checkUpgrade = !!isEnabled && enabled('upgrade') && upgradeAt <= Date.now();
           if (factorySchedule.due() || checkUpgrade) {
             await scheduler.runDue('factory', () => Math.min(factorySchedule.nextAt(),
