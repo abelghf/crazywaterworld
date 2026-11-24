@@ -475,7 +475,7 @@ const configGroups = [
   { id: 'cityWar', title: '联盟城战', category: 'world', fields: [
     configField('schedule.guildWelfare', '领取联盟福利礼包'),
     configField('schedule.guildTitleReward', '联盟每日职级礼包', 'switch', { help:'默认关闭。按服务器提供的可领取职级核对每日礼包，不以当前职位替代；确认奖励回执及当日领取时间后才记为成功。' }),
-    configField('schedule.worldOnlineRewards', '领取城战在线奖励', 'switch', { help: '在服务器城战时段内，按实际计时逐档领取免费在线奖励。独立于下方城战接续开关；默认关闭，保存后随挂机检查，不自动启动挂机。请求结果未知时等待计数确认，不重复领取。' }),
+    configField('schedule.worldOnlineRewards', '领取城战在线奖励', 'switch', { help: '挂机时按每档到期时间领取。上一档在城战结束前领取，当天仍可补领下一档。结果未知时，挂机会重新核对计数再决定是否重试。默认关闭，可独立于城战接续开启。' }),
     configField('cityWar.enabled', '城战接续总开关', 'switch', { help: '防守队从开战起由工具接管，进攻队按原生委任次数接续。可在本页只读预览各队的接续条件。' }),
     configField('cityWar.fleetIds', '城战参与舰队', 'multi', { catalog: 'expeditionFleets', empty: '请选择参与接续的舰队' }),
     configField('cityWar.defenceFleetIds', '舰队职责与策略', 'cityWarRoles', { parent: 'cityWar.fleetIds', wide: true, help: '为已选舰队分别选择进攻或防守；展开后可设置本队策略、维修加速和派遣加速。策略可跟随全局，也可独立设置目标来源、城市和优先策略。加速需开启城战接续和“基础 → 加速与钻石”中的自动钻石消耗总开关，每队每项上限与全局钻石预算同时生效。切换职责保留本队另一套策略；新加入的舰队默认进攻。进攻只选择本盟已宣战且仍属于敌方的城市，防守只选择被宣战且仍属于本盟的城市；没有对应目标时等待，不自动换职责。使用舰队已保存的英雄编队，不自动换阵。城战开始后，工具先关闭防守队的原生委任，确认后按防守目标派遣。进攻队按下方次数接管。' }),

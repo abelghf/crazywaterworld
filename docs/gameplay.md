@@ -672,7 +672,7 @@ node tools/selftest-describe.mjs    # 字段布局还原自检
 
 以下规则读自 v75/v76 客户端和配置表，均由离线测试覆盖；其中海商王已增加真实账号只读和受保护单步门控验证（2026-11-13 08:35 实测处于 10:00–22:00 窗口外，未发送写请求），完整跨港航程仍需按实际到港结果确认。
 
-- **世界在线奖励：** `CounterInfoRequest` 的 `DAILY_WORLD_ONLINE_RWD` 给出已领档位和上次领取时间。当天 20:00 后开放，上次领取已在 21:00 后则当天结束，每档按上次领取时间计时。领取请求没有声明回包类型，所以用重新读取的计数确认结果。
+- **领取城战在线奖励** 使用 `CounterInfoRequest` 返回的 `DAILY_WORLD_ONLINE_RWD` 核对已领档位和上次领取时间。当天 20:00 后开放，每档从上次领取时计时。上一档在 21:00 前领取，当天仍可在到期后补领下一档。系统回读计数确认到账。旧配置中的「世界在线奖励」会并入此开关。
 - **海商王联盟任务：** `TradeGotTaskRequest` 的字段是 `day`，按天领取，只领活动已进行到的天数。活动时间取自 `SCAllActivity.trade`。
 - **海商王情报共享（#31，v76）：** `TradeCityReportRequest` 仅需 `cityId`，没有对应 `TradeCityReportResponse`；客户端在本港 `TradeCityResponse.isReport` 为 false 时共享，通过 `SCTradeCityReport` 更新情报。自动共享默认开启但仍受走商及所属分组开关控制，只处理已经停靠的当前港；发送后回读 `isReport` 为 true 才确认“本港情报已共享”，不能凭联盟 `guildReportNum` 增加认定本人首报。紧缺每天首个贸易时刻更新（当前为北京时间10:00），不是每两小时价格刷新；防重按活动期次、联盟、港口及紧缺周期隔离，未知结果先核对，不盲目重发，记录与买卖待确认状态分开。已有共享跳过，失败不阻塞交易，达到利润上限仍可共享当前港。2026-11-14 真实读取时本港已共享、联盟17港均已有紧缺情报和共享人，因此未发送共享请求，写入成功分支尚未在线验证。
 - **海商王走商（2026-11-12 核对 v76）：** `TradeGuildRadarResponse.radar` 提供可航行港口，未共享紧缺货仍可选港；不能用场景全部城市替代商港列表。客户端 `TradeUtil.openCiytTrade` 只查询当前港，未确认异地 `TradeCity` 可读，因此远端收益统一标为风险折扣估算，到港重读实价。`TradePlayerGoods` 的 `pid/goodsId/num/buyPrice/cityId` 是独立采购批次；禁止在来源港出售。`DispTradeGoods.stock` 为已购量，可购库存是 `TradeGoodsCfg.maxCount-stock`，且联盟共享，发送前须复查。`ActivityTradeCfg` 提供贸易时段、航程、加速时长和报价库存刷新；`TipsDescCfg[海商王]` 说明紧缺每天首个贸易时刻更新，不等于每次价格刷新。亏损不享受利润加成、不增加累计利润；只有明确配置清仓亏损上限才允许亏损出售。

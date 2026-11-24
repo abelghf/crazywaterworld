@@ -1334,7 +1334,7 @@ export function createConsole({ host = '127.0.0.1', port = 17321, onLog, recover
       if (name === 'SCPlayerExpUpdate' && session.client === instance && session.player && body.level > 0) {
         if (session.player.level !== body.level) {
           for (const key of ['adShop', 'afkAd', 'adSpeedUpProduce', 'adSpeedUpBuilding', 'adSpeedUpMuseum', 'weekPass', 'trialSweep', 'dailyRewards', 'chests',
-            'museumCollect', 'museumExplore', 'petCollect', 'petBreed', 'worldOnline', 'tradeTasks', 'seasonTasks',
+            'museumCollect', 'museumExplore', 'petCollect', 'petBreed', 'worldOnlineRewards', 'tradeTasks', 'seasonTasks',
             'museumRevenue', 'museumAchievements', 'heroGrowth', 'stageAuto', 'treasureLoot', 'comicDrama', 'tournamentDailyGift']) rewardSchedule(instance).clearTask(key);
         }
         session.player.level = body.level;
@@ -2851,7 +2851,7 @@ export function createConsole({ host = '127.0.0.1', port = 17321, onLog, recover
             const online = await readWorldOnlineReward(client, config, session.player);
             if (!settings.schedule.worldOnlineRewards) plan.notes.push('城战在线奖励自动领取未开启');
             else if (online.ready && worldOnlineRewardKey(session.player, online)) {
-              if (ledger.hasKey(worldOnlineRewardKey(session.player, online))) plan.notes.push('本档在线奖励已发送，等待计数确认，不重复领取');
+              if (ledger.hasKey(worldOnlineRewardKey(session.player, online))) plan.notes.push('本档已有领取记录，挂机将核对服务器计数');
               else plan.actions.push({ kind: 'worldOnlineReward', label: `领取城战在线奖励第 ${online.stage} 档`, costs: [] });
             }
             if (online.reason) plan.notes.push('城战在线奖励：' + online.reason);

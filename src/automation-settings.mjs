@@ -22,7 +22,7 @@ export const settingsFile = () => path.join(dataDirectory(), 'automation-setting
 export const SETTINGS_FORMAT = 'crazywaterworld-automation';
 // 文件 version / 账号 settingsVersion 是格式编号，只随结构迁移调整；
 // revision 是每次保存递增的修订号，仅用于并发冲突检查，不能用作格式版本。
-export const SETTINGS_SCHEMA_VERSION = 62;
+export const SETTINGS_SCHEMA_VERSION = 63;
 const LEGACY_SETTINGS_FORMAT = 'crazywaterword-automation';
 const treasureQualityLabels = { ORANGE: '万吨货轮', PURPLE: '中型货轮', BLUE: '小型货轮' };
 const treasureChaseDefaults = {
@@ -248,7 +248,7 @@ const nativeFields = {
   tasks: ['loop.tasks', 'resident.rewards'],
 };
 export function applyNativeTask(settings, key, enabled) {
-  const result = copy(settings);
+  const result = copy(migrateVersion62Settings(settings));
   if (removedScheduleKeys.has(key)) { delete result.schedule[key]; return result; }
   if (retiredAutomationTasks.has(key)) enabled = false;
   if (Object.hasOwn(result.schedule, key)) result.schedule[key] = enabled;
@@ -308,7 +308,7 @@ export function settingsFromLegacyNative(tasks, options) {
 }
 
 export function nativeTaskValues(settings, current) {
-  const result = { ...current, ...settings.schedule };
+  const result = { ...current, ...migrateVersion62Settings(settings).schedule };
   delete result.weekFactory;
   delete result.vipDailyGift;
   for (const [key, fields] of Object.entries(nativeFields)) result[key] = fields.some(field => { const [group, name] = field.split('.'); return settings[group][name]; });
@@ -380,6 +380,7 @@ function validateCurrentSettings(input, { partial = false, catalog = null } = {}
   input = migrateVersion59Settings(migrateVersion58Settings(input));
   input = migrateVersion60Settings(input);
   input = migrateVersion61Settings(input);
+  input = migrateVersion62Settings(input);
   if (plain(input?.resourceFields) && !Object.hasOwn(input.resourceFields, 'refillAfterLoss')) {
     input = { ...input, resourceFields: { ...input.resourceFields, refillAfterLoss: false } };
   }
@@ -750,6 +751,7 @@ settingsMigrations.set(58, migrateVersion58Settings);
 settingsMigrations.set(59, migrateVersion59Settings);
 settingsMigrations.set(60, migrateVersion60Settings);
 settingsMigrations.set(61, migrateVersion61Settings);
+settingsMigrations.set(62, migrateVersion62Settings);
 const supportedSettingsVersion = version => Number.isSafeInteger(version) && version >= 1;
 const entrySettingsVersion = entry => Object.hasOwn(entry, 'settingsVersion') ? entry.settingsVersion : 1;
 function newestSettingsVersion(store) {
@@ -1033,15 +1035,23 @@ function migrateVersion8Settings(settings) {
 // Version 10 unifies the world Boss reward switches. Either old switch could
 // enable claims; preserve that choice once without enabling fleet dispatch.
 function migrateVersion9Settings(settings) {
-  if (!plain(settings) || !plain(settings.schedule) || !Object.hasOwn(settings.schedule, 'worldBossDamage')) return settings;
+  return mergeRewardSwitch(settings, 'worldBossDamage', 'worldBossRewards');
+}
+
+function migrateVersion62Settings(settings) {
+  return mergeRewardSwitch(settings, 'worldOnline', 'worldOnlineRewards');
+}
+
+function mergeRewardSwitch(settings, legacyKey, currentKey) {
+  if (!plain(settings) || !plain(settings.schedule) || !Object.hasOwn(settings.schedule, legacyKey)) return settings;
   const schedule = { ...settings.schedule };
-  for (const key of ['worldBossDamage', 'worldBossRewards']) {
+  for (const key of [legacyKey, currentKey]) {
     if (Object.hasOwn(schedule, key) && typeof schedule[key] !== 'boolean') {
       throw new SettingsError({ ['schedule.' + key]: '开关值必须为 true 或 false' });
     }
   }
-  schedule.worldBossRewards = schedule.worldBossRewards === true || schedule.worldBossDamage === true;
-  delete schedule.worldBossDamage;
+  schedule[currentKey] = schedule[currentKey] === true || schedule[legacyKey] === true;
+  delete schedule[legacyKey];
   return { ...settings, schedule };
 }
 
