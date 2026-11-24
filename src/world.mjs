@@ -21,7 +21,7 @@ import { randomUUID, createHash } from 'node:crypto';
 import { normalize } from './worlds.mjs';
 import { upgradeReason } from './building-upgrade-log.mjs';
 import { linkOperationResult } from './operation-log.mjs';
-import { residentFilter, resourceReserve, worldPreferenceEnabled, worldActionAllowed, factoryItemSpeedEnabled, exactAutomationId, AutomationSkip, createActionGuard } from './automation-policy.mjs';
+import { residentFilter, residentOrderStockWarning, resourceReserve, worldPreferenceEnabled, worldActionAllowed, factoryItemSpeedEnabled, exactAutomationId, AutomationSkip, createActionGuard } from './automation-policy.mjs';
 import { readWeekOrder } from './activities.mjs';
 import { RESOURCE, displayMaterial } from './config.mjs';
 import { captureFarmMaterialState, farmInventory, settleFarmMaterialState } from './farm-planting.mjs';
@@ -654,12 +654,8 @@ export function manualResidentOrderDecision(survey, order, config) {
   if (!order.requirements.length || order.requirements.some(r => !r.id || !Number.isSafeInteger(r.num) || r.num <= 0)) {
     return { status: 'unknown', reason: '尚未收到完整订单需求' };
   }
-  if (!survey.stockKnown) return { status: 'unknown', reason: '未能读取仓库库存' };
-  if (order.missing.length) {
-    const missing = order.missing.map(({ id, num }) => displayMaterial(config, id) + ' ×' + num);
-    return { status: 'missing', reason: '仓库还缺 ' + missing.join('、') };
-  }
-  return { status: 'ready', reason: '仓库材料已齐，手动提交可使用挂机预留的材料' };
+  const warning = residentOrderStockWarning(survey.stockKnown ? survey.stock : null, order.requirements, config);
+  return { status: 'ready', reason: warning || '手动提交这张订单，由游戏确认交付结果' };
 }
 
 function residentDeliveryAction(order, orderOfTheDay, weeklyBorrowed = [], borrowedText = '') {
@@ -1866,7 +1862,8 @@ async function confirmResidentOrder(client, protocol, step, config, player, carg
   if (!order || (step.orderKey && order.orderKey !== step.orderKey)) return { reason: '这条居民订单已刷新或已处理，请查看当前订单' };
   if (step.manualCheck) {
     const decision = manualResidentOrderDecision(survey, order, config);
-    return decision.status === 'ready' ? { action: residentDeliveryAction(order, survey.orderOfTheDay) } : { reason: decision.reason };
+    if (decision.status !== 'ready') return { reason: decision.reason };
+    return { action: { ...residentDeliveryAction(order, survey.orderOfTheDay), manualCheck: true, acceptStockWarning: step.acceptStockWarning } };
   }
   if (survey.orderCheckError) return { reason: survey.orderCheckError };
   if (order.workerId !== step.workerId || order.textId !== step.textId ||
@@ -1912,18 +1909,19 @@ export async function rerollResidentOrder(client,protocol,{index,orderKey,config
  }catch(error){if(error.prompt&&error.request==='DenyOrderRequest')ledger.cancel(ticket);throw error;}
 }
 
-export async function submitResidentOrder(client, protocol, { index, orderKey, config, player, enabled = () => true }) {
+export async function submitResidentOrder(client, protocol, { index, orderKey, config, player, acceptStockWarning = false, enabled = () => true }) {
   if (!Number.isSafeInteger(index) || index < 0 || index > 2147483647 || typeof orderKey !== 'string' || !orderKey) {
     throw new Error('请从当前居民订单列表中选择要交付的一单');
   }
   if (!enabled()) throw new Error('账号托管状态已变化，已取消手动交单');
   if (trackResidentOrders(client).get(index)?.key !== orderKey) throw new Error('这条居民订单已刷新或已处理，请查看当前订单');
   const step = { kind: 'finishOrder', request: 'FinishWorkerOrderRequest', response: 'FinishWorkerOrderResponse',
-    body: { index }, orderKey, manualCheck: true, label: '交付居民订单 #' + index };
+    body: { index }, orderKey, manualCheck: true, acceptStockWarning, label: '交付居民订单 #' + index };
   const { results } = await runWorld(client, protocol, { actions: [step] }, {
     config, player, allowMutate: true, enabled,
   });
   const [entry] = results;
+  if (entry?.stockWarning) return { index, stockWarning: entry.stockWarning };
   if (!entry?.ok) throw new Error(entry?.error || '账号托管状态已变化，已取消手动交单');
   const reward = normalize(entry.body.reward);
   const prize = reward.asset.map(item => displayMaterial(config, item.id) + ' ×' + item.num).join('、');
@@ -2119,7 +2117,7 @@ export async function runWorld(client, protocol, plan, {
       // resource barrier, while a manual order keeps its own explicit consent.
       const localGuard = step.manualCheck || !beforeStep ? createActionGuard(client,
         () => step.manualCheck ? null : getSettings?.() ?? settings, null,
-        { player, enabled: () => enabled(step.kind) }) : null;
+        { player, config, enabled: () => enabled(step.kind) }) : null;
       const prepareAction = localGuard?.before ?? beforeStep;
       const finishAction = localGuard?.after ?? afterStep;
       const cancelAction = localGuard?.cancel ?? cancelStep;
@@ -2253,6 +2251,7 @@ export async function runWorld(client, protocol, plan, {
           blocked.add(step.kind);
         }
         entry = { step, ok: false, ...(error.code === 'AUTOMATION_SKIP' ? { skipped: true } : {}), error: error.message };
+        if (error.stockWarning) entry.stockWarning = error.stockWarning;
         if (step.request === 'FarmPlantRequest' && prepared && !notSent && !(error.prompt && error.request === actual.request)) {
           entry.status = 'unknown';
           entry.reason = '播种响应未确认：' + error.message;

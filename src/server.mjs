@@ -4636,7 +4636,8 @@ export function createConsole({ host = '127.0.0.1', port = 17321, onLog, recover
           throw new Error('订单信息不完整，请刷新居民订单');
         }
         const isReroll=route.endsWith('/reroll');
-        const key = route+':'+index + ':' + orderKey;
+        const acceptStockWarning = !isReroll && payload.acceptStockWarning === true;
+        const key = JSON.stringify([route, index, orderKey, acceptStockWarning]);
         let job = session.residentJobs.get(key);
         if (!job) {
           const client = session.client, generation = session.generation;
@@ -4644,7 +4645,8 @@ export function createConsole({ host = '127.0.0.1', port = 17321, onLog, recover
           job = enqueue(session, async () => {
             if (!enabled()) throw new Error('账号连接已变化，请刷新居民订单');
             const result = await (isReroll?rerollResidentOrder:submitResidentOrder)(client, protocolFor(client), { index, orderKey, enabled, ledger:usageFor(session),
-              config: loadConfigSafe(), player: session.player });
+              config: loadConfigSafe(), player: session.player, acceptStockWarning });
+            if (result.stockWarning) return { ok: false, ...result };
             emit(session, 'info', result.label, { worldUpdated: true });
             return { ok: true, ...result };
           }, (isReroll?'手动换单 #':'手动提交居民订单 #') + index).finally(() => session.residentJobs.delete(key));

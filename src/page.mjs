@@ -1470,33 +1470,46 @@ const pendingResidentOrders = new Set();
 function residentOrderButton(order) {
   const account = current, key = account + ':' + order.index;
   const pending = pendingResidentOrders.has(key);
-  const button = smallButton(pending ? '提交中…' : '提交订单');
+  const button = smallButton(pending ? '提交中…' : '强制提交');
   button.dataset.residentOrder = String(order.index);
   const ready = Boolean(order.orderKey) && order.manualDecision?.status === 'ready';
   button.disabled = pending || !ready || !account || snapshot.paused || disconnected.has(account);
   button.title = pending ? '账号忙时自动排队，结果见运行日志' : order.manualDecision?.reason || '请先刷新订单状态';
-  button.setAttribute('aria-label', '提交' + (order.workerName || '居民') + '的订单 #' + order.index);
-  button.onclick = async () => {
-    if (button.disabled || pendingResidentOrders.has(key) || current !== account || snapshot.paused || disconnected.has(account)) return;
+  button.setAttribute('aria-label', '强制提交' + (order.workerName || '居民') + '的订单 #' + order.index);
+  const submit = async (acceptStockWarning = false) => {
+    if (pendingResidentOrders.has(key) || current !== account || snapshot.paused || disconnected.has(account)) return;
     pendingResidentOrders.add(key);
     button.disabled = true;
-    button.textContent = '提交中…';
+    button.textContent = acceptStockWarning ? '提交中…' : '正在核对…';
+    let stockWarning;
     try {
-      await call('/api/world/order/submit', { method: 'POST', body: JSON.stringify({ confirm: true, index: order.index, orderKey: order.orderKey }) });
+      const result = await call('/api/world/order/submit', { method: 'POST', body: JSON.stringify({
+        confirm: true, index: order.index, orderKey: order.orderKey, acceptStockWarning,
+      }) });
+      stockWarning = result.stockWarning;
     } catch (error) {
       if (current === account) reportError(error, '提交居民订单');
     } finally {
       pendingResidentOrders.delete(key);
       if (current === account) {
         const displayed = $('world-orders').querySelector('[data-resident-order="' + order.index + '"]');
-        if (displayed) {
-          displayed.disabled = true;
-          displayed.textContent = '待刷新';
+        if (stockWarning && displayed === button) {
+          button.disabled = snapshot.paused || disconnected.has(account);
+          button.textContent = '强制提交';
+        } else {
+          if (displayed) {
+            displayed.disabled = true;
+            displayed.textContent = '待刷新';
+          }
+          refreshManualWorld(true);
         }
-        refreshManualWorld(true);
       }
     }
+    if (stockWarning && current === account && !snapshot.paused && !disconnected.has(account)) {
+      openConfirm((order.workerName || '居民') + '的订单 #' + order.index, [el('p', '', stockWarning)], () => submit(true), '继续提交');
+    }
   };
+  button.onclick = () => { if (!button.disabled) return submit(); };
   return button;
 }
 

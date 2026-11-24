@@ -1,7 +1,7 @@
 import { newStateFunction } from './fixtures/console-state.mjs';
 import assert from 'node:assert/strict';
 import { PAGE } from '../src/page.mjs';
-import { inventoryStockRows } from '../src/world.mjs';
+import { inventoryStockRows, manualResidentOrderDecision } from '../src/world.mjs';
 
 const script = [...PAGE.matchAll(/<script\b[^>]*>([\s\S]*?)<\/script>/g)]
   .map(match => match[1]).find(value => value.includes('function renderWorld('));
@@ -121,6 +121,7 @@ function fixture() {
     let orderClockOffset = 0;
     ${script.slice(script.indexOf('function orderState('), start)}
     env.orderState = orderState;
+    env.residentOrderButton = residentOrderButton;
     ${script.slice(durationStart, durationEnd)}
     ${script.slice(start, end)}
     ${script.slice(end, refreshEnd)}
@@ -270,6 +271,41 @@ test('居民订单以材料标签和逐项需缺留数量展示缺口，关闭�
   const unknown = { decision: { status: 'unknown', reason: '库存读取失败' } };
   assert.match(env.orderState(unknown, { autoDeliverOrders: true }).textContent, /等待核对.*库存读取失败/);
 });
+
+{
+  const env = fixture();
+  const order = { index: 2, orderKey: 'slot-two', workerName: '蛙人',
+    requirements: [{ id: '淡水', num: 15 }], missing: [{ id: '淡水', num: 15 }],
+    decision: { status: 'filtered', reason: '金币奖励未达到 3000' } };
+  order.manualDecision = manualResidentOrderDecision({ stockKnown: true, stock: new Map() }, order, { materialName: id => id });
+  assert.match(env.orderState(order, { autoDeliverOrders: true }).textContent, /已过滤.*金币奖励未达到 3000/);
+  const button = env.residentOrderButton(order);
+  env.node('world-orders').appendChild(button);
+  assert.equal(button.textContent, '强制提交');
+  assert.equal(button.disabled, false);
+  assert.match(button.title, /还缺淡水 ×15/);
+  const requests = [];
+  env.call = async (path, options) => {
+    if (path === '/api/world') return worldData(env);
+    assert.equal(path, '/api/world/order/submit');
+    const payload = JSON.parse(options.body);
+    requests.push(payload);
+    return payload.acceptStockWarning ? { ok: true } : { stockWarning: '仓库库存不足，还缺淡水 ×4、酒精 ×2。' };
+  };
+  const checking = button.onclick();
+  button.onclick();
+  await checking;
+  assert.equal(env.dialog.title, '蛙人的订单 #2');
+  assert.match(env.dialog.body[0].textContent, /淡水 ×4、酒精 ×2/);
+  assert.equal(env.dialog.label, '继续提交');
+  const expected = { confirm: true, index: 2, orderKey: 'slot-two', acceptStockWarning: false };
+  assert.deepEqual(requests, [expected]);
+  assert.equal(button.disabled, false, '关闭提示后可重新核对同一张订单');
+  await env.dialog.confirm();
+  assert.deepEqual(requests, [expected, { ...expected, acceptStockWarning: true }]);
+  passed++;
+  console.log('通过：挂机过滤的订单仍可点击，玩家确认库存缺口后才强制提交');
+}
 
 function detailRow(button) {
   const row = button.parent;
