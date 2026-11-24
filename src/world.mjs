@@ -131,6 +131,28 @@ export function manualFactoryProducts(building, survey, config, incoming) {
   return products;
 }
 
+// 自动生产只按建筑等级和配方开放状态列出产物；队列是否已满、成品是否满仓
+// 都不影响游戏内更换自动生产对象，所以这里不能复用 manualFactoryProducts。
+export function autoFactoryProducts(building, survey, config) {
+  if (!building.level || !building.type) return [];
+  const products = [];
+  for (const recipe of rowsOf(config, 'BuildingProduceCfg')) {
+    if (recipe.buildType !== building.type || !Number.isSafeInteger(recipe.unlockLevel) || recipe.unlockLevel > building.level
+      || !factoryRecipeAvailability(recipe, survey.festivals, survey.serverNow).allowed) continue;
+    const costs = factoryRecipeCosts(recipe);
+    if (!costs) continue;
+    const inputs = costs.map(({ id, num }) => ({ id, name: displayMaterial(config, id), num,
+      owned: survey.stockKnown ? survey.have(id) : null }));
+    let reason = '';
+    if (!survey.stockKnown || !survey.stockCap) reason = '库存未同步';
+    else if (survey.have(recipe.itemId) >= survey.stockCap) reason = '成品已达存量上限';
+    else if (inputs.some(input => input.owned < input.num)) reason = '原料不足';
+    products.push({ productId: recipe.itemId, name: displayMaterial(config, recipe.itemId), inputs, reason,
+      seconds: recipe.produceTime });
+  }
+  return products;
+}
+
 const lastNativeProducts = new WeakMap();
 
 function nativeFactoryIdentity(player, buildingId) {
