@@ -327,13 +327,26 @@ summary.plan-material-label::after { width:12px; height:12px }
 }
 #world-view:empty,#world-factories:empty,.world-orders-panel:has(#world-orders:empty):has(#resident-order-progress:empty) { display:none }
 #world-orders { display:grid; grid-template-columns:minmax(0,1fr); gap:12px }
-.resident-order-progress { display:grid; gap:7px; margin:0 0 12px; font-variant-numeric:tabular-nums }
+.resident-order-progress { display:grid; grid-template-columns:minmax(0,1fr); gap:5px; margin:0 0 12px; font-variant-numeric:tabular-nums }
 .resident-order-progress[hidden] { display:none }
 .resident-order-progress-head { display:flex; align-items:baseline; justify-content:space-between; gap:12px; font-size:13px }
-.resident-order-progress-head strong { font-size:22px; font-weight:600; letter-spacing:.02em }
-.resident-order-progress-track { height:8px; overflow:hidden; border-radius:999px; background:color-mix(in oklab,var(--border) 75%,transparent) }
-.resident-order-progress-track i { display:block; width:0; height:100%; border-radius:inherit; background:linear-gradient(90deg,var(--primary),color-mix(in oklab,var(--primary) 65%,var(--warning))); transition:width .25s ease }
+.resident-order-progress-head strong { font-size:18px; font-weight:600 }
+.resident-order-limit-label { font-size:12px; font-weight:400; color:var(--muted-foreground) }
+.resident-order-timeline { overflow-x:auto }
+.resident-order-scale { display:grid; grid-template-columns:minmax(0,1fr) }
+.resident-order-scale:has(.resident-reward-steps) { min-width:calc(var(--scale-intervals) * 20px); margin-inline-end:12px }
+.resident-order-progress-track { grid-area:1/1; align-self:start; height:2px; overflow:hidden; border-radius:999px; background:linear-gradient(to right,var(--border) var(--goal),transparent var(--goal)),repeating-linear-gradient(to right,var(--border) 0 3px,transparent 3px 6px) }
+.resident-order-scale:has(.resident-reward-steps) .resident-order-progress-track { margin-top:4px }
+.resident-order-progress-track i { display:block; width:0; height:100%; border-radius:inherit; background:var(--primary); transition:width .25s ease }
 .resident-order-progress-note { font-size:12px; line-height:1.4 }
+.resident-reward-steps { grid-area:1/1; display:grid; grid-template-columns:minmax(0,1fr); margin:0; padding:0; list-style:none }
+.resident-reward-node { grid-area:1/1; position:relative; justify-self:start; transform:translateX(-50%); max-width:24px; display:grid; grid-template-columns:minmax(0,1fr); grid-template-rows:10px auto; justify-items:center; row-gap:2px; color:var(--muted-foreground); font-size:11px; line-height:1.2 }
+.resident-reward-node::before { content:""; align-self:center; width:6px; height:6px; border:1px solid currentColor; border-radius:50%; background:var(--card) }
+.resident-reward-node[data-status="已领取"]::before { border-color:var(--primary); background:var(--primary) }
+.resident-reward-node:is([data-status="下一档"],[data-status="可领取"],[data-status="已达标"]) { color:var(--foreground); font-weight:600 }
+.resident-reward-node[data-status="下一档"]::before { width:8px; height:8px; border:2px solid var(--primary) }
+.resident-reward-node:is([data-status="可领取"],[data-status="已达标"])::before { border-color:var(--success); background:var(--success) }
+.resident-reward-node:is([data-status="超出账号上限"],[data-status="超挂机上限"])::before { border-style:dashed }
 #world-factories { display:grid; grid-template-columns:minmax(0,1fr); align-items:start; gap:12px }
 #world-factories h2 { margin:0; font:inherit }
 #world-factories [data-slot=card]:has([data-building-list][hidden]) > [data-slot=card-content] { display:none }

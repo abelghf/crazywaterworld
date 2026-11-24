@@ -1976,16 +1976,16 @@ export function createConsole({ host = '127.0.0.1', port = 17321, onLog, recover
     return { ...survey, text: formatTaskPlan(survey) };
   }
 
-  function orderProgressView(config, survey, player) {
-    const order = survey.orderOfTheDay ?? {};
+  function orderProgressView(config, survey, player, configuredCap) {
+    const order = survey.orderOfTheDay;
+    if (!order) return null;
     const tier = nextOrderTier(config, { ...order, player, now: survey.serverNow });
     const baseMax = Number(config?.tables?.OrderParamCfg?.data
       ?.find(row => row.paramName === '订单每日上限')?.paramValue ?? 0);
-    const cap = Number.isSafeInteger(survey.residentOrderLimit) && survey.residentOrderLimit > 0
-      ? survey.residentOrderLimit
-      : (Number.isSafeInteger(baseMax) && baseMax > 0 ? baseMax : 0);
-    const bonus = Math.max(0, cap - baseMax);
-    const total = tier.tier ?? cap;
+    const cap = survey.residentOrderLimit;
+    const setting = configuredCap > 0 ? configuredCap : null;
+    const useSetting = setting !== null && (cap === null || setting < cap);
+    const total = useSetting ? setting : cap;
     const orderNum = Number(order.orderNum ?? 0);
     return {
       orderNum,
@@ -1994,10 +1994,11 @@ export function createConsole({ host = '127.0.0.1', port = 17321, onLog, recover
       reqNums: tier.reqNums,
       claimable: tier.claimable,
       baseMax,
-      bonus,
+      bonus: cap === null ? null : cap - baseMax,
       cap,
+      configuredCap: setting,
       total,
-      totalKind: tier.tier == null ? 'dailyCap' : 'rewardTier',
+      totalKind: useSetting ? 'configuredCap' : 'dailyCap',
       percent: total > 0 ? Math.min(100, Math.round(orderNum / total * 1000) / 10) : 0,
     };
   }
@@ -2104,7 +2105,7 @@ export function createConsole({ host = '127.0.0.1', port = 17321, onLog, recover
         orderNum: survey.orderOfTheDay.orderNum ?? 0,
         dailyLimit: survey.residentOrderLimit,
       },
-      orderProgress: orderProgressView(config, survey, session.player),
+      orderProgress: orderProgressView(config, survey, session.player, settings?.resident.dailyCap),
       autoProduce: autoProduceView(config, survey),
       orders: survey.orders.map((order) => ({
         ...order,

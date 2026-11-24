@@ -2081,23 +2081,75 @@ function buildingListSection(title, className, content, collapsed) {
   return buildingSection(title, className, content, button);
 }
 
+function orderRewardNode(required, progress) {
+  let status = '未达标';
+  if (required <= progress.rewardedNum) status = '已领取';
+  else if (required <= progress.orderNum) status = required === progress.tier ? '可领取' : '已达标';
+  else if (progress.cap != null && required > progress.cap) status = '超出账号上限';
+  else if (progress.configuredCap != null && required > progress.configuredCap) status = '超挂机上限';
+  else if (required === progress.tier) status = '下一档';
+
+  const node = el('li', 'resident-reward-node', required);
+  node.dataset.status = status;
+  node.title = required + ' 单档 · ' + status;
+  node.setAttribute('aria-label', node.title);
+  return node;
+}
+
 function renderOrderProgress(progress) {
   const box = $('resident-order-progress');
   clear(box);
-  box.hidden = !(progress && Number.isFinite(progress.total) && progress.total > 0);
+  box.hidden = !progress;
   if (box.hidden) return;
   const head = el('div', 'resident-order-progress-head');
-  head.append(el('span', 'dim', '今日居民订单'), el('strong', '', progress.orderNum + '/' + progress.total));
-  const track = el('div', 'resident-order-progress-track');
-  const fill = el('i');
-  fill.style.width = Math.max(0, Math.min(100, Number(progress.percent) || 0)) + '%';
-  track.append(fill);
-  const note = el('div', 'dim resident-order-progress-note');
-  const capNote = '今日上限 ' + progress.cap + (progress.bonus ? '（基础 ' + progress.baseMax + ' + 加成 ' + progress.bonus + '）' : '');
-  note.textContent = progress.totalKind === 'rewardTier'
-    ? '当前奖励档位；已领档位 ' + progress.rewardedNum + (progress.claimable ? '，可领取' : '') + '；' + capNote
-    : capNote;
-  box.append(head, track, note);
+  const maximum = progress.configuredCap || progress.cap;
+  const count = el('strong', '', maximum > 0 ? progress.orderNum : '已交 ' + progress.orderNum + ' 单');
+  if (maximum > 0) {
+    const source = progress.configuredCap ? '设定上限' : '账号上限';
+    count.append(el('span', 'resident-order-limit-label', ' / ' + source + ' '), el('span', '', maximum));
+  }
+  head.append(el('span', 'dim', '今日居民订单'), count);
+  box.append(head);
+  const tiers = progress.reqNums;
+  if (progress.total > 0 || tiers.length) {
+    const timeline = el('div', 'resident-order-timeline');
+    const scale = el('div', 'resident-order-scale');
+    const track = el('div', 'resident-order-progress-track');
+    const fill = el('i');
+    const end = tiers.length ? Math.max(progress.total ?? 0, tiers.at(-1), progress.orderNum) : progress.total;
+    const position = value => Math.min(100, value / end * 100) + '%';
+    track.style.setProperty('--goal', position(progress.total ?? end));
+    fill.style.width = position(progress.orderNum);
+    track.append(fill);
+    scale.append(track);
+    if (tiers.length) {
+      const rewards = el('ol', 'resident-reward-steps');
+      rewards.setAttribute('aria-label', '奖励档位（单）');
+      const gaps = tiers.map((required, index) => required - (tiers[index - 1] ?? 0));
+      // Leave room for adjacent numbers when a high daily cap compresses the reward tiers.
+      scale.style.setProperty('--scale-intervals', String(end / Math.min(...gaps)));
+      tiers.forEach((required, index) => {
+        const node = orderRewardNode(required, progress);
+        node.style.left = position(required);
+        node.style.width = position(Math.min(gaps[index], gaps[index + 1] ?? gaps[index]));
+        rewards.append(node);
+      });
+      scale.append(rewards);
+    }
+    timeline.append(scale);
+    box.append(timeline);
+  }
+  const limits = [];
+  if (progress.cap == null) limits.push('账号上限待同步');
+  else if (progress.configuredCap) limits.push('账号上限 ' + progress.cap + ' 单');
+  if (progress.bonus > 0) limits.push('基础 ' + progress.baseMax + ' + 加成 ' + progress.bonus);
+  if (tiers.includes(progress.tier)) {
+    const tier = progress.tier;
+    limits.push(progress.orderNum >= tier ? tier + ' 单档可领取' : '下一档 ' + tier + ' 单');
+  }
+  if (limits.length) box.append(el('div', 'dim resident-order-progress-note', limits.join(' · ')));
+
+  if (!tiers.length) box.append(el('div', 'dim resident-order-progress-note', '奖励档位待同步'));
 }
 
 function renderWorld(data) {

@@ -20,6 +20,7 @@ const config = {
   FarmlandPlantCfg: [{ id: '小麦', time: 30, produceNum: 5, material: ['小麦种子', 1] }],
   BuildingProduceParamCfg: [{ paramName: '制造位上限', paramValue: 6 }],
   OrderParamCfg: [{ paramName: '订单每日上限', paramValue: 42 }],
+  OrderDailyRewardCfg: [6, 12, 18, 24, 30, 40, 45].map(reqNum => ({ reqNum })),
   GameParamCfg: [{ paramName: '初始人口', paramValue: 3 }, { paramName: '初始人口上限', paramValue: 100 }, { paramName: '产品存量初始上限', paramValue: 50 }],
   CargoUnlockCfg: [{ index: 1, playerLevel: 9 }],
   ModuleOpenCfg: [{ moduleId: '联盟情报', playerLevel: 18 }, { moduleId: '联盟商船', playerLevel: 18 }],
@@ -174,10 +175,28 @@ try {
       await f.api('connect', {});
       const readProgress = async () => (await f.api('world')).orderOfTheDay;
       assert.deepEqual(await readProgress(), { orderNum: 37, dailyLimit: 42 });
+      const view = async () => (await f.api('world')).orderProgress;
+      const initial = await view();
+      assert.equal(initial.total, 42);
+      assert.equal(initial.tier, 40);
+      assert.deepEqual(initial.reqNums, [6, 12, 18, 24, 30, 40, 45]);
       replies.GameEffectRequest.effects.push({ id: 18, value: 5 });
       assert.deepEqual(await readProgress(), { orderNum: 37, dailyLimit: 47 });
+      assert.equal((await view()).total, 47);
+      await updateSettings(f, settings => { settings.resident.dailyCap = 36; });
+      const limited = await view();
+      assert.deepEqual([limited.orderNum, limited.total, limited.cap, limited.configuredCap, limited.percent], [37, 36, 47, 36, 100]);
+      replies.OnWaterRequest.orderOfTheDay = { orderNum: 40, rewardedNum: 40 };
+      assert.equal((await view()).total, 36, '领取奖励不应改变交付目标');
+      await updateSettings(f, settings => { settings.resident.dailyCap = 50; });
+      assert.equal((await view()).total, 47, '设定值不能超过已确认的账号上限');
       delete replies.GameEffectRequest;
-      assert.deepEqual(await readProgress(), { orderNum: 37, dailyLimit: null });
+      assert.deepEqual(await readProgress(), { orderNum: 40, dailyLimit: null });
+      const unsynced = await view();
+      assert.equal(unsynced.total, 50);
+      assert.equal(unsynced.cap, null);
+      await updateSettings(f, settings => { settings.resident.dailyCap = 0; });
+      assert.equal((await view()).total, null);
     } finally { await f.close(); }
   });
   await test('仓库按账号效果刷新原料容量，挑战券按配置标记恢复上限并保留实际数量', async () => {
