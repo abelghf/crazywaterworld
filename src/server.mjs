@@ -121,6 +121,7 @@ import { readEquipmentForge, releaseStaleEquipmentForge, forgeEnabled } from './
 import { previewEquipmentForge } from './equipment-forge-preview.mjs';
 import { reconcileManualForge } from './manual-forge-sync.mjs';
 import { readAntiqueUpgrade, planAntiqueUpgrade, antiqueEnabled } from './antique-upgrade.mjs';
+import { readMuseumPreview } from './museum-preview.mjs';
 import { watchBasePushes, surveyBaseAutomation, planBaseAutomation, baseDemands, previewNativeAutomation } from './base-automation.mjs';
 import { reconcileManualProduction } from './manual-production-sync.mjs';
 import { configuredMaterialRecipes, readProductionSnapshot } from './production-snapshot.mjs';
@@ -2609,7 +2610,7 @@ export function createConsole({ host = '127.0.0.1', port = 17321, onLog, recover
         if (!config) throw new Error('缺少游戏配置表，暂时不能预览');
         const settings = validateSettings(payload.settings ?? settingsView(session).settings, { catalog: settingsCatalog(config) });
         const category = payload.category ?? 'base';
-        if (!['base', 'world', 'heroes', 'daily', 'arena', 'league', 'discountShop', 'runtime', 'cityWar', 'forge', 'antique', 'equipmentGrowth', 'activity', 'radar', 'pirateHunt', 'fleetDispatch','fleetSpeed','worldBoss','pirateSweep','alliance','guildShip','guildFort','silicon','heroRaid','resourceFields'].includes(category)) throw new Error('不支持的预览分类');
+        if (!['base', 'world', 'heroes', 'daily', 'arena', 'league', 'discountShop', 'runtime', 'cityWar', 'forge', 'antique', 'equipmentGrowth', 'activity', 'museum', 'radar', 'pirateHunt', 'fleetDispatch','fleetSpeed','worldBoss','pirateSweep','alliance','guildShip','guildFort','silicon','heroRaid','resourceFields'].includes(category)) throw new Error('不支持的预览分类');
 
         if (category === 'runtime') {
           json({ checkedAt: new Date().toISOString(), usage: usageFor(session).snapshot(), actions: [], counts: {}, viewOnly: true, scopeLabel: '运行安排（仅查看，不执行）',
@@ -2618,6 +2619,20 @@ export function createConsole({ host = '127.0.0.1', port = 17321, onLog, recover
               '在对应配置页点击「只读预览」可查看该功能的检查结果。'] }); return;
         }
         if (!session.client?.connected || session.paused) throw new Error('请先连接当前账号，再读取真实游戏状态');
+        if (category === 'museum') {
+          const client = session.client, player = session.player;
+          const usage = usageFor(session).snapshot();
+          const generation = session.generation;
+          const check = () => {
+            if (generation !== session.generation || client !== session.client || player !== session.player || !client.connected || session.paused)
+              throw new Error('账号或连接已变化，请重新预览博物馆');
+          };
+          const { actions, notes, ...museum } = await readJob(session, () => readMuseumPreview(client, config, player, settings, usage, check), { recoverFormation: false });
+          check();
+          json({ checkedAt: new Date().toISOString(), usage, scopeLabel: '博物馆探宝', counts: { maps: museum.maps.length }, museum, notes,
+            actions: actions.map(step => ({ kind: step.kind, label: step.label, costs: (step.costs ?? []).map(c => ({ name: displayMaterial(config, c.id), num: c.num })) })) });
+          return;
+        }
         const result = await enqueue(session, async () => {
           const client = session.client;
           const usage = usageFor(session).snapshot();

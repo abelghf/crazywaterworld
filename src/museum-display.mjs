@@ -39,14 +39,9 @@ function ownedAntiques(antiques) {
   return antiques;
 }
 
-// The client filters owned antiques by AntiqueBaseCfg.isAntique and sorts by
-// AntiquePopularityCfg (orangePopularity / redPopularity at the owned star).
-// Fill empty, unlocked cases only: never move or replace a displayed antique.
-export function planMuseumDisplay(museum, antiques, config) {
-  const { cases, displayed } = museumCases(museum);
-  const notes = [], actions = [];
-  const candidates = ownedAntiques(antiques).flatMap(antique => {
-    if (displayed.has(antique.id)) return [];
+function ratedAntiques(antiques, config, notes, excluded = new Set()) {
+  return ownedAntiques(antiques).flatMap(antique => {
+    if (excluded.has(antique.id)) return [];
     const bases = rows(config, 'AntiqueBaseCfg').filter(row => row.antiqueId === antique.id);
     if (bases.length !== 1 || bases[0].isAntique !== true) return [];
     const base = bases[0], field = { ORANGE: 'orangePopularity', RED: 'redPopularity' }[base.color];
@@ -57,6 +52,13 @@ export function planMuseumDisplay(museum, antiques, config) {
     }
     return [{ id: antique.id, name: base.showName || antique.id, popularity: popularity[0][field] }];
   }).sort((a, b) => b.popularity - a.popularity || a.id.localeCompare(b.id));
+}
+
+// Automatic display fills empty booths. Replacements are preview suggestions only.
+export function planMuseumDisplay(museum, antiques, config) {
+  const { cases, displayed } = museumCases(museum);
+  const notes = [], actions = [];
+  const candidates = ratedAntiques(antiques, config, notes, displayed);
   const empty = cases.flatMap(item => {
     if (!item.unlocked || item.level < 1 || item.antiqueId || item.upgradeFinishTime > 0) return [];
     const cfg = rows(config, 'MuseumDisplayCaseCfg').filter(row => row.areaId === item.exhibitionId && row.displayCaseId === item.caseIndex && row.level === item.level);
@@ -74,6 +76,56 @@ export function planMuseumDisplay(museum, antiques, config) {
   }
   if (!actions.length && !notes.length) notes.push(empty.length ? '暂无未上架的已激活博物馆藏品' : '暂无已解锁且空闲的空展柜');
   return { actions, notes };
+}
+
+export function museumBoothAdvice(museum, antiques, config, stock) {
+  const { cases, displayed } = museumCases(museum);
+  const notes = [], upgrades = [], placements = [];
+  const rated = ratedAntiques(antiques, config, notes);
+  const owned = new Map(rated.map(item => [item.id, item]));
+  const table = rows(config, 'MuseumDisplayCaseCfg');
+  const stands = [];
+  const points = (base, bonus) => Math.floor(base * (10000 + bonus) / 10000);
+  for (const booth of cases) {
+    const configs = table.filter(row => row.areaId === booth.exhibitionId && row.displayCaseId === booth.caseIndex);
+    const current = configs.find(row => row.level === booth.level), next = configs.find(row => row.level === booth.level + 1);
+    const info = next ?? current;
+    if (!info) continue;
+    const name = `展区 ${booth.exhibitionId} · ${info.nameParam || booth.caseIndex} 号柜`;
+    const art = owned.get(booth.antiqueId), bonus = current?.popularityBonus ?? 0;
+    if (booth.unlocked && current && !booth.upgradeFinishTime && (!booth.antiqueId || art)) {
+      stands.push({ name, bonus, art });
+    }
+    if (!next) continue;
+    const reasons = [];
+    if (booth.upgradeFinishTime) reasons.push('升级中或待完工');
+    if (booth.areaLevel < next.areaLevelReq) reasons.push('需要展区 ' + next.areaLevelReq + ' 级');
+    if (next.prevCaseId?.length) {
+      const [id, level] = next.prevCaseId;
+      const prev = cases.find(item => item.exhibitionId === booth.exhibitionId && item.caseIndex === id);
+      const prevName = table.find(row => row.areaId === booth.exhibitionId && row.displayCaseId === id)?.nameParam || id;
+      if (!prev || prev.level < level) reasons.push(`前置展柜 ${prevName} 需要 ${level} 级`);
+    }
+    const costs = (next.costArr ?? []).map(([id, num]) => ({ name: config.materialName?.(id) || id, num, missing: Math.max(0, num - (stock.get(id) ?? 0)) }));
+    if (costs.some(row => row.missing)) reasons.push('缺' + costs.filter(row => row.missing).map(row => row.name + ' ×' + row.missing).join('、'));
+    upgrades.push({ name, level: next.level, costs, reason: reasons.join('；') || '可以升级',
+      bonusChange: (next.popularityBonus - bonus) / 100, gain: art ? points(art.popularity, next.popularityBonus) - points(art.popularity, bonus) : booth.antiqueId ? null : 0 });
+  }
+  const bestUnused = rated.find(item => !displayed.has(item.id));
+  for (const [index, stand] of stands.entries()) {
+    const base = stand.art?.popularity ?? 0;
+    const better = bestUnused?.popularity > base ? bestUnused : null;
+    if (better) placements.push({ name: stand.name, from: stand.art?.name || '空柜', to: better.name,
+      gain: points(better.popularity, stand.bonus) - points(base, stand.bonus) });
+    for (const other of stands.slice(index + 1)) {
+      const second = other.art?.popularity ?? 0;
+      const gain = points(second, stand.bonus) + points(base, other.bonus) - points(base, stand.bonus) - points(second, other.bonus);
+      if (gain > 0) placements.push({ name: stand.name + ' ↔ ' + other.name, from: stand.art?.name || '空柜', to: other.art?.name || '空柜', gain });
+    }
+  }
+  // Only the best single change: alternatives may use the same exhibit twice.
+  placements.sort((a, b) => b.gain - a.gain);
+  return { upgrades, placement: placements[0] ?? null, notes };
 }
 
 function actor(player) {

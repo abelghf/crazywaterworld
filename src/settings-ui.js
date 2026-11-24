@@ -371,6 +371,7 @@ const configGroups = [
     configField('museum.factorMaterials', '命中材料名单', 'multi', { parent: 'museum.materialFactor', catalog: 'materials', empty: '未选择，仅检查库存阈值', when: d => d.museum.materialFactor }),
     configField('museum.stockThreshold', '库存阈值', 'number', { parent: 'museum.materialFactor', when: d => d.museum.materialFactor, help: '任一所需材料库存不高于此值时使用命中倍数；0 关闭库存条件。' }),
     configField('museum.matchedFactor', '命中时倍数', 'choice', { parent: 'museum.materialFactor', numeric: true, options: museumFactorOptions, when: d => d.museum.materialFactor }),
+    configField('museum.targetFragments', '目标文物碎片', 'multi', { parent: 'museum.enabled', catalog: 'museumFragments', empty: '不限掉落', help: '只派往当前星级能产出任一目标碎片的地图。同时选择地图时取交集。只读预览可查看掉落星级和所差进度。' }),
     configField('museum.maps', '探宝地图', 'multi', { parent: 'museum.enabled', catalog: 'maps', empty: '未选择，不限制地图', help: '控制新派遣与指南使用；已经完成的探宝仍可领取。' }),
     configField('museum.useGuide', '使用探险指南', 'switch', { parent: 'museum.enabled' }),
     configField('museum.dailyGuideLimit', '每日指南上限', 'number', { parent: 'museum.useGuide', unit: '本', help: '每本缩短 30 分钟，填 0 表示不使用；保存配置或重启不会清零当日记录。' }),
@@ -2536,6 +2537,30 @@ async function configExport() {
   finally { if (account === current) { configBusy(false); configUpdateState(); } }
 }
 
+function renderMuseumPreview(result, museum) {
+  const costs = items => items.map(i => i.name + ' ×' + i.num).join('、') || '—';
+  const group = (title, body, expanded) => {
+    const details = el('details', 'preview-inspection');
+    details.open = expanded;
+    details.append(el('summary', '', title), body);
+    result.append(details);
+  };
+  if (museum.drops.length) group('目标碎片来源', table(['文物碎片','探宝地图','首次掉落','当前条件'],
+    museum.drops.map(r => [r.item,r.map,r.first+' 星',r.status])), true);
+  group('探宝队伍与地图', museum.maps.length ? table(['地图 / 星级','派遣状态','队伍 / 倍数','评级概率','派遣用料','预计返航（北京时间）'],
+    museum.maps.map(r => [r.name + (r.star == null ? '' : ' · '+r.star+' 星'),r.status,
+      [r.heroes.join('、'),r.recommended == null ? '' : r.recommended+' 人符合推荐',r.factor ? r.factor+' 倍' : ''].filter(Boolean).join(' · ') || '—',
+      r.odds || '—',costs(r.costs),r.until ? new Date(r.until*1000).toLocaleString('zh-CN',{timeZone:'Asia/Shanghai',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit'}) : '—'])) : el('p','dim','尚无探宝地图配置'), true);
+  const display = museum.display, change = display.placement;
+  const booths = el('div');
+  booths.append(el('p','config-help',change ? change.name+' · '+change.from+' → '+change.to+'，预计增加 '+change.gain+' 人气（仅计展柜加成）'
+    : display.notes.length ? display.notes.join('；') : '当前摆放暂无可提高人气的单次调整。'));
+  if (display.upgrades.length) booths.append(table(['展柜','目标等级','用料','升级条件','预计人气变化'],
+    display.upgrades.map(r=>[r.name,r.level+' 级',costs(r.costs),r.reason,
+      (r.gain == null ? '未确认' : '+'+r.gain)+' · 展柜加成 +'+r.bonusChange+' 个百分点'])));
+  group('展柜升级与摆放建议', booths, false);
+}
+
 async function configPreview() {
   if (configPageStale()) { configMessage(''); return; }
   if (!configEditor.draft || configEditor.busy || !configCheckForm()) return;
@@ -2549,7 +2574,7 @@ async function configPreview() {
   clear($('config-preview-result'));
   configRenderUsage();
   try {
-    const dedicated={'discount-shop':'discountShop',arena:'arena',league:'league',alliance:'alliance',guildShip:'guildShip',guildFort:'guildFort',silicon:'silicon',resourceFields:'resourceFields','hero-raid':'heroRaid',treasure:'world',radar:'radar','fleet-dispatch':'fleetDispatch','pirate-hunt':'pirateHunt',worldBoss:'worldBoss',cityWar:'cityWar',forge:'forge',antique:'antique',heroes:'heroes'};
+    const dedicated={museum:'museum','discount-shop':'discountShop',arena:'arena',league:'league',alliance:'alliance',guildShip:'guildShip',guildFort:'guildFort',silicon:'silicon',resourceFields:'resourceFields','hero-raid':'heroRaid',treasure:'world',radar:'radar','fleet-dispatch':'fleetDispatch','pirate-hunt':'pirateHunt',worldBoss:'worldBoss',cityWar:'cityWar',forge:'forge',antique:'antique',heroes:'heroes'};
     const source=dedicated[selected.id];
     let data;
     if(selected.id==='pirate-hunt'){
@@ -2591,6 +2616,7 @@ async function configPreview() {
     if (!stillOnPage() || JSON.stringify(configEditor.draft) !== original) return;
     configEditor.data={...configEditor.data,usage:data.usage,...(data.pendingUsage?{pendingUsage:data.pendingUsage}:{})};configEditor.previewSummary={...data,group:selected.id};configRenderUsage();
     const result = clear($('config-preview-result'));
+    if (data.museum) renderMuseumPreview(result, data.museum);
     const actions = data.moduleActions ?? data.actions;
     if (actions.length) {
       const list = el('ol', 'config-preview-list'), rest = el('ol', 'config-preview-list');
