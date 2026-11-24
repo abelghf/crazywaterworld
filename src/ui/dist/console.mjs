@@ -189,7 +189,6 @@ function HelpTip({ title, children }) {
 import * as React9 from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { Boxes, Building2, CalendarDays, Check, ChevronDown, CircleUserRound, Download, LayoutDashboard, Monitor, Moon, MoreHorizontal, RefreshCw, ScrollText, Search, Settings2, Ship, Sun, Swords, UsersRound, X } from "lucide-react";
-import { Trophy } from "lucide-react";
 
 // src/ui/badge.tsx
 import * as React6 from "react";
@@ -339,7 +338,6 @@ var tabs = [
   ["lineups", "\u9635\u5BB9", "\u9635\u5BB9", UsersRound],
   ["activities", "\u6D3B\u52A8", "\u6D3B\u52A8", CalendarDays],
   ["resources", "\u6742\u9879", "\u6742\u9879", Boxes],
-  ["season-preview", "\u8D5B\u5B63\u9884\u89C8", "\u8D5B\u5B63", Trophy],
   ["account", "\u8D26\u53F7", "\u8D26\u53F7", CircleUserRound]
 ];
 var themes = [["system", "\u8DDF\u968F\u7CFB\u7EDF", Monitor], ["light", "\u767D\u5929", Sun], ["dark", "\u9ED1\u591C", Moon]];
