@@ -2233,13 +2233,20 @@ function renderWorld(data) {
   const obox = clear($('world-orders'));
   renderOrderProgress(data.orderProgress);
   if (data.orders?.length) {
-    const ordersTable = table(['订单', '居民', '需求', '挂机交付', '手动操作'], data.orders.map((o) => [
-      '#' + o.index,
-      { cell: o.workerIcon, text: (o.workerName || '未知居民') + (o.isSpecial ? '（特殊）' : '') },
-      o.requirements.length && o.decision?.status !== 'refreshing' ? planMaterialList(o.requirements, recipes, 'resident-order-products-' + o.index) : '—',
-      orderState(o, data),
-      residentOrderActions(o),
-    ]), 'sea-records');
+    const headers = ['订单', '居民', '需求', { label: '经验', num: true }, { label: '金币', num: true }, '挂机交付', '手动操作'];
+    const ordersTable = table(headers, data.orders.map((o) => {
+      const refreshing = o.refreshPending || o.refreshTime || o.decision?.status === 'refreshing';
+      const rewardCell = value => ({ num: true, text: !refreshing && Number.isFinite(value) ? fmt(value) : '—' });
+      return [
+        '#' + o.index,
+        { cell: o.workerIcon, text: (o.workerName || '未知居民') + (o.isSpecial ? '（特殊）' : '') },
+        o.requirements.length && !refreshing ? planMaterialList(o.requirements, recipes, 'resident-order-products-' + o.index) : '—',
+        rewardCell(o.rewardExp),
+        rewardCell(o.rewardGold),
+        orderState(o, data),
+        residentOrderActions(o),
+      ];
+    }), 'sea-records');
     obox.appendChild(ordersTable);
   } else {
     obox.appendChild(el('p', 'resident-order-empty', Array.isArray(data.orders)
