@@ -97,7 +97,7 @@ import { readHeroGrowthPlan, heroStepLabel, runHeroPlan, formatHeroPlan } from '
 import { appointments } from './appointments.mjs';
 import { surveyDailies, runDailies, formatSurvey, canClaimDailyReward } from './dailies.mjs';
 import { dailySingleState, addDailyOptions, runDailySingle } from './daily-single.mjs';
-import { surveyTasks, runTasks, formatTaskPlan, selectTaskSettings } from './tasks.mjs';
+import { surveyTasks, runTasks, formatTaskPlan, selectTaskSettings, nextOrderTier } from './tasks.mjs';
 import { makeTypeResolver, displayBuilding, weekFactoryInfo, surveyWorld, inventoryStockRows, factoryIncomingStock, manualFactoryProducts, autoFactoryProducts, startManualFactoryProduction, nativeFactoryControl, toggleNativeFactory, planWorld, runWorldRound, speedUpProduction, SPEED_UP_ITEM, manualResidentOrderDecision, submitResidentOrder, rerollResidentOrder, watchResidentRefreshes, formatWorldPlan, formatFieldReport, loadMapAsset } from './world.mjs';
 import { autoProduceView, runFactoryAutoProduce } from './factory-auto.mjs';
 import { runLoop, formatLoopRound, formatLoopStep } from './loop.mjs';
@@ -1972,6 +1972,32 @@ export function createConsole({ host = '127.0.0.1', port = 17321, onLog, recover
     return { ...survey, text: formatTaskPlan(survey) };
   }
 
+  function orderProgressView(config, survey, player) {
+    const order = survey.orderOfTheDay ?? {};
+    const tier = nextOrderTier(config, { ...order, player, now: survey.serverNow });
+    const baseMax = Number(config?.tables?.OrderParamCfg?.data
+      ?.find(row => row.paramName === '订单每日上限')?.paramValue ?? 0);
+    const cap = Number.isSafeInteger(survey.residentOrderLimit) && survey.residentOrderLimit > 0
+      ? survey.residentOrderLimit
+      : (Number.isSafeInteger(baseMax) && baseMax > 0 ? baseMax : 0);
+    const bonus = Math.max(0, cap - baseMax);
+    const total = tier.tier ?? cap;
+    const orderNum = Number(order.orderNum ?? 0);
+    return {
+      orderNum,
+      rewardedNum: Number(order.rewardedNum ?? 0),
+      tier: tier.tier,
+      reqNums: tier.reqNums,
+      claimable: tier.claimable,
+      baseMax,
+      bonus,
+      cap,
+      total,
+      totalKind: tier.tier == null ? 'dailyCap' : 'rewardTier',
+      percent: total > 0 ? Math.min(100, Math.round(orderNum / total * 1000) / 10) : 0,
+    };
+  }
+
   async function world(session, account, allowAccelerators = false) {
     const instance = await ensureConnected(session, account);
     const config = loadConfigSafe();
@@ -2074,6 +2100,7 @@ export function createConsole({ host = '127.0.0.1', port = 17321, onLog, recover
         orderNum: survey.orderOfTheDay.orderNum ?? 0,
         dailyLimit: survey.residentOrderLimit,
       },
+      orderProgress: orderProgressView(config, survey, session.player),
       autoProduce: autoProduceView(config, survey),
       orders: survey.orders.map((order) => ({
         ...order,

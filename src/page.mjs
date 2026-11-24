@@ -2113,27 +2113,23 @@ function buildingListSection(title, className, content, collapsed) {
   return buildingSection(title, className, content, button);
 }
 
-function residentOrderProgress(daily) {
-  if (!Number.isSafeInteger(daily?.orderNum) || daily.orderNum < 0) {
-    return el('p', 'dim', '今日交付进度未同步');
-  }
-  const count = daily.orderNum;
-  const target = daily.dailyLimit;
-  if (!Number.isSafeInteger(target) || target <= 0) return el('p', '', '今日已完成 ' + fmt(count) + ' 单 · 每日上限未同步');
-
-  const box = el('div', 'resident-order-progress');
-  const header = el('div', 'resident-order-summary');
-  const label = el('span', '', '今日已交付 ');
-  label.appendChild(el('strong', '', fmt(count) + ' / ' + fmt(target) + ' 单'));
-  const status = count >= target ? '今日已达上限' : '今日还可交 ' + fmt(target - count) + ' 单';
-  header.append(label, el('span', '', status));
-  const bar = el('progress', 'resident-order-bar');
-  bar.max = target;
-  bar.value = Math.min(count, target);
-  bar.setAttribute('aria-label', '今日居民订单交付进度');
-  bar.setAttribute('aria-valuetext', '今日已交付 ' + fmt(count) + ' 单，每日上限 ' + fmt(target) + ' 单');
-  box.append(header, bar);
-  return box;
+function renderOrderProgress(progress) {
+  const box = $('resident-order-progress');
+  clear(box);
+  box.hidden = !(progress && Number.isFinite(progress.total) && progress.total > 0);
+  if (box.hidden) return;
+  const head = el('div', 'resident-order-progress-head');
+  head.append(el('span', 'dim', '今日居民订单'), el('strong', '', progress.orderNum + '/' + progress.total));
+  const track = el('div', 'resident-order-progress-track');
+  const fill = el('i');
+  fill.style.width = Math.max(0, Math.min(100, Number(progress.percent) || 0)) + '%';
+  track.append(fill);
+  const note = el('div', 'dim resident-order-progress-note');
+  const capNote = '今日上限 ' + progress.cap + (progress.bonus ? '（基础 ' + progress.baseMax + ' + 加成 ' + progress.bonus + '）' : '');
+  note.textContent = progress.totalKind === 'rewardTier'
+    ? '当前奖励档位；已领档位 ' + progress.rewardedNum + (progress.claimable ? '，可领取' : '') + '；' + capNote
+    : capNote;
+  box.append(head, track, note);
 }
 
 function renderWorld(data) {
@@ -2194,7 +2190,7 @@ function renderWorld(data) {
     (button || $('tab-manual')).focus({ preventScroll: true });
   }
   const obox = clear($('world-orders'));
-  obox.appendChild(residentOrderProgress(data.orderOfTheDay));
+  renderOrderProgress(data.orderProgress);
   if (data.orders?.length) {
     const ordersTable = table(['订单', '居民', '需求', '挂机交付', '手动操作'], data.orders.map((o) => [
       '#' + o.index,
@@ -2224,7 +2220,7 @@ function refreshManualWorld(force = false) {
     resetInventory();
     worldVersion++;
     worldRead = null;
-    for (const id of ['world-factories', 'world-orders', 'world-stock']) clear($(id));
+    for (const id of ['world-factories', 'world-orders', 'world-stock', 'resident-order-progress']) clear($(id));
     if (!available) $('world-view').textContent = account ? '账号已断开连接' : '请先选择账号';
   }
   if (!available || worldRead?.account === account) return;

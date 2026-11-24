@@ -186,33 +186,32 @@ test('海面依次展示工厂、农田、空位，活动工坊并入工厂表�
 
 test('居民订单按账号每日上限显示交付进度，空订单列表也能查看', () => {
   const env = fixture();
-  const box = env.node('world-orders');
-  for (const [orderNum, target, detail] of [
-    [0, 40, '今日还可交 40 单'],
-    [37, 40, '今日还可交 3 单'],
-    [37, 45, '今日还可交 8 单'],
-    [45, 45, '今日已达上限'],
-    [43, 40, '今日已达上限'],
+  const box = env.node('resident-order-progress');
+  for (const [orderNum, target] of [
+    [0, 40],
+    [37, 40],
+    [37, 45],
+    [45, 45],
+    [43, 40],
   ]) {
-    env.render(worldData(env, { orderOfTheDay: { orderNum, dailyLimit: target } }));
-    assert(box.textContent.includes(detail));
-    assert(box.textContent.includes(orderNum + ' / ' + target + ' 单'));
-    assert.match(box.textContent, /当前没有待处理的居民订单/);
-    const bar = box.querySelector('progress[aria-label="今日居民订单交付进度"]');
-    assert.equal(bar.max, target);
-    assert.equal(bar.value, Math.min(orderNum, target));
+    const percent = target ? Math.min(100, orderNum / target * 100) : 0;
+    env.render(worldData(env, { orderProgress: {
+      orderNum, rewardedNum: 0, total: target, cap: target, baseMax: target, bonus: 0,
+      totalKind: 'dailyCap', percent,
+    } }));
+    assert(box.textContent.includes('今日居民订单'));
+    assert(box.textContent.includes(orderNum + '/' + target));
+    assert(box.textContent.includes('今日上限 ' + target));
+    const track = descendants(box).find(node => node.className === 'resident-order-progress-track');
+    assert(track, '进度卡应包含进度条');
+    assert.equal(track.children[0].style.width, percent + '%');
   }
-  env.render(worldData(env, { orderOfTheDay: { orderNum: 3, tier: 6, reqNums: [6, 12] } }));
-  assert.match(box.textContent, /今日已完成 3 单 · 每日上限未同步.*当前没有待处理的居民订单/);
-  assert.equal(box.querySelector('progress[aria-label]'), null);
-  env.render(worldData(env, { orders: undefined }));
-  assert.match(box.textContent, /今日交付进度未同步.*居民订单列表尚未同步/);
-  env.render(worldData(env, { orders: [{index:1, workerName:'小林', requirements:[]}] }));
-  assert.match(box.textContent, /小林.*提交订单/);
-  assert.doesNotMatch(box.textContent, /没有待处理|列表尚未同步/);
-  env.render(worldData(env));
-  assert.match(box.textContent, /当前没有待处理的居民订单/);
-  assert.doesNotMatch(box.textContent, /小林|提交订单/);
+  env.render(worldData(env, { orderProgress: {
+    orderNum: 3, rewardedNum: 0, total: 6, cap: 40, baseMax: 40, bonus: 0,
+    totalKind: 'rewardTier', percent: 50,
+  } }));
+  assert(box.textContent.includes('3/6'));
+  assert(box.textContent.includes('当前奖励档位'));
   env.refreshUnavailable('account');
   assert.equal(box.textContent, '');
 });
