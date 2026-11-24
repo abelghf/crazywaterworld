@@ -389,31 +389,36 @@ function openJournal() {
   document.body.classList.add('has-log-dialog'); $('journal-dialog').showModal();
   const selectedAccount = $('log-account-tabs').querySelector('[aria-pressed=true]');
   selectedAccount.focus({ preventScroll: true });
-  revealHorizontalTab(selectedAccount); revealHorizontalTab($('log-tabs').querySelector('[aria-selected=true]'));
+  revealLogTag(selectedAccount); revealLogTag($('log-tabs').querySelector('[aria-selected=true]'));
 }
 $('logs-open').onclick = openJournal;
 $('logs-close').onclick = () => $('journal-dialog').close();
 $('journal-dialog').addEventListener('close', () => { document.body.classList.remove('has-log-dialog'); (logReturnFocus?.isConnected ? logReturnFocus : $('logs-open')).focus(); });
 const featureBar = $('log-tabs');
 function revealHorizontalTab(button) {
-  // 使用布局坐标，避免弹窗开场缩放影响横向定位。
   const container = button.parentElement, left = button.offsetLeft - 3, right = button.offsetLeft + button.offsetWidth + 3;
   if (left < container.scrollLeft) container.scrollLeft = left;
   else if (right > container.scrollLeft + container.clientWidth) container.scrollLeft = right - container.clientWidth;
 }
+function revealLogTag(button) {
+  const container = button.parentElement;
+  const top = button.offsetTop - 3, bottom = button.offsetTop + button.offsetHeight + 3;
+  if (top < container.scrollTop) container.scrollTop = top;
+  else if (bottom > container.scrollTop + container.clientHeight) container.scrollTop = bottom - container.clientHeight;
+}
 function selectLogFeature(key) {
   stateActions.setView({ logFeature: key });
   const selected = featureBar.querySelector('[aria-selected=true]');
-  if (selected) revealHorizontalTab(selected);
+  if (selected) revealLogTag(selected);
 }
 $('log-group').onchange = event => {
   stateActions.setView({ logGroup: event.target.value, logFeature: 'all' });
-  featureBar.scrollLeft = 0;
+  featureBar.scrollTop = 0;
 };
 function selectLogAccount(id) {
   stateActions.setView({ logAccount: id });
   updateLogSummary();
-  revealHorizontalTab($('log-account-tabs').querySelector('[aria-pressed=true]'));
+  revealLogTag($('log-account-tabs').querySelector('[aria-pressed=true]'));
 }
 $('log-account-tabs').onkeydown = event => {
   const buttons = [...$('log-account-tabs').querySelectorAll('[data-log-account]')];
