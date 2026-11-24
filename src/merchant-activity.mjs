@@ -2,7 +2,8 @@ import { exactAutomationId } from './automation-policy.mjs';
 import { claimOnce } from './extra-free-rewards.mjs';
 import { checkedAction, clock, dayOf, digest, hasReward, moduleOpen, natural, positive, read, table, waiting, windowOpen } from './activity-actions.mjs';
 import { claimPass } from './seasonal-activities.mjs';
-import { merchantActionSeconds, merchantFinalCargoStart, merchantPointerSeconds, merchantSettings, merchantTiming, planMerchant } from './merchant-planner.mjs';
+import { observeFreePointers } from './merchant-free-pointers.mjs';
+import { merchantSpeedMode, merchantActionSeconds, merchantFinalCargoStart, merchantPointerSeconds, merchantSettings, merchantTiming, planMerchant } from './merchant-planner.mjs';
 import { merchantClosingRoute, readMerchantDockBudget, runMerchantSpeed } from './merchant-speed.mjs';
 import { merchantActionMatches, merchantActionState, merchantFingerprint as fingerprint, quantity } from './merchant-action-state.mjs';
 import { rewardData } from './missing-rewards.mjs';
@@ -63,12 +64,12 @@ async function readMerchantPlan(config, event, state, time, ask, voyage, options
   let plan = planMerchant(config, event, state, marketSnapshot, effective, plannedAt, voyage.visited, inputs);
   const timing = merchantTiming(config, event, plannedAt), per = merchantPointerSeconds(config);
   const step = merchantActionSeconds({}, options.actionSeconds);
-  if ((plan.kind === 'wait' || plan.exploration) && policy.autoSpeedUp && policy.speedUpMode === 'goal' && !policy.fullCargoRoutes &&
+  if ((plan.kind === 'wait' || plan.exploration) && policy.autoSpeedUp && merchantSpeedMode(policy.speedUpMode) === 'goal' && !policy.fullCargoRoutes &&
     timing.tradingOpen && positive(timing.travelSeconds) && positive(per) && event.endTime <= timing.tradeStartTime + 2 * 86400 &&
     state.player?.profit < Math.min(MERCHANT_PROFIT_GOAL, policy.profitLimit || Infinity) &&
     plannedAt + timing.travelSeconds + (1 + 2 * (marketSnapshot.goods?.length ?? 0) + (state.player.goods?.length ?? 0)) * step >= timing.tradeEndTime) {
     let budget;
-    try { budget = await readMerchantDockBudget(ask, options.ledger, policy, plannedAt, event); }
+    try { budget = await readMerchantDockBudget(ask, options.ledger, policy, plannedAt, event, options.freePointers); }
     catch { /* 库存未确认时沿用自然航行计划。 */ }
     const at = options.now?.() ?? plannedAt;
     if (marketEpoch(config, at) !== marketEpoch(config, observedAt) || options.quoteRevision?.() !== quoteRevision)
@@ -145,7 +146,7 @@ async function readMerchantPanel(client, config, event, { player, ledger, settin
   lines.push('本期已核实买入 ' + journal.buys + ' 笔、卖出 ' + journal.sells + ' 笔 · 已实现净利润 ' + journal.realizedProfit.toLocaleString('zh-CN'));
   const policy = merchantSettings(settings?.merchant);
   lines.push('指南针加速' + (policy.autoSpeedUp ? '已开启' : '已关闭') +
-    ' · 钻石补购' + (policy.autoBuyPointers ? '已开启' : '已关闭') +
+    ' · 钻石补购' + (policy.autoBuyPointers && policy.speedUpMode !== 'eventFree' ? '已开启' : '已关闭') +
     ' · 本期已核实用针 ' + format(journal.pointerUsed) + ' 根');
   const notes = [];
   if (goal.remaining > 0 && goal.freeTrips !== null) {
@@ -319,8 +320,18 @@ async function runMerchantActivity(client, config, ctx, quoteRevision) {
   if (!allowed()) return waiting(ctx, '开关、账号或活动状态已变化');
   if (info.period !== event.period || !info.player || !info.cargo) return waiting(ctx, '海商王期数或商船状态未确认');
   const scope = 'merchant:' + event.startTime + ':' + event.period;
+  const freeMode = () => allowed() && ctx.settings?.()?.merchant?.speedUpMode === 'eventFree';
+  const observe = state => observeFreePointers(client, config, event, state, ctx.ledger, exactAutomationId(ctx.player.guildId), freeMode);
+  let freePointers = null;
+  if (freeMode()) {
+    try { freePointers = await observe(info); } catch { /* 领奖证据不完整时只自然航行。 */ }
+    if (!allowed()) return waiting(ctx, '账号或活动状态已变化');
+  }
   if (ctx.key === 'merchantRewards') {
     await merchantRewards(client, config, ctx, event, info, allowed, getState);
+    if (freeMode()) {
+      try { await observe(await getState()); } catch { /* 下轮复核已领取的奖励。 */ }
+    }
     return;
   }
   const onOutcome = data => recordMerchantTrade(ctx.ledger, { event, ...data, time: data.time ?? clock(client) });
@@ -346,7 +357,7 @@ async function runMerchantActivity(client, config, ctx, quoteRevision) {
     info.cargo.moveEndTime > clock(client) || info.cargo.moveToCityId && info.cargo.moveToCityId !== info.cargo.cityId))
     return waiting(ctx, '已达本期累计利润上限，领奖仍按独立开关执行');
   if (info.cargo.moveEndTime > clock(client)) {
-    if (await runMerchantSpeed(client, config, ctx, event, info)) return;
+    if (await runMerchantSpeed(client, config, ctx, event, info, freePointers)) return;
     return waiting(ctx, '航行中，预计 ' + new Date(info.cargo.moveEndTime * 1000)
       .toLocaleTimeString('zh-CN', { timeZone: 'Asia/Shanghai' }) + ' 到港');
   }
@@ -367,7 +378,7 @@ async function runMerchantActivity(client, config, ctx, quoteRevision) {
   const actionInterval = actionSeconds();
   const snapshot = state => readMerchantPlan(config, event, state, clock(client),
     (name, body) => read(client, name, body), voyageHistory(ctx.ledger, scope, currentEpoch, state, clock(client)), {
-      settings: policy, ledger: ctx.ledger, player: ctx.player, markets: knownMerchantMarkets(ctx.ledger, event), now: () => clock(client), quoteRevision, actionSeconds: actionInterval,
+      settings: policy, ledger: ctx.ledger, freePointers, player: ctx.player, markets: knownMerchantMarkets(ctx.ledger, event), now: () => clock(client), quoteRevision, actionSeconds: actionInterval,
       remember: market => rememberMarket(ctx.ledger, market),
       observed: observed => {
         recordMerchantSnapshot(ctx.ledger, { ...observed, event, time: clock(client), config, settings: ctx.settings?.(), actionSeconds: actionInterval });
@@ -462,7 +473,7 @@ async function runMerchantActivity(client, config, ctx, quoteRevision) {
         const now = clock(client);
         const finalStart = merchantFinalCargoStart(merchantTiming(config, event, now), event, policy, current.player?.goods, plan.destination);
         const expedite = ['race', 'full'].includes(policy.speedUpMode) || (finalStart !== null && now >= finalStart) ||
-          (policy.speedUpMode === 'goal' && current.player?.profit < Math.min(MERCHANT_PROFIT_GOAL, policy.profitLimit || Infinity));
+          (merchantSpeedMode(policy.speedUpMode) === 'goal' && current.player?.profit < Math.min(MERCHANT_PROFIT_GOAL, policy.profitLimit || Infinity));
         if (expedite || finalStart !== null)
           watchMerchant(client).observe({ event, state: current, time: now, config, settings: ctx.settings?.(), expedite });
       }

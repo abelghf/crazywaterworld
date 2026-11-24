@@ -747,7 +747,7 @@ function renderSeaMerchantSettings(box) {
       el('p', 'merchant-preset-forecast', preset.forecast));
     const footer = el('div', 'merchant-preset-footer');
     const budget = el('div', 'merchant-preset-budget');
-    budget.append(el('span', '', '总针数上限'), el('strong', '', preset.totalPointers + ' 根'));
+    budget.append(el('span', '', '总针数上限'), el('strong', '', preset.totalPointers === null ? '按实领' : preset.totalPointers + ' 根'));
     const action = preset.active ? '使用中' : '套用方案';
     const button = el('button', 'merchant-preset-apply', action);
     button.type = 'button';

@@ -198,15 +198,20 @@ try {
       assert.deepEqual(subset(validated.settings), view.settings);
     }
   });
-  await test('两套预设按账号一次保存，切换与自定义按实际配置回显', async () => {
+  await test('三套预设按账号一次保存，切换与自定义按实际配置回显', async () => {
     const before = ok(await api('merchant/settings'));
     const all = ok(await api('settings')).settings;
     const other = ok(await api('merchant/settings', undefined, 'trade-b'));
-    assert.deepEqual(before.presets.map(p => p.id), ['free', 'sprint']);
-    assert.deepEqual(before.presets.map(p => p.totalPointers), [0, 139]);
+    assert.deepEqual(before.presets.map(p => p.id), ['free', 'eventFree', 'sprint']);
+    assert.deepEqual(before.presets.map(p => p.totalPointers), [0, null, 139]);
     assert.equal((await api('merchant/settings', change(before, 'preset', 'unknown'))).status, 400);
-    const sprint = ok(await api('merchant/settings', change(before, 'preset', 'sprint')));
-    assert.equal(sprint.revision, before.revision + 1);
+    const middle = ok(await api('merchant/settings', change(before, 'preset', 'eventFree')));
+    assert.deepEqual(middle.presets.filter(p => p.active).map(p => p.id), ['eventFree']);
+    assert.equal(middle.settings.merchant.speedUpMode, 'eventFree');
+    assert(middle.settings.merchant.autoUpgrade && middle.settings.merchant.autoSpeedUp);
+    assert.equal(middle.settings.merchant.autoBuyPointers, false);
+    const sprint = ok(await api('merchant/settings', change(middle, 'preset', 'sprint')));
+    assert.equal(sprint.revision, middle.revision + 1);
     assert.deepEqual(sprint.presets.filter(p => p.active).map(p => p.id), ['sprint']);
     assert.deepEqual(sprint.settings.schedule, { merchantTrade: true, merchantRewards: true, tradeTasks: true });
     const m = sprint.settings.merchant;

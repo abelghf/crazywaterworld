@@ -1031,25 +1031,27 @@ await test('海商王未开放默认收起，未连接与暂停仍能编辑已�
   }
 });
 
-await test('海商王仅显示两套四天方案，一次点击完整保存，手动设置默认收起', async () => {
+await test('海商王显示三套四天方案，免费针居中，一次点击完整保存，手动设置默认收起', async () => {
   const f = fixture();
   await f.api.refresh(); f.api.selectSea();
   const panel = f.node('activities-list'), choices = () => panel.querySelectorAll('[data-merchant-preset]');
-  assert.deepEqual(choices().map(b => b.dataset.merchantPreset), ['free', 'sprint']);
+  assert.deepEqual(choices().map(b => b.dataset.merchantPreset), ['free', 'eventFree', 'sprint']);
   assert.equal(panel.querySelector('.merchant-manual-settings').open, false);
   const cards = panel.querySelectorAll('.merchant-preset');
-  assert.deepEqual(cards.map(card => card.querySelector('.merchant-preset-budget').textContent), ['总针数上限0 根', '总针数上限139 根']);
-  assert.equal(choices()[1].getAttribute('aria-label'), '套用方案 · 省针冲刺 5,000 万');
+  assert.deepEqual(cards.map(card => card.querySelector('.merchant-preset-budget').textContent), ['总针数上限0 根', '总针数上限按实领', '总针数上限139 根']);
+  assert.equal(choices()[1].getAttribute('aria-label'), '套用方案 · 仅用本期免费针');
   await choices()[1].onclick();
   assert.equal(choices()[1].disabled, true);
   assert.equal(choices()[1].getAttribute('aria-pressed'), 'true');
   assert.equal(choices()[1].textContent, '使用中');
   assert.equal(panel.querySelectorAll('.merchant-preset')[1].dataset.active, 'true');
+  await choices()[2].onclick();
+  assert.equal(choices()[2].disabled, true);
   await choices()[0].onclick();
   assert.equal(choices()[0].disabled, true);
   assert.equal(f.api.seaSettings.settings.merchant.periodPointerLimit, 0);
   assert.deepEqual(f.state.calls.filter(c => c.method === 'POST').map(c => [c.body.key, c.body.value]),
-    [['preset', 'sprint'], ['preset', 'free']]);
+    [['preset', 'eventFree'], ['preset', 'sprint'], ['preset', 'free']]);
 });
 
 await test('海商王全部参数沿用类型和约束，父项关闭隐藏后代并保留选择', async () => {

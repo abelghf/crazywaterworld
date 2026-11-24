@@ -25,6 +25,7 @@ export const MERCHANT_DEFAULTS = Object.freeze({
 });
 
 export function merchantSpeedMode(value = MERCHANT_DEFAULTS.speedUpMode) {
+  if (value === 'eventFree') return 'goal';
   return value === 'profit' ? 'deadline' : value;
 }
 
@@ -33,7 +34,7 @@ export function merchantSettings(input = {}) {
   for (const [key, fallback] of Object.entries(output)) {
     const value = input?.[key];
     if (typeof fallback === 'boolean') output[key] = typeof value === 'boolean' ? value : fallback;
-    else if (key === 'speedUpMode') output[key] = ['deadline', 'refresh', 'arrival', 'race', 'full', 'goal'].includes(value) ? value : fallback;
+    else if (key === 'speedUpMode') output[key] = ['deadline', 'refresh', 'arrival', 'race', 'full', 'goal', 'eventFree'].includes(value) ? value : fallback;
     else if (key === 'firstDepartureMode') output[key] = ['smart', 'time'].includes(value) ? value : fallback;
     else if (key === 'firstDepartureTime') output[key] = typeof value === 'string' && /^([01]\d|2[0-3]):[0-5]\d$/.test(value) ? value : fallback;
     else if (natural(value)) output[key] = value;
@@ -377,7 +378,7 @@ export function planMerchant(config, event, state, market, radar, time, visited 
   const { ports, history, pastRounds } = portsAndHistory(config, event, radar, options.markets, time, settings, timing.marketEpoch);
   const observedMarkets = new Map(history).set(cargo.cityId, market);
   const peers = comparableQuotes(observedMarkets, definitions);
-  const closing = positive(options.closingPointers) && settings.autoSpeedUp && settings.speedUpMode === 'goal';
+  const closing = positive(options.closingPointers) && settings.autoSpeedUp && merchantSpeedMode(settings.speedUpMode) === 'goal';
   const travel = closing ? Math.max(actionSeconds, timing.travelSeconds - options.closingPointers * merchantPointerSeconds(config)) :
     timing.travelSeconds ?? Infinity;
   const arrival = time + travel;

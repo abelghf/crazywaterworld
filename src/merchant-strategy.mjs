@@ -71,7 +71,7 @@ async function inventory(client) {
 }
 export async function buyMerchantPointers(client, config, ctx, event, state, purchasePlan, validPlan) {
   const policy = settings(ctx).merchant ?? {}, ledger = ctx.ledger;
-  if (!ledger || policy.autoSpeedUp !== true || policy.autoBuyPointers !== true || !validPlan()) return false;
+  if (!ledger || policy.autoSpeedUp !== true || policy.autoBuyPointers !== true || policy.speedUpMode === 'eventFree' || !validPlan()) return false;
   const report = entry => ctx.report({ label: '海商王 · 补足商会指针', ...entry });
   const skip = reason => { report({ skipped: true, reason }); return true; };
   const stamp = JSON.stringify(policy), actor = JSON.stringify(ctx.player), today = dayOf(clock(client));

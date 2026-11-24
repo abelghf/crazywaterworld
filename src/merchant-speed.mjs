@@ -1,3 +1,4 @@
+import { freePointerAllowance, observeFreePointers, periodPointerUsage, savedFreePointers } from './merchant-free-pointers.mjs';
 import { checkedAction, clock, dayOf, natural, positive, read, table, waiting, windowOpen } from './activity-actions.mjs';
 import {
   beginOrderMaterialSpend, cancelOrderMaterialSpend, confirmOrderMaterialOperation,
@@ -175,10 +176,11 @@ export function planMerchantSpeed(config, event, state, radar, stock, settings, 
   if (!natural(usedCapacity) || usedCapacity > ship.capacity)
     return wait('持货舱位或利润计算异常，不使用指针');
   const have = stock instanceof Map ? stock.get(pointer) ?? 0 : null;
-  const periodRemaining = natural(settings.periodPointerLimit) ?
-    Math.min(settings.periodPointerLimit, natural(options.periodRemaining) ? options.periodRemaining : 0) : Infinity;
+  const hasPeriodBudget = natural(settings.periodPointerLimit) || settings.speedUpMode === 'eventFree';
+  const periodRemaining = hasPeriodBudget ? Math.min(natural(settings.periodPointerLimit) ? settings.periodPointerLimit : Infinity,
+    natural(options.periodRemaining) ? options.periodRemaining : 0) : Infinity;
   if (!periodRemaining)
-    return wait('本期总针数已用完，继续自然航行');
+    return wait(settings.speedUpMode === 'eventFree' ? '当前没有已核实可用的本期免费针，继续自然航行' : '本期总针数已用完，继续自然航行');
   const inventory = Math.min(Math.max(0, have - keep), periodRemaining);
   const available = Math.min(limit, inventory);
   if (arrivalPolicy) {
@@ -328,16 +330,13 @@ function pointerStock(response) {
 
 const readStock = async client => pointerStock(await read(client, 'AllItem'));
 
-function merchantPeriodPointers(records, event, limit) {
-  if (limit === undefined || limit === -1) return Infinity;
+function merchantPeriodPointers(records, event, settings, snapshot, stock) {
+  const limit = settings.periodPointerLimit;
+  const used = periodPointerUsage(records, event);
+  const allowance = settings.speedUpMode === 'eventFree' ? freePointerAllowance(snapshot, stock, used) : Infinity;
+  if (limit === undefined || limit === -1) return allowance;
   if (!natural(limit)) return 0;
-  const scope = 'merchant:' + event.startTime + ':' + event.period;
-  // 发送前的票据也占预算，明确拒绝或未发送由原流程撤销。跨日仍保留同一期的票据。
-  const used = records.reduce((sum, { details }) => {
-    const action = details?.expected;
-    return details?.scope === scope && action?.request === 'TradeSpeedRequest' && positive(action.useNum) ? sum + action.useNum : sum;
-  }, 0);
-  return Math.max(0, limit - used);
+  return Math.min(allowance, Math.max(0, limit - used));
 }
 
 function dailyPointersUsed(records, counter, time) {
@@ -347,14 +346,18 @@ function dailyPointersUsed(records, counter, time) {
   }, 0));
 }
 
-export async function readMerchantDockBudget(ask, ledger, settings, time, event) {
+export async function readMerchantDockBudget(ask, ledger, settings, time, event, freePointers) {
   if (!ledger) return null;
   const counter = ledger.snapshot().counters?.merchantPointers ?? 0, records = Object.values(ledger.keyRecords());
   const dailyUsed = dailyPointersUsed(records, counter, time);
   if (dailyUsed >= settings.dailyPointerLimit) return null;
-  const periodRemaining = merchantPeriodPointers(records, event, settings.periodPointerLimit);
+  const freeMode = settings.speedUpMode === 'eventFree';
+  if (freeMode && freePointers === undefined) freePointers = savedFreePointers(ledger, event);
+  let periodRemaining = merchantPeriodPointers(records, event, settings, freePointers, freePointers?.stock);
   if (!periodRemaining) return null;
-  return { stock: pointerStock(await ask('AllItem')), dailyUsed, periodRemaining };
+  const stock = pointerStock(await ask('AllItem'));
+  if (freeMode) periodRemaining = merchantPeriodPointers(records, event, settings, freePointers, stock.get(pointer) ?? 0);
+  return periodRemaining ? { stock, dailyUsed, periodRemaining } : null;
 }
 
 export function merchantClosingRoute(config, event, state, market, ports, radar, time, visited, inputs, budget) {
@@ -382,7 +385,7 @@ export function merchantClosingRoute(config, event, state, market, ports, radar,
   return null;
 }
 
-export async function runMerchantSpeed(client, config, ctx, event, state) {
+export async function runMerchantSpeed(client, config, ctx, event, state, freePointers) {
   const settings = settingsOf(ctx);
   if (settings.autoSpeedUp !== true || !(state?.cargo?.moveEndTime > clock(client))) return false;
   const initialSettings = stampSettings(ctx);
@@ -413,7 +416,7 @@ export async function runMerchantSpeed(client, config, ctx, event, state) {
   // 不需要加速时不查询库存；其余缺失输入会在获取新快照后校验。
   const actionSeconds = () => positive(ctx.merchantCadenceSeconds) ? Math.max(60, ctx.merchantCadenceSeconds)
     : merchantActionSeconds(fullSettingsOf(ctx), Math.ceil((ctx.everyMs ?? 0) / 1000));
-  const options = () => {
+  const options = stock => {
     const counter = ctx.ledger?.snapshot().counters?.merchantPointers ?? 0;
     const all = Object.values(ctx.ledger?.keyRecords() ?? {});
     const records = all.filter(record => record.confirmed);
@@ -424,7 +427,7 @@ export async function runMerchantSpeed(client, config, ctx, event, state) {
         && e.moveStartTime === cargo.moveStartTime && positive(e.useNum) ? sum + e.useNum : sum;
     }, 0);
     return { actionSeconds: actionSeconds(), usedPointers, actor: ctx.player, exploration: exploratoryLeg, counter,
-      periodRemaining: merchantPeriodPointers(all, event, settings.periodPointerLimit),
+      periodRemaining: merchantPeriodPointers(all, event, settings, freePointers, stock?.get(pointer) ?? 0),
       marketHistory: records.find(record => record.details?.merchantJournal?.event?.startTime === event.startTime &&
         record.details.merchantJournal.event.period === event.period)?.details.merchantJournal.snapshots?.map(entry => ({
           ...entry.market, held: entry.state?.player?.goods, visitStart: entry.state?.cargo?.moveStartTime
@@ -441,9 +444,9 @@ export async function runMerchantSpeed(client, config, ctx, event, state) {
     const radar = await read(client, 'TradeGuildRadar');
     const stock = await readStock(client);
     if (!allowed()) return skip('加速开关或活动状态已变化');
-    const plan = planMerchantSpeed(config, event, state, radar, stock, settings, clock(client), options());
+    const plan = planMerchantSpeed(config, event, state, radar, stock, settings, clock(client), options(stock));
     const keep = settings.keepPointers ?? 0, maxStock = keep + (settings.speedUpMaxPerLeg ?? 4);
-    if (settings.autoBuyPointers && (stock.get(pointer) ?? 0) < maxStock) {
+    if (settings.speedUpMode !== 'eventFree' && settings.autoBuyPointers && (stock.get(pointer) ?? 0) < maxStock) {
       const purchasePlan = (info, have, possible, ports = radar) => {
         const now = clock(client), input = options();
         const evaluate = (count, at) => planMerchantSpeed(config, event, info, ports, new Map([[pointer, count]]), settings, at, input);
@@ -478,9 +481,13 @@ export async function runMerchantSpeed(client, config, ctx, event, state) {
     }
     const fresh = await read(client, 'TradeInfo');
     const freshRadar = await read(client, 'TradeGuildRadar');
+    if (settings.speedUpMode === 'eventFree') {
+      freePointers = await observeFreePointers(client, config, event, fresh, ctx.ledger, freePointers?.guild, allowed);
+      if (!freePointers) return skip('本期免费针余额待核实，继续自然航行');
+    }
     const freshStock = await readStock(client);
     if (!allowed()) return skip('加速开关或活动状态已变化');
-    const verifiedAt = clock(client), verifiedOptions = options();
+    const verifiedAt = clock(client), verifiedOptions = options(freshStock);
     const verifyAt = time => planMerchantSpeed(config, event, fresh, freshRadar, freshStock, settings, time, verifiedOptions);
     const verified = verifyAt(verifiedAt);
     const sameVoyage = verified.kind === 'speed' &&
@@ -553,7 +560,7 @@ export async function runMerchantSpeed(client, config, ctx, event, state) {
         const now = clock(client);
         if (merchantSpeedMatches(expected, current, now)) {
           confirmOrderMaterialOperation(material);
-          if (arrivalReasons.has(verified.accelerationReason) || settings.speedUpMode === 'goal' || settings.guardLastPointer) {
+          if (arrivalReasons.has(verified.accelerationReason) || merchantSpeedMode(settings.speedUpMode) === 'goal' || settings.guardLastPointer) {
             const remaining = (current.cargo.moveEndTime ?? 0) - now;
             const checkSoon = remaining <= 0 || settings.guardLastPointer && remaining <= merchantPointerSeconds(config);
             monitor.observe({ event, state: current, time: now, config, settings: fullSettingsOf(ctx), expedite: checkSoon });

@@ -18,6 +18,9 @@ import {
 } from '../src/seasonal-activities.mjs';
 import { merchantActivity, merchantProgress, readMerchantStatus, merchantJournalSummary, readMerchantJournal } from '../src/merchant-activity.mjs';
 import { seasonalFixture } from './fixtures/seasonal-suite.mjs';
+import { read } from '../src/activity-actions.mjs';
+import { observeFreePointers } from '../src/merchant-free-pointers.mjs';
+import { readMerchantDockBudget } from '../src/merchant-speed.mjs';
 import { merchantPresets } from '../src/merchant-presets.mjs';
 
 const folder = fs.mkdtempSync(path.join(os.tmpdir(), 'cw-activity-')),
@@ -1031,7 +1034,7 @@ await test('预设走商在途遵守零针或库存加速，冲刺达标后仍�
     await run();
     assert.equal(f.sent('TradeMoveRequest').length, 1);
     await run();
-    if (preset.id === 'free') {
+    if (preset.id === 'free' || preset.id === 'eventFree') {
       assert.equal(f.sent('TradeSpeedRequest').length, 0);
       assert.equal(f.state.stock['海商王加速'], 8);
       continue;
@@ -1054,6 +1057,65 @@ await test('预设走商在途遵守零针或库存加速，冲刺达标后仍�
     assert.equal(f.sent('TradeSpeedRequest').length, 1);
     assert.equal(f.state.stock['海商王加速'], 7);
   }
+});
+await test('仅用本期免费针按实领记账，扣除付费、手动消耗和未确认用针，重启及换期保持隔离', async () => {
+  const f = setup(), pointer = '海商王加速', guild = f.player.guildId, day = 86400;
+  let ledger = f.ledger;
+  const observe = async () => observeFreePointers(f.client, f.config, f.client.tradeWindow,
+    await read(f.client, 'TradeInfo'), ledger, guild, () => true);
+  const state = f.state, pass = state.passes[3];
+  state.stock[pointer] = 100;
+  assert.equal((await observe()).available, 0);
+  pass.got = [{ id: 1, freeGot: true, payGot: true }];
+  state.tasks.gotTaskId = [1];
+  state.trade.gotReportRwdId = 1;
+  state.trade.player.buySpeedTimes = 3;
+  // 1 根免费战令、2 根任务、2 根商情；同档付费战令 4 根，另用钻石买 3 根。
+  state.stock[pointer] += 12;
+  assert.equal((await observe()).available, 5);
+  ledger = createUsageLedger('fixture', { file: f.store });
+  assert.equal((await observe()).available, 5);
+  state.stock[pointer] -= 3;
+  assert.equal((await observe()).available, 2, '手动用针先扣免费余额');
+  state.stock[pointer] += 7;
+  assert.equal((await observe()).available, 2, '其他入账不能恢复免费额度');
+  const pending = ledger.reserve({}, {}, {}, { uniqueKey: 'pending-free', details: {
+    scope: 'merchant:' + f.window.startTime + ':' + f.window.period, expected: { request: 'TradeSpeedRequest', useNum: 2 } } });
+  const budget = () => readMerchantDockBudget((key) => read(f.client, key), ledger,
+    merchantPresets.find(p => p.id === 'eventFree').settings.merchant, f.now, f.client.tradeWindow);
+  assert.equal(await budget(), null);
+  assert.equal(await observe(), null, '待确认扣针期间保留上次库存快照');
+  ledger.cancel(pending);
+  assert.equal((await budget()).periodRemaining, 2);
+  f.client.serverClockOffsetMs += day * 1000;
+  state.trade.gotReportRwdId = 0;
+  state.trade.player.buySpeedTimes = 0;
+  assert.equal((await observe()).available, 2);
+  state.trade.gotReportRwdId = 1;
+  state.stock[pointer] += 2;
+  assert.equal((await observe()).available, 4, '新一天的同档商情礼包可正常计入');
+  f.client.tradeWindow = { ...f.window, startTime: f.window.startTime + day };
+  assert.equal((await observe()).available, 0, '活动编号复用也不继承上期余额');
+});
+
+await test('仅用本期免费针可在途中使用新领的针，背包旧针和钻石都保留', async () => {
+  const f = setup(), mode = merchantPresets.find(p => p.id === 'eventFree').settings.merchant;
+  Object.assign(f.settings.merchant, mode, { autoBuyPointers: true, pointerDailyDiamondLimit: 8000 });
+  f.state.stock['海商王加速'] = 8;
+  const run = () => f.run(merchantActivity, 'merchantTrade');
+  await run();
+  await run();
+  await run();
+  assert.equal(f.sent('TradeSpeedRequest').length, 0);
+  f.state.passes[3].got = [{ id: 1, freeGot: true }];
+  await run();
+  assert.equal(f.sent('TradeSpeedRequest').length, 0, '只见领奖标记、没有到账不动用旧针');
+  f.state.tasks.gotTaskId = [1];
+  f.state.stock['海商王加速'] += 2;
+  await run();
+  assert.deepEqual(f.sent('TradeSpeedRequest').map(r => r.body.useNum), [1]);
+  assert.equal(f.state.stock['海商王加速'], 9);
+  assert.equal(f.sent('TradeBuySpeedItemRequest').length, 0);
 });
 await test('末日 21:15 从空船购货冲过目标，用成交所需的三根后停针', async () => {
   const f = setup(), close = f.now + 10 * 3600, at = close - 45 * 60;
