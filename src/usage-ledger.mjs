@@ -31,7 +31,7 @@ import { atomicJson, readJson, withFileLock } from './json-store.mjs';
  * @property {(uniqueKey: string) => number | null} reservationTime
  * @property {() => Counters} pendingCounters
  * @property {(uniqueKey: string, confirmed: boolean, details?: Record<string, unknown>) => void} resolveKey
- * @property {(uniqueKey: string, expected: KeyRecord) => boolean} retireUnknownKey
+ * @property {(uniqueKey: string, expected: KeyRecord, options?: {releaseSlot?: boolean}) => boolean} retireUnknownKey
  * @property {(uniqueKey: string, expected: KeyRecord, details: Record<string, unknown>) => boolean} expirePirateDispatch
  * @property {(uniqueKey: string, expected: KeyRecord, dailyLimit?: boolean) => boolean} failGuildAidGift
  * @property {(counters: Counters, limits?: Counters, minimums?: Counters, options?: {uniqueKey?: string | null, details?: Record<string, unknown> | null, paidGold?: PaidGoldBaseline, pirateRun?: PirateRunUpdate}) => LedgerTicket} reserve
@@ -250,15 +250,16 @@ export function createUsageLedger(accountId, { file = usageFile(), now = Date.no
         return true;
       });
     },
-    retireUnknownKey(uniqueKey, expected) {
+    retireUnknownKey(uniqueKey, expected, { releaseSlot = false } = {}) {
       return withFileLock(file, () => {
         const { store, entry } = forUpdate();
         const record = entry.keys[uniqueKey];
         if (!record || record.confirmed || record.expired || !isDeepStrictEqual(record, expected)) return false;
         const reservation = entry.pending[record.id];
         if (reservation && reservation.uniqueKey !== uniqueKey) throw new Error('待确认操作与额度预留不一致');
-        // 旧状态已失效。保留防重键及当日已占额度，已核实消费不增加。
-        record.expired = true;
+        // 一次性目标保留防重键，可复用的舰队槽位与对应预留一起释放。保留当日尝试用量。
+        if (releaseSlot) delete entry.keys[uniqueKey];
+        else record.expired = true;
         delete entry.pending[record.id];
         atomicJson(file, store);
         return true;

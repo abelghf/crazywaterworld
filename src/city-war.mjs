@@ -1,5 +1,5 @@
 import { isMiningSilicon, fleetRecordReason,fleetStateName,legacyFleetReservationReason,reserveDispatch} from './fleet-availability.mjs';
-import { recordsInWorld, settleFleetSnapshot } from './fleet-settlement.mjs';
+import { cityDispatchObserved, markCityDispatchSending, recordsInWorld, settleFleetSnapshot } from './fleet-settlement.mjs';
 // 按原生委任策略接管后的城战攻守。只移动本人舰队和正常维修，不宣战。
 import { exactAutomationId } from './automation-policy.mjs';
 import { loadMapAsset } from './world.mjs';
@@ -454,25 +454,33 @@ export async function runCityWar(client, protocol, config, player, { getSettings
           nowOf(client) < fresh.startTime || nowOf(client) >= fresh.endTime) continue;
       const failure = rejected.get(client)?.get(step.uniqueKey);
       if (failure && failure.until > Date.now() && failure.signature === JSON.stringify(step.body)) continue;
-      const details = { kind: step.kind, buildingId: step.buildingId, cityId: step.cityId, role: step.role, beforeDurability: step.beforeDurability, sentAt: fresh.now };
+      const details = { kind: step.kind, buildingId: step.buildingId, cityId: step.cityId, role: step.role,
+        beforeDurability: step.beforeDurability, sentAt: nowOf(client),
+        ...(step.kind === 'cityDispatch' ? { scenarioId: fresh.scenarioId, warEndTime: fresh.endTime } : {}) };
       const ticket = ledger.reserve({ cityWarPetrol: step.cost, cityWarDispatches: step.kind === 'cityDispatch' ? 1 : 0, cityWarRepairs: step.kind === 'cityRepair' ? 1 : 0 },
         {}, {}, { uniqueKey: step.uniqueKey, details });
       if (!enabled() || settings !== getSettings() || !client.connected || legacyFleetReservationReason(client,step.buildingId)) { ledger.cancel(ticket); break; }
       let entry;
       try {
-        await client.sendWatch(step.request, step.body, { window: 600 });
+        await client.sendWatch(step.request, step.body, { window: 600, beforeSend: step.kind === 'cityDispatch'
+          ? () => markCityDispatchSending(ledger, step.uniqueKey, ticket, nowOf(client)) : undefined });
         const baseline = ledger.keyRecords();
         const after = await client.request('MyFleetsRequest', {}, 'MyFleetsResponse', 8000);
         reconcile({ ...fresh, now: nowOf(client), fleets: after.fleets ?? [], reason: '' }, ledger, baseline);
         const record = ledger.keyRecords()[step.uniqueKey];
-        const confirmed = !record || record.confirmed;
+        const own = after.fleets?.filter(f => f.buildingId === step.buildingId);
+        const confirmed = record ? record.id === ticket.id && record.confirmed
+          : step.kind === 'cityRepair' || (own?.length === 1 && cityDispatchObserved(own[0], details));
         entry = { step, ok: confirmed, sent: true, status: confirmed ? 'confirmed' : 'unknown',
-          note: confirmed ? (step.kind === 'cityRepair' ? '服务器已确认维修状态或耐久增加' : '服务器已确认舰队前往城战目标') : '请求已发送，结果待确认；保留汽油和舰队锁定' };
+          note: confirmed ? (step.kind === 'cityRepair' ? '服务器已确认维修状态或耐久增加' : '服务器已确认舰队前往城战目标')
+            : record?.id === ticket.id ? '请求已发送，结果待确认；保留汽油和舰队锁定' : '请求已发送，原派遣结果未确认' };
       } catch (error) {
-        if (error.prompt && error.request === step.request) {
+        if (error.notSent || (error.prompt && error.request === step.request)) {
           ledger.cancel(ticket);
-          const failures = rejected.get(client) ?? new Map(); rejected.set(client, failures);
-          failures.set(step.uniqueKey, { until: Date.now() + 300000, signature: JSON.stringify(step.body) });
+          if (error.prompt) {
+            const failures = rejected.get(client) ?? new Map(); rejected.set(client, failures);
+            failures.set(step.uniqueKey, { until: Date.now() + 300000, signature: JSON.stringify(step.body) });
+          }
           entry = { step, ok: false, status: 'rejected', error: error.message };
         } else entry = { step, ok: false, status: 'unknown', error: '结果未知，保留预算与舰队锁定：' + error.message };
       }

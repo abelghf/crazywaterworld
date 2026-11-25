@@ -462,10 +462,10 @@ export function planTreasureLoot(snapshot, config, settings, { usage = { counter
     });
     const fleetPreferences = chosen?.chase ? { ...p, minDurabilityPercent: 0 } : p;
     let reason = fleetReason(fleet, snapshot, fleetPreferences, true);
-    if (!reason) reason = unavailableFleets[buildingId] || '';
-    if (!reason && reservedFleetIds.includes(buildingId)) reason = '城战时段保留给城战接续';
     const warRecord = keys['cityWar:' + snapshot.worldId + ':' + fleetNumber(buildingId)];
     if (!reason && warRecord && !warRecord.confirmed) reason = '城战任务结果待确认，暂不派遣巨轮';
+    if (!reason) reason = unavailableFleets[buildingId] || '';
+    if (!reason && reservedFleetIds.includes(buildingId)) reason = '城战时段保留给城战接续';
     if(!reason&&Object.values(keys).some(r=>r.details?.kind==='worldBoss'&&r.details.buildingId===buildingId&&r.details.active!==false))reason='世界Boss首战尚未结束或结果待确认';
     if (!reason && Object.entries(keys).some(([key,r])=>key.startsWith('radar-send:'+snapshot.worldId+':') && r.details?.buildingId===buildingId && r.details.active!==false)) reason='联盟情报尚在执行或结果待确认';
     const prefix = `treasure:${snapshot.worldId}:`, suffix = ':' + fleetNumber(buildingId);
