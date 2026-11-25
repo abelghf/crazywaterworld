@@ -4,7 +4,7 @@ import { militaryRewards, riverActivity, edictPassActivity, compassActivity, bea
 import { claimComicDrama, claimTournamentDaily, openSeasonChests } from './side-rewards.mjs';
 import { merchantActivity } from './merchant-activity.mjs';
 import { runAllianceAutomation } from './alliance-automation.mjs';
-import { serviceGuildShips, watchGuildShipPushes } from './guild-ships.mjs';
+import { isGuildShipPush, serviceGuildShips, watchGuildShipPushes } from './guild-ships.mjs';
 import { serviceGuildForts } from './guild-forts.mjs';
 import { recallSiliconForEvent, runSiliconMining, siliconRecallOpensAt, settleSiliconEventRecalls, watchSiliconMining, siliconInterval } from './silicon-mining.mjs';
 import { runResourceFields } from './resource-field-automation.mjs';
@@ -143,6 +143,10 @@ export async function runLoop(client, protocol, {
   const rejected = { tasks: new Set(), world: new Set() };
   const history = [];
   const rewards = isEnabled ? rewardSchedule(client) : null;
+  const guildShipSchedule = rewards ?? rewardSchedule(client);
+  const guildShipNext = () => getSettings()?.guildShip?.enabled
+    ? (guildShipSchedule.scheduledAt('guildShip') ?? 0) * 1000 - (client.serverClockOffsetMs || 0) : Infinity;
+  guildShipSchedule.clearTask('guildShip');
   bridgeFleetReservations(client, getSettings, usageLedger, exactAutomationId(player?.worldId));
   let lastRecruitWait;
   const dailyWaitReasons = new Map();
@@ -168,7 +172,7 @@ export async function runLoop(client, protocol, {
   };
   const extendedNext = () => {
     const settings = getSettings();
-    if (!settings?.alliance?.enabled && !settings?.guildShip?.enabled && !settings?.heroRaid?.enabled) return Infinity;
+    if (!settings?.alliance?.enabled && !settings?.heroRaid?.enabled) return Infinity;
     return extendedPreference === settings ? extendedAt : 0;
   };
   let appointmentAt = 0, appointmentPreference = null;
@@ -330,15 +334,16 @@ export async function runLoop(client, protocol, {
       }
       scanOptions.set(key, options);
     }
-    rewards?.clearTask('guildShip'); rewards?.clearTask('guildFort'); wakeActivities(); scheduler.wake(); };
+    guildShipSchedule.clearTask('guildShip'); rewards?.clearTask('guildFort'); wakeActivities(); scheduler.wake(); };
   const extendedPush = ({ name }) => {
-    if (/^SCGuildShip|^SCFort|^SCHeroRaid/.test(name) || ['SCAllActivity','SCGuildOrder','SCNewGuildAidAsk','SCGuildAidHelp','SCGuildAidRemove','SCNewGuildWelfarePack'].includes(name)) {
+    if (isGuildShipPush(name) && getSettings()?.guildShip?.enabled) scheduler.wake();
+    if (/^SCFort|^SCHeroRaid/.test(name) || ['SCAllActivity','SCGuildOrder','SCNewGuildAidAsk','SCGuildAidHelp','SCGuildAidRemove','SCNewGuildWelfarePack'].includes(name)) {
       extendedAt = 0; scheduler.wake();
     }
   };
   scheduler.listen(client, 'automationSettingsChanged', settingsWake);
   scheduler.listen(client, 'message', extendedPush);
-  watchGuildShipPushes(client, rewards);
+  watchGuildShipPushes(client, guildShipSchedule);
   scheduler.addCleanup(travel.subscribe(fleet=>{
     const preferences=getSettings()?.treasure;
     if(stop.aborted||!client.connected||!treasureAutomationEnabled(getSettings()))return;
@@ -711,6 +716,12 @@ export async function runLoop(client, protocol, {
       catch (error) { phaseFailure('world', '硅矿检查', error, 'silicon.enabled'); }
       finally { siliconAt = version === siliconVersion ? Date.now() + siliconInterval(getSettings()) : 0; }
     }
+    async function checkGuildShip() {
+      if (!scheduler.active() || guildShipNext() > Date.now()) return;
+      await serviceGuildShips(client, protocol, config, { player, getSettings, ledger: usageLedger, scheduler: guildShipSchedule,
+        enabled: () => scheduler.active() && runtimeActive(),
+        report: entry => serviceReport('world', 'guildShip.enabled')({ ...entry, taskKey: 'guildShip.enabled' }) });
+    }
     async function checkExtended() {
       if (stop.aborted || extendedNext() > Date.now()) return;
       extendedPreference = getSettings();
@@ -726,16 +737,10 @@ export async function runLoop(client, protocol, {
             enabled: () => active() && getSettings()?.alliance?.enabled };
           if (getSettings()?.guildFort?.enabled) await serviceGuildForts(client, protocol, config, { ...options, report: report('guildFort.enabled') });
         }
-        if (getSettings()?.guildShip?.enabled) await serviceGuildShips(client, protocol, config,
-          { player, getSettings, ledger: usageLedger, scheduler: rewards, enabled: active, report: report('guildShip.enabled') });
         if (getSettings()?.heroRaid?.enabled) await runHeroRaidAutomation(client, protocol, config, player,
           { getSettings, ledger: usageLedger, enabled: active, report: report('heroRaid.enabled') });
       } catch (error) { phaseFailure('world', '联盟与活动自动化', error); }
-      finally {
-        const startsAt = getSettings()?.guildShip?.enabled
-          ? watchGuildShipPushes(client).period?.startTime * 1000 - (client.serverClockOffsetMs || 0) : 0;
-        extendedAt = startsAt > Date.now() ? Math.min(Date.now() + 60000, startsAt) : Date.now() + 60000;
-      }
+      finally { extendedAt = Date.now() + 60000; }
     }
     async function checkAppointments() {
       if (!scheduler.active() || appointmentNext() > Date.now()) return;
@@ -1486,8 +1491,9 @@ export async function runLoop(client, protocol, {
       if (sweepAfterDispatch) await checkPirateSweeps();
     }
     await scheduler.runSteps(mainSteps(), {
-      nextAt: () => Math.min(mainScanNext(), worldOnlineNext(), meritNext()),
+      nextAt: () => Math.min(guildShipNext(), mainScanNext(), worldOnlineNext(), meritNext()),
       runPending: async () => {
+        await checkGuildShip();
         await checkMeritDue();
         if (mainScanNext() <= Date.now()) await checkDispatch();
         await checkWorldOnline();
@@ -1510,7 +1516,7 @@ export async function runLoop(client, protocol, {
           const weeklyAt = nextWeeklyActivityBoundary(client, getWeeklySettings(), roundStartedMs);
           const activityAt = activityVersion !== roundActivityVersion ? 0
             : nextActivityBoundary(client, activityConfigured, roundStartedMs);
-          const wakeAt = Math.min(nextRound, activityAt, weeklyAt, factorySchedule.nextAt(), dispatchNext(), extendedNext(), merchantNext(), appointmentNext(), worldOnlineNext(), meritNext(),
+          const wakeAt = Math.min(nextRound, activityAt, weeklyAt, factorySchedule.nextAt(), dispatchNext(), guildShipNext(), extendedNext(), merchantNext(), appointmentNext(), worldOnlineNext(), meritNext(),
             isEnabled && enabled('upgrade') ? upgradeAt : Infinity,
             antiqueEnabled(getSettings()) ? antiqueAt : Infinity, nextAfkCheck());
           if (wakeAt > Date.now()) await scheduler.waitUntil(wakeAt);
@@ -1520,6 +1526,7 @@ export async function runLoop(client, protocol, {
             break;
           }
           // 推送或保存设置可能早于原定时间唤醒；必须重读当前到期时间与开关。
+          await scheduler.runDue('guildShip', guildShipNext, checkGuildShip);
           await scheduler.runDue('dispatch', dispatchNext, checkDispatch);
           await scheduler.runDue('worldOnlineRewards', worldOnlineNext, checkWorldOnline);
           await scheduler.runDue('seasonMerit', meritNext, checkMeritDue);

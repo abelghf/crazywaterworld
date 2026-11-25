@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import vm from 'node:vm';
 import { createConsoleRuntime } from '../src/ui/console-store.mjs';
+import { activitiesPage } from '../src/ui/dist/console.mjs';
 import { defaultSettings, settingsUiRules } from '../src/automation-settings.mjs';
 import { merchantPresets, merchantPresetOptions } from '../src/merchant-presets.mjs';
 import { activityAutomationFields, activityAutomationSettingFields } from '../src/activity-automation.mjs';
@@ -10,6 +11,7 @@ import { activityAutomationFields, activityAutomationSettingFields } from '../sr
 const script = fs.readFileSync(new URL('../src/ui/activities.js', import.meta.url), 'utf8');
 const configScript = fs.readFileSync(new URL('../src/settings-ui.js', import.meta.url), 'utf8');
 const { merchantActivityFields, guildShipActivityFields } = newStateFunction(configScript.slice(0, configScript.indexOf('function configGet(')) + '\nreturn { merchantActivityFields, guildShipActivityFields };')();
+const shipFieldGroups = [...activitiesPage().matchAll(/data-ship-fields="([^"]+)"/g)].map(match => match[1]);
 const clone = value => JSON.parse(JSON.stringify(value));
 const deferred = () => {
   let resolve, reject;
@@ -148,7 +150,23 @@ function fixture() {
     configOpenSearchPanel() {},
     $: node, el: element,
     clear: item => { item.textContent = ''; return item; },
-    component: name => element(name === 'ui-number' ? 'input' : 'button'),
+    component: name => {
+      if (name === 'ui-guild-ship-settings') {
+        const section = element('div', 'activity-settings guild-ship-settings');
+        for (const keys of shipFieldGroups) {
+          const group = element('div');
+          group.dataset.shipFields = keys;
+          section.append(group);
+        }
+        return section;
+      }
+      if (name === 'ui-select') {
+        const wrapper = element('div');
+        wrapper.append(element('select'));
+        return wrapper;
+      }
+      return element(name === 'ui-number' ? 'input' : 'button');
+    },
     smallButton: text => element('button', '', text),
     makeHelpTip: (label, help) => element('span', 'help-tip', help),
     setTaskSwitch: (input, enabled) => input.setAttribute('aria-checked', enabled),
@@ -1431,6 +1449,8 @@ await test('风采大赛随期次展示三个开关，历史与离线可改细�
 });
 
 await test('联盟商船在活动页独立配置，离线及暂停可编辑且不出现挂机开关跳转', async () => {
+  assert.deepEqual(shipFieldGroups.flatMap(group => group.split(' ').map(key => 'guildShip.' + key)).sort(),
+    guildShipActivityFields.map(field => field.key).sort(), '每个配置项应恰好属于一个商船分组');
   for (const state of ['connected', 'paused', 'offline']) {
     const f = fixture();
     if (state === 'paused') f.context.snapshot.paused = true;
@@ -1444,6 +1464,10 @@ await test('联盟商船在活动页独立配置，离线及暂停可编辑且�
     assert.doesNotMatch(f.node('activities-list').textContent, /当前活动暂未接入/);
     assert.doesNotMatch(f.node('activities-list').textContent, /红船缺料备料需开启工厂生产/);
     await f.shipInput('guildShip.crew').onclick();
+    const interval = f.shipInput('guildShip.checkEverySeconds');
+    interval.value = '9'; await interval.onchange();
+    assert.equal(f.shipSaved.get('merchant-a').settings.guildShip.checkEverySeconds, 9);
+    assert.equal(f.shipSaved.get('merchant-b').settings.guildShip.checkEverySeconds, 60);
     await f.api.saveShip('guildShip.enabled', true);
     await f.api.saveShip('guildShip.enabled', false);
     assert.equal(f.shipSaved.get('merchant-a').settings.guildShip.crew, true);

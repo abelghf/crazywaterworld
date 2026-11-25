@@ -611,6 +611,16 @@ try {
     assert.deepEqual(saveAutomationSettings('old', old, { file, revision: 1 }).settings, expected);
     assert(!Object.hasOwn(nativeTaskValues(expected, old.schedule), 'ticketRecruit'));
   });
+  test('版本 67 的商船设置补齐检查间隔，保留显式值并校验范围', () => {
+    const settings = defaultSettings(), version = 67;
+    const document = { format: SETTINGS_FORMAT, version, settings };
+    delete settings.guildShip.checkEverySeconds;
+    assert.equal(importAutomationSettings(document).guildShip.checkEverySeconds, 60);
+    settings.guildShip.checkEverySeconds = 8;
+    assert.equal(importAutomationSettings(document).guildShip.checkEverySeconds, 8);
+    settings.guildShip.checkEverySeconds = 301;
+    assert.throws(() => importAutomationSettings(document), error => !!error.fields['guildShip.checkEverySeconds']);
+  });
   test('旧商船配置只补齐缺失的钻石选项，原文件、显式值和校验保持有效', () => {
     const settings = defaultSettings();
     settings.guildShip.enabled = true;
@@ -816,6 +826,7 @@ try {
       expected.merchant.speedUpMode = 'deadline';
       expected.merchant.fullCargoRoutes = value ?? defaultSettings().merchant.fullCargoRoutes;
       expected.merchant.periodPointerLimit = document.settings.merchant.periodPointerLimit ?? -1;
+      expected.guildShip.checkEverySeconds = 60;
       expected.afk = { claimIntervalHours: 0 };
       expected.seasonMerit = { enabled: false, targetRank: 0, leadMinutes: 0 };
       expected.schedule.afkUpgrade = false;
@@ -919,7 +930,7 @@ try {
     assert.throws(() => validateSettings(settings), error => !!error.fields['alliance.memberIds']);
   });
   test('版本1升级后重复迁移保持一致，保留有效的用户值', () => {
-    assert.equal(SETTINGS_SCHEMA_VERSION, 67);
+    assert.equal(SETTINGS_SCHEMA_VERSION, 68);
     const settings = legacySettings();
     settings.factory.checkEverySeconds = 270;
     settings.resources.diamondDailyLimit = 1234;

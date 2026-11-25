@@ -127,8 +127,10 @@ function activityRows() {
     || (activityLifecycle(a) === 'ended' ? (b.endTime ?? 0) - (a.endTime ?? 0) : (a.startTime ?? 0) - (b.startTime ?? 0)));
 }
 
-function activityBadge(kind) {
-  return el('span', 'activity-badge ' + kind, activityKinds[kind].tag);
+function activityBadge(kind, badge = el('span')) {
+  badge.className = (badge.className + ' activity-badge ' + kind).trim();
+  badge.textContent = activityKinds[kind].tag;
+  return badge;
 }
 
 function activityRemaining(endTime) {
@@ -266,6 +268,7 @@ function renderActivityDetail() {
   const box = $('activities-list');
   const previousSettings = box.querySelector('.activity-settings');
   const settingsKind = activitySettingsKind(row);
+  panel.classList.toggle('guild-ship-panel', settingsKind === 'guild-ship');
   const saving = [savingMerchantSettings, savingHeroRaidSettings, savingSeaMerchantSettings, savingGuildShipSettings, savingActivityAutomation]
     .some(pending => pending.has(current));
   const keepSettings = !saving && previousSettings?.dataset.kind === settingsKind && editingActivitySettings(previousSettings);
@@ -278,7 +281,7 @@ function renderActivityDetail() {
   if (!row) return;
   panel.setAttribute('aria-labelledby', $('activity-tabs').querySelector('[aria-selected=true]').id);
   $('activity-title').textContent = row.group ? row.group + ' · ' + row.name : row.name;
-  clear($('activity-kind')).appendChild(activityBadge(row.kind));
+  clear($('activity-kind')).appendChild(activityBadge(row.kind, isGuildShipActivity(row) ? component('ui-badge') : undefined));
   $('activity-end').textContent = row.settingsOnly ? (activitiesData && !activitiesData.catalogOnly ? '当前未开放，可预先配置' : '连接后读取活动状态，可预先配置')
     : row.kind === 'permanent' ? '长期开放' : '开始 ' + activityDate(row.startTime) + ' · 结束 ' + activityDate(row.endTime) + '（北京时间）';
   if (row.rewardEndTime > row.endTime && row.endTime > 0) $('activity-end').textContent += ' · 奖励展示截至 ' + activityDate(row.rewardEndTime);
@@ -921,16 +924,20 @@ function renderGuildShipSettings(box) {
     box.appendChild(el('p', 'dim', guildShipSettingsStatus || '正在读取联盟商船配置…'));
     return;
   }
-  renderActivitySettingsFields(box, { data: guildShipSettingsData, fields: guildShipActivityFields,
+  const section = component('ui-guild-ship-settings');
+  const fieldContainers = new Map();
+  for (const group of section.querySelectorAll('[data-ship-fields]')) {
+    for (const key of group.dataset.shipFields.split(' ')) fieldContainers.set('guildShip.' + key, group);
+  }
+  renderActivitySettingsFields(box, { section, fieldContainers, data: guildShipSettingsData, fields: guildShipActivityFields,
     saving: savingGuildShipSettings.has(account), statusText: guildShipSettingsStatus,
-    prefix: 'guild-ship', dataset: 'guildShipSetting', save: saveGuildShipSetting, title: '联盟商船',
-    note: '钻石补货需开启全局自动钻石消耗，并设置商船每日上限。' });
+    prefix: 'guild-ship', dataset: 'guildShipSetting', save: saveGuildShipSetting, title: '联盟商船' });
 }
 
-function renderActivitySettingsFields(box, { data, fields, saving, statusText, prefix, dataset, save, title, note, statusBox }) {
+function renderActivitySettingsFields(box, { data, fields, saving, statusText, prefix, dataset, save, title, note, statusBox,
+  section = el('div', statusBox ? 'merchant-field-list' : 'activity-settings'), fieldContainers }) {
   const account = current;
   const settings = data.settings;
-  const section = el('div', statusBox ? 'merchant-field-list' : 'activity-settings');
   const activeFields = new Map();
   for (const field of fields) {
     const [group, key] = field.key.split('.');
@@ -947,10 +954,18 @@ function renderActivitySettingsFields(box, { data, fields, saving, statusText, p
     name.appendChild(label);
     if (field.help) name.appendChild(makeHelpTip(field.label, field.help));
     const controlBox = el('div', 'config-control');
-    const control = field.kind === 'multi' ? configMultiselect(field, id, {
-      catalog: data.catalog, read: () => settings[group][key], disabled: saving,
-      write: next => { if (current === account && !saving) return save(field.key, next); },
-    }) : field.kind === 'switch' ? component('ui-event-switch') : el(field.kind === 'choice' ? 'select' : 'input');
+    let control, selectWrapper;
+    if (field.kind === 'multi') {
+      control = configMultiselect(field, id, {
+        catalog: data.catalog, read: () => settings[group][key], disabled: saving,
+        write: next => { if (current === account && !saving) return save(field.key, next); },
+      });
+    } else if (field.kind === 'choice') {
+      selectWrapper = component('ui-select');
+      control = selectWrapper.querySelector('select');
+    } else {
+      control = component(field.kind === 'switch' ? 'ui-event-switch' : 'ui-number');
+    }
     control.id = id;
     control.dataset[dataset] = field.key;
     control.setAttribute('aria-label', field.label);
@@ -1000,11 +1015,11 @@ function renderActivitySettingsFields(box, { data, fields, saving, statusText, p
       const numberLine = el('div', 'config-number');
       numberLine.append(control, el('span', null, field.unit));
       controlBox.appendChild(numberLine);
-    } else controlBox.appendChild(control);
+    } else controlBox.appendChild(selectWrapper ?? control);
     row.append(name, controlBox);
-    section.appendChild(row);
+    (fieldContainers?.get(field.key) ?? section).appendChild(row);
   }
-  section.appendChild(el('p', 'dim', note));
+  if (note) section.appendChild(el('p', 'dim', note));
   const status = el('p', 'dim', saving ? '正在保存…' : statusText);
   status.setAttribute('role', 'status');
   box.appendChild(section);
