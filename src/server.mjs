@@ -4298,6 +4298,9 @@ export function createConsole({ host = '127.0.0.1', port = 17321, onLog, recover
         json(await progressionJob(session, account, route, null, async (client, enabled) => {
           const config = loadConfigSafe();
           const view = await activityView(client, client.festivals, config, session.player, session.id);
+          for (const status of Object.values(view.status)) {
+            for (const item of status.chip?.statistics?.inventory ?? []) item.thumbnail = itemIcon(item.id)?.thumb;
+          }
           view.newbie = newbieView(client);
           if (view.order?.materials.length && !view.order.finished && enabled()) {
             const typeOf = makeTypeResolver(config);

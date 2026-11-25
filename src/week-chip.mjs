@@ -40,7 +40,7 @@ export function updateChipFactoryScore(player, name, body) {
 }
 
 export function weekChipStatistics(config, plan, info, stock, player, freePack) {
-  const inventory = allCrystals.map(({ id, name, points }) => ({ name, count: stock.get(id) ?? 0, points }));
+  const inventory = allCrystals.map(({ id, name, points }) => ({ id, name, count: stock.get(id) ?? 0, points }));
   const tiers = [...config.tables.WeekChipPointsCfg.data].sort((a, b) => a.amount - b.amount);
   const claimed = Array.isArray(info.gotTaskId) ? new Set(info.gotTaskId) : null;
   const settled = claimed && tiers.every(tier => claimed.has(tier.rwdId)) && plan.score >= plan.target;

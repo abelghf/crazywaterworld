@@ -1546,7 +1546,9 @@ await test('硅晶达标在周期活动内预览本轮消耗，确认后执行�
   await f.api.refresh();
   f.api.select(id);
   const stats = f.node('activities-list');
-  assert.match(stats.querySelector('.week-chip-metrics').textContent, /已完成轮次1 \/ 5.*当前累计积分15,997.*当前积分 \/ 本轮积分上限7,997 \/ 8,000/);
+  assert.match(stats.querySelector('.week-chip-metrics').textContent, /当前积分 \/ 本轮积分上限7,997 \/ 8,000.*已完成轮次1 \/ 5.*当前累计积分15,997/);
+  assert.equal(stats.querySelector('progress').max, 8000);
+  assert.equal(stats.querySelector('progress').value, 7997);
   assert.match(stats.querySelector('.week-chip-inventory').textContent, /初级硅晶0 个中级硅晶1 个高级硅晶0 个优质硅晶0 个特级硅晶0 个/);
   assert.match(stats.textContent, /第 2 轮/);
   assert.doesNotMatch(stats.textContent, /中级硅晶 ×1|超出目标/);
@@ -1570,6 +1572,8 @@ await test('硅晶达标在周期活动内预览本轮消耗，确认后执行�
   assert.equal(writes().length, 1);
   assert.equal(button().disabled, true);
   assert.match(f.node('activities-list').textContent, /本轮已达标.*本轮加工完成/);
+  assert.equal(stats.querySelector('progress').value, 8000);
+  assert.match(stats.querySelector('progress').getAttribute('aria-valuetext'), /8,007 分/);
   Object.assign(plan, { round: 3, score: 7, gap: 7993, available: 15 });
   Object.assign(plan.statistics, { completed: 2, qualified: 2, forecast: 22 });
   await f.api.refresh();
@@ -1581,6 +1585,7 @@ await test('硅晶达标在周期活动内预览本轮消耗，确认后执行�
   await f.api.refresh();
   const rebatePanel = stats.querySelector('.week-chip-panel').textContent;
   assert.match(rebatePanel, /当前积分 \/ 本轮积分上限0 \/ 8,000/);
+  assert.equal(stats.querySelector('progress').value, 0);
   assert.doesNotMatch(rebatePanel, /库存可得|周活动返晶|免费礼包|芯片厂|预计积分计入|分批加工|返晶到账|将开启|本轮档位奖励|中级硅晶 ×50|还缺 406/);
   assert.equal(button().disabled, false);
   button().onclick();

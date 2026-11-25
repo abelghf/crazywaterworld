@@ -338,49 +338,90 @@ function renderActivityDetail() {
 function renderWeekChipStatistics(section, plan) {
   const stats = plan.statistics;
   const format = n => n.toLocaleString('zh-CN');
-  const metric = (list, label, value) => {
-    const cell = el('div');
-    cell.append(el('dt', null, label), el('dd', null, value));
-    list.appendChild(cell);
-  };
   const metrics = el('dl', 'week-chip-metrics');
-  metric(metrics, '已完成轮次', stats.completed + ' / ' + plan.roundLimit);
-  metric(metrics, '当前累计积分', format(plan.total));
-  if (plan.round <= plan.roundLimit) {
-    metric(metrics, '当前积分 / 本轮积分上限', format(plan.score) + ' / ' + format(plan.target));
+  function metric(label, value, unit, className) {
+    const cell = el('div', className), amount = el('dd');
+    amount.appendChild(el('span', null, format(value)));
+    if (unit) amount.appendChild(el('span', 'week-chip-unit', unit));
+    cell.append(el('dt', null, label), amount);
+    metrics.appendChild(cell);
+    return amount;
   }
-  section.appendChild(metrics);
+  if (plan.round <= plan.roundLimit) {
+    const amount = metric('当前积分 / 本轮积分上限', plan.score, ' / ' + format(plan.target), 'week-chip-score');
+    const meter = el('progress');
+    meter.max = plan.target;
+    meter.value = Math.min(plan.score, plan.target);
+    meter.setAttribute('aria-label', '本轮已得积分');
+    meter.setAttribute('aria-valuetext', format(plan.score) + ' 分，目标 ' + format(plan.target) + ' 分');
+    amount.appendChild(meter);
+  }
+  if (stats) {
+    metric('已完成轮次', stats.completed, ' / ' + plan.roundLimit);
+    metric('当前累计积分', plan.total);
+  }
+  if (metrics.children.length) section.appendChild(metrics);
+  if (!stats) return;
   if (stats.qualified > stats.completed) section.appendChild(el('p', 'dim', '已有 ' + stats.qualified + ' 轮积分达标，领完本轮档位奖励后计入完成轮次。'));
   const inventory = el('dl', 'week-chip-inventory');
-  inventory.setAttribute('aria-label', '硅晶库存');
-  for (const item of stats.inventory) metric(inventory, item.name, format(item.count) + ' 个');
-  section.appendChild(inventory);
+  const title = el('h4', null, '硅晶库存');
+  title.id = 'week-chip-stock-title';
+  inventory.setAttribute('aria-labelledby', title.id);
+  for (const item of stats.inventory) {
+    const cell = el('div'), term = el('dt'), art = el('span', 'week-chip-crystal');
+    art.dataset.points = item.points;
+    art.setAttribute('aria-hidden', 'true');
+    if (item.thumbnail) {
+      const img = el('img');
+      img.alt = '';
+      img.width = img.height = 48;
+      img.onerror = () => img.remove();
+      img.src = item.thumbnail;
+      art.appendChild(img);
+    }
+    term.append(art, el('span', null, item.name));
+    const count = el('dd');
+    count.append(el('span', null, format(item.count)), el('span', 'week-chip-unit', ' 个'));
+    cell.append(term, count);
+    inventory.appendChild(cell);
+  }
+  const stock = el('div', 'week-chip-stock');
+  stock.append(title, inventory);
+  section.appendChild(stock);
 }
 
 function renderWeekChip(box, row) {
   const account = activitiesAccount, status = activitiesData.status?.[row.id], plan = status?.chip;
-  const section = el('div', 'week-chip-panel');
+  const section = el('section', 'week-chip-panel');
+  const heading = el('div', 'week-chip-heading'), title = el('h3', null, '硅晶加工');
+  title.id = 'week-chip-title';
+  section.setAttribute('aria-labelledby', title.id);
+  heading.appendChild(title);
+  section.appendChild(heading);
   box.appendChild(section);
-  section.appendChild(el('strong', null, '硅晶加工'));
   if (!plan) {
     section.appendChild(el('p', 'dim', status?.chipError || '硅晶积分和库存待同步，请刷新活动。'));
     return;
   }
   const key = account + ':' + row.id;
-  if (plan.statistics) renderWeekChipStatistics(section, plan);
-  if (plan.round > plan.roundLimit) section.appendChild(el('p', null, '本期全部轮次已完成。'));
-  else {
-    const round = '第 ' + plan.round + ' 轮';
-    section.appendChild(el('p', null, plan.statistics ? round : round + ' · ' + plan.score + ' / ' + plan.target + ' 分'));
-  }
-  if (plan.blockedReason) section.appendChild(el('p', 'dim', plan.blockedReason));
-  else if (!plan.key && plan.round <= plan.roundLimit) {
+  heading.appendChild(el('span', 'week-chip-round', plan.round > plan.roundLimit ? '本期全部轮次已完成' : '第 ' + plan.round + ' 轮'));
+  renderWeekChipStatistics(section, plan);
+  const footer = el('div', 'week-chip-footer');
+  let notice = plan.blockedReason;
+  if (!notice && !plan.key && plan.round <= plan.roundLimit) {
     const shortfall = plan.target - (plan.statistics?.forecast ?? Math.min(plan.target, plan.score + plan.available));
-    const statusText = !plan.gap ? '本轮已达标。' : shortfall > 0 ? '本轮还缺 ' + shortfall + ' 分。' : '开晶方案待同步，请刷新活动。';
-    section.appendChild(el('p', 'dim', statusText));
+    notice = !plan.gap ? '本轮已达标。' : shortfall > 0 ? '本轮还缺 ' + shortfall + ' 分。' : '开晶方案待同步，请刷新活动。';
   }
   const claimOnly = !plan.gap && plan.key;
-  const button = smallButton(pendingActivities.has(key) ? '正在处理…' : claimOnly ? '领取本轮达标奖励' : '一键开到 ' + plan.target + ' 分');
+  const button = component('ui-confirm');
+  button.type = 'button';
+  button.textContent = pendingActivities.has(key) ? '正在处理…' : claimOnly ? '领取本轮达标奖励' : '一键开到 ' + plan.target + ' 分';
+  if (notice) {
+    const note = el('p', 'week-chip-notice', notice);
+    note.id = 'week-chip-notice';
+    button.setAttribute('aria-describedby', note.id);
+    footer.appendChild(note);
+  }
   button.dataset.activityRun = 'weekChipOpen';
   const unavailable = () => account !== current || activitiesAccount !== account || snapshot.connected !== true ||
     snapshot.paused || disconnected.has(account) || activitiesData?.catalogOnly || activityLifecycle(row) !== 'active';
@@ -417,10 +458,11 @@ function renderWeekChip(box, row) {
       }
     }, claimOnly ? '确认领取' : '确认开启');
   };
-  section.appendChild(button);
+  footer.appendChild(button);
+  section.appendChild(footer);
   const message = weekChipMessages.get(key);
   if (message && (message.round === plan.round || (message.complete && message.round + 1 === plan.round))) {
-    const result = el('p', 'dim', message.text);
+    const result = el('p', 'week-chip-result', message.text);
     result.setAttribute('role', 'status');
     section.appendChild(result);
   }
