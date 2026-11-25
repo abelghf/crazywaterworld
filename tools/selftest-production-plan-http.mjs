@@ -167,6 +167,37 @@ try {
         [['面包', 1, '小麦', 5], ['小麦', 5, '小麦种子', 1]]);
     } finally { await f.close(); }
   });
+  await test('仓库消耗后重新读取排产页，预计备齐时间包括撤下等待项的收益', async () => {
+    const previousPack = process.env.CW_CONFIG_PACK;
+    const custom = {...config, BuildingProduceCfg:[...config.BuildingProduceCfg,
+      {itemId:'酒精',buildType:'食品厂',unlockLevel:1,produceTime:120,costItem:[['小麦',1]]}]};
+    process.env.CW_CONFIG_PACK = path.join(directory,'priority-queue.json');
+    fs.writeFileSync(process.env.CW_CONFIG_PACK,JSON.stringify(Object.entries(custom).map(([id,data],i)=>[i,id,{data}])));
+    const f = await fixture();
+    try {
+      const replies = f.state.responses;
+      replies.WeekInfoRequest.activityTime = [];
+      replies.OnWaterRequest.workerOrder = [];
+      replies.GuildOrderRequest.order.requirements = [];
+      replies.CargoShipsRequest.ship = [{index:1,status:0,orderItem:[{asset:{id:'面包',num:3}}]}];
+      const queue = replies.OnWaterRequest.building[0].factory.factoryQ;
+      const first = f.state.now+300;
+      queue.push({idx:40,productId:'面包',finishTime:first},{idx:41,productId:'酒精'},{idx:42,productId:'面包'});
+      await f.api('connect',{});
+      await updateSettings(f,s => { s.factory.demandPriority = ['cargo']; s.factory.gain = true; s.cargo.enabled = true; });
+      const read = () => f.api('world/production-plan');
+      const before = await read();
+      assert.equal(before.orders.find(o=>o.source==='cargo').completionAt,before.snapshotTime,
+        JSON.stringify({status:before.status, missing:before.missingReads, notes:before.notes}));
+      replies.AllItemRequest.items.find(r=>r.itemId==='面包').num = 0;
+      f.session().client.emit('message',{name:'SCUpdateItem',body:{items:[{itemId:'面包',num:0}]}});
+      const after = await read();
+      assert(after.productionRevision > before.productionRevision);
+      assert.deepEqual(after.forecast.initialQueueChanges,[{buildingId:'1食品厂',indices:[41]}]);
+      assert.equal(after.orders.find(o=>o.source==='cargo').completionAt,first+120);
+      assert.deepEqual(queue.map(j=>j.idx),[40,41,42]);
+    } finally { await f.close(); process.env.CW_CONFIG_PACK = previousPack; }
+  });
   await test('居民订单每日上限使用游戏配置与账号加成，读取失败时保留交付数', async () => {
     const f = await fixture();
     try {

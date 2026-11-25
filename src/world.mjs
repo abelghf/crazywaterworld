@@ -25,12 +25,13 @@ import { residentFilter, residentOrderStockWarning, resourceReserve, worldPrefer
 import { readWeekOrder } from './activities.mjs';
 import { RESOURCE, displayMaterial } from './config.mjs';
 import { captureFarmMaterialState, farmInventory, settleFarmMaterialState } from './farm-planting.mjs';
-import { runFactoryProductionBatch, confirmFactoryProductionBeforeHarvest } from './factory-production.mjs';
+import { runFactoryProductionBatch, confirmFactoryProductionBeforeHarvest, prepareQueueReplan } from './factory-production.mjs';
 import { readOrderReservedStock } from './order-reservations.mjs';
 import { activityProductionEnabled } from './activity-automation.mjs';
 import { createProductionEligibility, factoryRecipeAvailability, factoryRecipeCosts, insertionRecipeReady } from './production-eligibility.mjs';
 import { nativeMaterialReceipts, simulateNativeFactoryStarts, simulatedFactoryQueueKey } from './factory-native-simulation.mjs';
 import { createFactoryDispatch, shortFactoryFeed } from './factory-dispatch.mjs';
+import { waitingQueueChanges, queueStamp, productionDemandChanged } from './factory-replanning.mjs';
 import { factoryInsertions } from './factory-insert-store.mjs';
 import { insertionYieldsToProduction } from './factory-insertion-queue.mjs';
 import { commitFactoryLane, createProductionTiming, nextFactoryLane, observedProductionDurations, observedProductionHeroes } from './production-timing.mjs';
@@ -525,7 +526,7 @@ export async function surveyWorld(client, protocol, { config = null, player = nu
   const secondLaneConfigured = rowsOf(config, 'MonthCardCfg').some(row =>
     Array.isArray(row.effectList) && row.effectList.some(effect => effect?.[0] === '第二生产位' && effect[1] > 0));
   const readTiming = includeProductionTiming && !ordersOnly && factories.some(b =>
-    b.level > 0 && Array.isArray(b.factory.factoryQ) && slots > b.factory.factoryQ.length
+    b.level > 0 && Array.isArray(b.factory.factoryQ) && (slots > b.factory.factoryQ.length || b.factory.factoryQ.some(job => !job.finishTime))
     && rowsOf(config, 'BuildingProduceCfg').some(recipe => recipe.buildType === b.type));
   const monthCards = readTiming && secondLaneConfigured ? await get('MonthCardRequest') : null;
   const serverClock = () => Math.floor((Date.now() + (client.serverClockOffsetMs || 0)) / 1000);
@@ -1118,13 +1119,14 @@ export function planWorld(survey, {
   ] : [];
   const demandPriority = settings ? [...new Set([...settings.factory.demandPriority, ...independentSources])] : [];
   const speedQuota = new Map();
+  const queueClaims = new Map();
   const detailedNeeds = settings ? settingDemands(survey, config, [
     ...productionOrders,
     ...survey.orders.filter((order, i) => ['reserved', 'missing', 'disabled'].includes(orderDecisions[i]?.status))
       .map(order => ({ source: 'resident', requirements: order.requirements })),
     ...buildingSupplies,
     ...activityOrders.filter(order => !skippedActivityOrders.has(order)),
-  ], demandPriority, { settings, eligibility: productionEligibility, selectedOrders, speedQuota,
+  ], demandPriority, { settings, eligibility: productionEligibility, selectedOrders, speedQuota, queueClaims,
     onSkip: (record, blockers) => notes.push(skipReason(blockers)) }) : null;
   const productionNeeded = id => (detailedNeeds?.get(id)?.num ?? 0) > 0 && (settings?.factory.demandFirst ||
     detailedNeeds.get(id).sources.some(source => independentSources.includes(source)));
@@ -1213,7 +1215,7 @@ export function planWorld(survey, {
     : [...detailedNeeds.values()].some(need => (need.productionBySource[demandPriority[i]] ?? 0) > 0));
   const fullForInsertion = id => survey.stockCap > 0 && survey.stockKnown !== false
     && warehouseCount(id) + (incoming.get(id) ?? 0) >= survey.stockCap;
-  const facilities = survey.factories.filter(b => {
+  let facilities = survey.factories.filter(b => {
     if (!(b.level > 0) || blockedFactory(b)) return false;
     const entry = survey.factoryInsertions?.[b.buildingId];
     if (!entry) return true;
@@ -1221,6 +1223,29 @@ export function planWorld(survey, {
     const canMake = id => insertionRecipeReady(produceRows.find(row => row.itemId === id), b.level, survey.festivals, time, free);
     return !isNative(b) && insertionYieldsToProduction(entry, time, fullForInsertion, canMake);
   });
+  const queueChanges = smart && enabled('startProduce') && settings.factory.produce && survey.stockKnown !== false && !survey.orderCheckError
+    ? waitingQueueChanges({
+      facilities: facilities.filter(b => !isNative(b) && !survey.factoryInsertions?.[b.buildingId]),
+      queues: dispatch.queues, claims: queueClaims, priority: demandPriority, recipes: produceRows, timing, now: survey.serverNow ?? now,
+      stockUnits: id => stockTarget - warehouseCount(id) - survey.factories.reduce((total, b) =>
+        total + (b.factory.finishedProducts ?? []).reduce((n, item) => item.id === id ? n + Number(item.num) : n, 0), 0), stockRank,
+      newRank: row => roomForRecipe(row) > 0 && (row.costItem ?? []).every(([id,n]) => recipeFree(row,id) >= n)
+        ? recipeRank(row) : Infinity,
+    }) : new Map();
+  if (queueChanges.size) {
+    for (const b of facilities.filter(b => queueChanges.has(b.buildingId))) {
+      const {job, target} = queueChanges.get(b.buildingId)[0];
+      const reason = buildingName(b) + '优先排' + name(target) + '，撤下等待中的' + name(job.productId);
+      const stockIds = new Set([job.productId, target, ...detailedNeeds.keys(),
+        ...(produceRows.find(row => row.itemId === target)?.costItem ?? []).map(([id]) => id)]);
+      factoryReasons.set(b.buildingId, reason);
+      actions.push({kind:'startProduce', request:'CancelFactoryProduceRequest', response:null, body:{buildingId:b.buildingId, index:job.idx ?? 0},
+        queueReplan:true, label:reason, displayFactory:buildingName(b), costs:[],
+        verify:{productId:job.productId, queue:queueStamp(b.factory.factoryQ), priority:JSON.stringify(settings.factory.demandPriority),
+          stock:[...stockIds].filter(id => !Object.values(RESOURCE).includes(id)).map(id => [id, have(id)])}});
+    }
+    facilities = facilities.filter(b => !queueChanges.has(b.buildingId));
+  }
   const usableRows = new Set(facilities.flatMap(b => produceRows.filter(r => r.buildType === b.type && r.unlockLevel <= b.level)));
   const downstream = new Map();
   for (const row of usableRows) {
@@ -1574,9 +1599,13 @@ export function planWorld(survey, {
       }
     }
     for (const tier of priorities) {
-      const pathByFactory = new Map(ordinary.map(b => [b, Math.max(-1, ...produceRows.filter(row =>
-        row.buildType === b.type && row.unlockLevel <= b.level && recipeRank(row) === tier).map(row => tailTime.get(row) ?? 0))]));
-      for (const b of [...ordinary].sort((a,b) => pathByFactory.get(b) - pathByFactory.get(a))) planFactory(b, tier);
+      const candidates = ordinary.map(building => {
+        const local = produceRows.filter(row => row.buildType === building.type && row.unlockLevel <= building.level && recipeRank(row) === tier);
+        const state = dispatch.queues.get(building);
+        return { building, path:Math.max(-1, ...local.map(row => tailTime.get(row) ?? 0)),
+          finish:Math.min(Infinity, ...local.map(row => nextFactoryLane(state.finishes, state.lanes.expiresAt, dispatch.seconds(building,row)).finish)) };
+      });
+      for (const {building} of candidates.sort((a,b) => b.path - a.path || (smart ? a.finish - b.finish : 0))) planFactory(building, tier);
     }
     // A downstream booking can expose a replenishment gap at a factory we
     // already visited. Each successful pass consumes at least one free slot.
@@ -1745,7 +1774,7 @@ export function planWorld(survey, {
     if (left === speeders) notes.push(`${SPEED_UP_ITEM} 有 ${speeders} 个，但没有等待中的建造或生产`);
   }
 
-  return { actions, notes, factoryReasons, cargoLoadLimits, upgradeChecks, upgradeReasons: upgradeChecks.map(upgradeReason), orderDecisions,
+  return { actions, notes, factoryReasons, queueChanges, cargoLoadLimits, upgradeChecks, upgradeReasons: upgradeChecks.map(upgradeReason), orderDecisions,
     demands: detailedNeeds ? [...detailedNeeds].map(([id, need]) => ({ id, ...need })) : [], reserved: [...reserved].filter(([, n]) => n > 0) };
 }
 
@@ -1766,7 +1795,7 @@ function worldProductionEligibility(survey, config, settings) {
 }
 
 export function settingDemands(survey, config, records, priority, {
-  settings = null, eligibility = null, selectedOrders = new Set(), onSkip = () => {}, speedQuota,
+  settings = null, eligibility = null, selectedOrders = new Set(), onSkip = () => {}, speedQuota, queueClaims,
 } = {}) {
   const result = new Map();
   const recipes = new Map(rowsOf(config, 'BuildingProduceCfg').map(row => [row.itemId, row]));
@@ -1793,6 +1822,11 @@ export function settingDemands(survey, config, records, priority, {
     const num = Math.max(0, unfilled - (incoming.get(id) ?? 0));
     const extra = Math.max(0, num - (previous?.num ?? 0));
     const immediate = Math.max(0, unfilled - (previous?.unfilled ?? 0));
+    if (queueClaims && immediate && source !== 'factory') {
+      if (!queueClaims.has(id)) queueClaims.set(id, new Map());
+      const claims = queueClaims.get(id);
+      claims.set(source, (claims.get(source) ?? 0) + immediate);
+    }
     const productionBySource = { ...previous?.productionBySource };
     if (extra > 0) productionBySource[source] = (productionBySource[source] ?? 0) + extra;
     if (speedDemand && incoming.has(id)) {
@@ -2114,13 +2148,17 @@ export async function runWorld(client, protocol, plan, {
   onStep,
   enabled = () => true,
   config, player, cargoEnabled = () => false,
-  settings = null, getSettings, getBlockedCollectionTypes, usage, getUsage, beforeStep, afterStep, cancelStep,
+  settings = null, getSettings, getBlockedCollectionTypes, usage, getUsage, beforeStep, afterStep, cancelStep, factoryPlanCurrent = () => true,
 } = {}) {
   if (!allowMutate) throw new Error('海面自动化会改变账号状态，需要 --yes');
   const results = [];
   const blocked = new Set();
   const failedRecipes = new Set();
   const confirmedBorrow = new Map();
+  const checkDemandPlan = step => {
+    if ((step.queueReplan || step.factoryStrategy === 'smart' && (getSettings?.() ?? settings)?.factory.demandFirst)
+      && !factoryPlanCurrent(step)) throw new AutomationSkip('库存或需求已变化，按最新状态重新排产');
+  };
   const checkFactoryStep = step => {
     const recipe = rowsOf(config, 'BuildingProduceCfg').find(row => row.itemId === step.body.productId);
     const gate = factoryRecipeAvailability(recipe, client.festivals, Math.floor((Date.now() + (client.serverClockOffsetMs || 0)) / 1000));
@@ -2166,6 +2204,7 @@ export async function runWorld(client, protocol, plan, {
       }
       const result = await runFactoryProductionBatch(client, protocol, batch, {
         config, player, settings, getSettings, enabled, beforeStep, afterStep, cancelStep, window,
+        beforeDispatch: checkDemandPlan,
         checkStep(action) {
           if (action.demandDriven === false && results.some(entry => !entry.ok && entry.step.demandDriven === true
             && entry.step.request === action.request && entry.step.body.buildingId === action.body.buildingId)) {
@@ -2201,7 +2240,14 @@ export async function runWorld(client, protocol, plan, {
       const cancelAction = localGuard?.cancel ?? cancelStep;
       let ticket = null, prepared = false, dispatched = false, writePending = false;
       let actual = step;
+      let queueChanged = false;
+      const observeQueue = ({name, body}) => {
+        if (productionDemandChanged(name,body) || name === 'SCUpdateWaterBuilding'
+          && body?.building?.some(b => b.buildingId === step.body.buildingId)) queueChanged = true;
+      };
+      if (step.queueReplan) client.on?.('message',observeQueue);
       try {
+        checkDemandPlan(step);
         // The official client waits for a business Response for planting. Keep
         // Prompt attribution until that reply/timeout, not a short silent window.
         const response = step.request === 'FarmPlantRequest' ? 'OkResponse' : step.response;
@@ -2246,7 +2292,12 @@ export async function runWorld(client, protocol, plan, {
           if (prior && Date.now() < prior.until) { results.push({step,skipped:true,reason:prior.pending?'前次目标调整待确认':'目标调整冷却中'}); continue; }
           checks.set(step.body.buildingId,{until:Date.now()+300000,pending:true});
         }
-        let waterSnapshot, checkSpeedTime;
+        let waterSnapshot, checkSpeedTime, interruption;
+        if (step.queueReplan) {
+          interruption = await prepareQueueReplan(client, protocol, step, { player,
+            enabled: () => !queueChanged && enabled(step.kind) && worldActionAllowed(getSettings?.() ?? settings, step, config) });
+          waterSnapshot = interruption.water;
+        }
         if (step.verify && (step.kind === 'speedUpProduce' || step.request === 'FarmSpeedUpRequest')) {
           waterSnapshot = normalize(await client.request('OnWaterRequest', {}, 'OnWaterResponse'));
           const building = waterSnapshot.building?.find(b => b.buildingId === step.body.buildingId);
@@ -2304,9 +2355,15 @@ export async function runWorld(client, protocol, plan, {
         } else {
           // 没有配套 Response：静默即成功，回包是 PromptResponse 就是被拒。
           dispatched = writePending = true;
-          const sent = await client.sendWatch(step.request, actual.body, { window, beforeSend: checkSpeedTime });
+          const sent = await client.sendWatch(step.request, actual.body, { window, beforeSend: () => {
+            checkDemandPlan(step); interruption?.beforeSend(); checkSpeedTime?.();
+          } });
           writePending = false;
           entry = { step: actual, ok: true, sent };
+          if (interruption && step.request === 'CancelFactoryProduceRequest') {
+            const confirmed = await interruption.cancellationConfirmed();
+            entry = { step, ok:!!confirmed, status:confirmed ? 'confirmed' : 'unknown', reason:confirmed ? '已确认撤单' : '撤单结果待核对' };
+          }
           if (step.request === 'SetFactoryAutoProduceRequest') {
             const water = normalize(await client.request('OnWaterRequest', {}, 'OnWaterResponse'));
             const confirmed = water.building?.find(b => b.buildingId === step.body.buildingId)?.factory?.autoProductId === step.body.productId;
@@ -2335,6 +2392,9 @@ export async function runWorld(client, protocol, plan, {
           entry.reason = '播种响应未确认：' + error.message;
           await finishAction?.(actual, ticket, entry);
         }
+      }
+      finally {
+        if (step.queueReplan) client.off?.('message',observeQueue);
       }
       linkOperationResult(entry, ticket);
     }

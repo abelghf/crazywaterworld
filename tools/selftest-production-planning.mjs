@@ -39,6 +39,28 @@ let passed = 0;
 function test(name, run) { run(); passed++; console.log('通过：' + name); }
 
 {
+  const {snapshot,settings} = fixture();
+  const recipes = ['爆米花','酒精'].map((id,i) => ({itemId:id,buildType:'食品厂',unlockLevel:1,produceTime:i ? 15 : 50,costItem:[['小麦',1]]}));
+  const local = {...config,tables:{...config.tables,BuildingProduceCfg:table(recipes)}};
+  settings.factory.demandPriority = ['cargo','museum'];
+  settings.factory.gain = true;
+  snapshot.inventory.push({id:'爆米花',num:1});
+  snapshot.recipes = recipes.map(r => ({...snapshot.recipes[0],id:r.itemId,productId:r.itemId,durationSeconds:r.produceTime}));
+  snapshot.factories[0].queue = ['爆米花','爆米花','爆米花','酒精','酒精','爆米花'].map((productId,i) =>
+    ({id:'q'+i, index:40+i, productId, num:1, finishTime:i ? null : 1010}));
+  snapshot.orders = [['cargo:1','cargo','爆米花',4],['cargo:2','cargo','爆米花',2],['museum','museum','酒精',1]]
+    .map(([id,source,item,num]) => ({id,source,kind:source==='cargo'?'order':'consumption',metadata:{enabled:true},requirements:[{id:item,num}]}));
+  const result = planProduction(snapshot,local,settings);
+  const day = await forecastProductionDay(snapshot,local,settings,result.orders);
+  const at = id => day.completions.find(o=>o.id===id)?.at;
+  assert.deepEqual(day.initialQueueChanges,[{buildingId:'1食品厂',indices:[44,43]}]);
+  assert.equal(at('cargo:2'),1010);
+  assert.equal(at('cargo:1'),1210);
+  assert(at('museum') > at('cargo:1'));
+  assert.equal(snapshot.factories[0].queue.length,6,'预览不得修改实际队列');
+}
+
+{
   const { snapshot, settings, plan } = fixture();
   settings.factory.demandPriority = ['cargo'];
   settings.cargo.enabled = true;

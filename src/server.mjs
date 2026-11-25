@@ -134,6 +134,7 @@ import { configuredMaterialRecipes, readProductionSnapshot } from './production-
 import { materialTreeRecipes, planProduction } from './production-planning.mjs';
 import { forecastProductionDay } from './production-day.mjs';
 import { factoryInsertions } from './factory-insert-store.mjs';
+import { productionDemandChanged } from './factory-replanning.mjs';
 import { advanceFactoryInsertion, prepareFactoryInsertion } from './factory-insertion.mjs';
 import { createProductionTiming, watchProductionTimings } from './production-timing.mjs';
 import { captureManualProductionMaterialState, refreshOrderMaterialSpends } from './order-reservations.mjs';
@@ -1268,6 +1269,10 @@ export function createConsole({ host = '127.0.0.1', port = 17321, onLog, recover
     }
     instance.on('list-player-profiles', rows => noteNames(rows));
     instance.on('message', ({name,body}) => {
+      if (session.client === instance && (productionDemandChanged(name,body)
+        || name === 'SCUpdateWaterBuilding' && body?.building?.some(b => b.factory || b.farm))) {
+        session.productionRevision = (session.productionRevision ?? 0) + 1;
+      }
       if (name === 'GuildMemberResponse' || name === 'BlackListResponse' || name === 'WorldInfoResponse' || name === 'SCFleet') {
         const members = name === 'GuildMemberResponse' ? (body.titleList ?? []).flatMap(group => group.members ?? []) :
           name === 'BlackListResponse' ? body.list ?? [] : (body.fleets ?? []).map(fleet => fleet.owner).filter(Boolean);
@@ -1922,6 +1927,7 @@ export function createConsole({ host = '127.0.0.1', port = 17321, onLog, recover
 
   function accountStatus(session) {
     return {
+      productionRevision: session.productionRevision ?? 0,
       paused: session.paused,
       syncingProduction: Boolean(session.syncingProduction),
       loginBlocked: session.loginBlocked,
@@ -4662,20 +4668,29 @@ export function createConsole({ host = '127.0.0.1', port = 17321, onLog, recover
             const config = loadConfigSafe();
             const timing = watchProductionTimings(client, loadConfigSafe);
             await refreshOrderMaterialSpends(client, player, { enabled, request: 'PetFeedRequest' });
+            const productionRevision = session.productionRevision ?? 0;
             const snapshot = await readProductionSnapshot(client, protocolFor(client), config, player, settings,
               { enabled, observedDurations: timing.snapshot() });
             if (!enabled()) throw new Error('账号或排产设置已变化，请重新计算');
             if (loadConfigSafe() !== config) throw new Error('游戏配置已更新，请重新计算');
             snapshot.timing.observedDurations = timing.snapshot();
             const pendingMaterials = captureManualProductionMaterialState(session.player).all;
-            return { snapshot, config, pendingMaterials, insertions:factoryInsertions(player) };
-          }).then(async ({ snapshot, config, pendingMaterials, insertions }) => {
+            return { snapshot, config, productionRevision, pendingMaterials, insertions:factoryInsertions(player) };
+          }).then(async ({ snapshot, config, productionRevision, pendingMaterials, insertions }) => {
             if (!enabled()) throw new Error('账号或排产设置已变化，请重新计算');
-            const result = planProduction(snapshot, config, settings, { pendingMaterials });
+            let result = planProduction(snapshot, config, settings, { pendingMaterials });
             const anchors = new Map();
-            result.forecast = await forecastProductionDay(snapshot, config, settings, result.orders, {
+            const forecast = await forecastProductionDay(snapshot, config, settings, result.orders, {
               anchors, insertions, pendingMaterials, checkCurrent() { if (!accountCurrent()) throw new Error('账号已变化，请重新计算'); },
             });
+            if (forecast.initialQueueChanges?.length) {
+              const removed = new Map(forecast.initialQueueChanges.map(({buildingId, indices}) => [buildingId, new Set(indices)]));
+              const factories = snapshot.factories.map(f => removed.has(f.id)
+                ? {...f, queue:f.queue.filter(job => !removed.get(f.id).has(job.index))} : f);
+              result = planProduction({...snapshot, factories}, config, settings, {pendingMaterials});
+            }
+            result.forecast = forecast;
+            result.productionRevision = productionRevision;
             if (result.strategy === 'nativeSimulation' && !result.forecast.partial) {
               const ready = new Map(result.forecast.completions.map(order => [order.id, order.at]));
               for (const order of result.orders) if (!order.reason) order.completionAt = ready.get(order.id) ?? null;

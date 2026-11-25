@@ -10,6 +10,7 @@ import { factoryInsertions } from './factory-insert-store.mjs';
 import { insertionYieldsToProduction } from './factory-insertion-queue.mjs';
 import { emitDiagnostic } from './trace-log.mjs';
 import { simulatedFactoryQueueKey } from './factory-native-simulation.mjs';
+import { queueStamp } from './factory-replanning.mjs';
 
 const pending = new Map(), busy = new Set();
 const resourceIds = new Set(['GOLD', 'RUBY', 'EXP', 'ARENA_POINT', 'LEAGUE_POINT']);
@@ -129,11 +130,43 @@ export async function confirmFactoryProductionBeforeHarvest(client, protocol, bu
   finally { busy.delete(key); }
 }
 
+export async function prepareQueueReplan(client, protocol, step, { player, enabled }) {
+  const { buildingId, index } = step.body;
+  await confirmFactoryProductionBeforeHarvest(client, protocol, buildingId, {player, enabled});
+  const stock = farmInventory(normalize(await client.request('AllItemRequest', {}, 'AllItemResponse')));
+  const water = normalize(await client.request('OnWaterRequest', {}, 'OnWaterResponse'));
+  const live = factoryProductionSnapshot(water, buildingId);
+  if (!enabled() || !live
+    || live.building.factory.autoProductId && (water.autoProduceForever || water.autoProduceEndTime > clock(client))) {
+    throw new AutomationSkip('工厂生产状态已变化，等待重新排产');
+  }
+  if (queueStamp(live.queue) !== step.verify.queue || step.verify.stock.some(([id, n]) => (stock.get(id) ?? 0) !== n)) {
+    throw new AutomationSkip('库存或等待队列已变化，重新核对需求');
+  }
+  const job = live.queue.find(j => (j.idx ?? 0) === index);
+  if (!job || job.productId !== step.verify.productId || job === live.queue[0] || job.finishTime) {
+    throw new AutomationSkip('工厂队列已变化，等待重新排产');
+  }
+  function beforeSend() {
+    const now = clock(client);
+    if (!enabled() || factoryInsertions(player)[buildingId] || !live.queue.some(j => j.finishTime > now)
+      || live.queue.some(j => j.finishTime && j.finishTime <= now)) {
+      throw new AutomationSkip('工厂设置或生产格已变化，等待重新排产');
+    }
+  }
+  beforeSend();
+  return {water, beforeSend, async cancellationConfirmed() {
+    const after = factoryProductionSnapshot(normalize(await client.request('OnWaterRequest', {}, 'OnWaterResponse')), buildingId);
+    return !!after && !after.queue.some(j => (j.idx ?? 0) === step.body.index && j.productId === job.productId)
+      && (after.totals.get(job.productId) ?? 0) < live.totals.get(job.productId);
+  }};
+}
+
 // The wire protocol accepts one product per request. Reserve a bounded batch,
 // keep its writes serial, then reconcile it once against queue + finished stock.
 export async function runFactoryProductionBatch(client, protocol, steps, {
   config, player, settings = null, getSettings, enabled = () => true,
-  beforeStep, afterStep, cancelStep, window = 400, onStep, checkStep, checkSnapshot,
+  beforeStep, afterStep, cancelStep, window = 400, onStep, checkStep, checkSnapshot, beforeDispatch,
 } = {}) {
   if (!Array.isArray(steps) || !steps.length) return { results: [] };
   const results = [], attemptedEntries = new Set(), current = () => getSettings?.() ?? settings;
@@ -186,6 +219,7 @@ export async function runFactoryProductionBatch(client, protocol, steps, {
     const reserves = new Map(costsOf(selected).map(row => [row.id, resourceReserve(current(), row.id)]));
     const check = async step => {
       ensureLive();
+      beforeDispatch?.(step);
       if (!worldActionAllowed(current(), step, config)) throw new AutomationSkip('普通排产已关闭或此工厂已禁用');
       if (JSON.stringify(current()?.factory) !== factorySettings) throw new AutomationSkip('工厂设置已变化，等待重新排产');
       if ([...reserves].some(([id, amount]) => resourceReserve(current(), id) > amount)) throw new AutomationSkip('材料保留量已提高，等待重新核对库存');
@@ -245,7 +279,8 @@ export async function runFactoryProductionBatch(client, protocol, steps, {
         batch.attempted.push({ body: { ...step.body }, costs: structuredClone(step.costs ?? []) }); attempted = true;
         const sent = await client.sendWatch(step.request, step.body, { window, beforeSend: () => {
           ensureLive();
-          if (!worldActionAllowed(current(), step, config)) throw new AutomationSkip('排产策略或目标已变化，等待重新排产');
+          beforeDispatch?.(step);
+          if (!worldActionAllowed(current(), step, config) || JSON.stringify(current()?.factory) !== factorySettings) throw new AutomationSkip('排产策略或目标已变化，等待重新排产');
           if (step.latestStart != null && clock(client)>step.latestStart) throw new AutomationSkip('第二生产位剩余时间不足，等待重新排产');
           if (step.beforeInsertSend) step.beforeInsertSend();
           else {

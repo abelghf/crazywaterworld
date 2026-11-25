@@ -1,6 +1,7 @@
 // A connection-local clock only. The loop owns all reads/writes and calls this
 // scheduler at serial execution boundaries; push handlers never send requests.
 import { normalize } from './worlds.mjs';
+import { productionDemandChanged } from './factory-replanning.mjs';
 const MIN_CHECK_MS = 1000;
 const positiveTime = value => Number.isSafeInteger(value) && value > 0;
 const interval = value => Number.isFinite(Number(value)) ? Math.max(1, Math.min(300, Math.floor(Number(value)))) : 30;
@@ -53,6 +54,7 @@ export function createFactorySchedule(client, {
 } = {}) {
   let disposed = false, checkedOnce = false, checkedAt = now(), failed = false;
   let buildings = [], slots, progressed = false, version = 0, dirty = false, wakeAt = Infinity;
+  let demandVersion = 0;
   let savedOffset = Number(client.serverClockOffsetMs) || 0;
   const signatures = new Map(), knownFactories = new Set();
   const preferences = () => getSettings()?.factory;
@@ -93,10 +95,14 @@ export function createFactorySchedule(client, {
     if (failed) return checkedAt + interval(preferences()?.checkEverySeconds ?? 30) * 1000;
     const mode = modes();
     const blocked = mode.collect ? getBlockedCollectionTypes() : null;
-    return nextFactoryCheck(buildings, { now: checkedAt, offset: Number(client.serverClockOffsetMs) || 0,
+    const next = nextFactoryCheck(buildings, { now: checkedAt, offset: Number(client.serverClockOffsetMs) || 0,
       ...mode, slots: slots ?? Number(table(getConfig(), 'BuildingProduceParamCfg').find(row => row.paramName === '制造位上限')?.paramValue),
       checkEverySeconds: preferences()?.checkEverySeconds ?? 30, progressed, eligible: isFactory,
       collectEligible: building => collectEligible(building, blocked), produceEligible });
+    // A bag shortage can occur while every slot is full and its next timer is hours away.
+    const factory = preferences();
+    return mode.produce && factory?.produce && factory.demandFirst && factory.strategy !== 'nativeSimulation'
+      ? Math.min(next, checkedAt + interval(factory.checkEverySeconds) * 1000) : next;
   };
   const nextAt = () => active() ? Math.min(baseDeadline(), wakeAt) : Infinity;
   const wake = (immediate = false) => {
@@ -106,7 +112,15 @@ export function createFactorySchedule(client, {
     if (shouldNotify) notify();
   };
   const onMessage = ({ name, body } = {}) => {
-    if (disposed || name !== 'SCUpdateWaterBuilding' || !active() || !Array.isArray(body?.building)) return;
+    if (disposed) return;
+    if (productionDemandChanged(name, body)) {
+      const factory = preferences();
+      if (modes().produce && factory?.produce && factory.demandFirst && factory.strategy !== 'nativeSimulation') {
+        demandVersion++; version++; wake();
+      }
+      return;
+    }
+    if (name !== 'SCUpdateWaterBuilding' || !active() || !Array.isArray(body?.building)) return;
     let changed = false;
     for (const building of body.building) {
       if (!relevant(building)) continue;
@@ -116,7 +130,7 @@ export function createFactorySchedule(client, {
     }
     if (changed) { version++; wake(); }
   };
-  const onSettings = () => { if (!disposed) { version++; wake(true); } };
+  const onSettings = () => { if (!disposed) { demandVersion++; version++; wake(true); } };
   const onPong = () => {
     if (disposed) return;
     const offset = Number(client.serverClockOffsetMs) || 0;
@@ -125,12 +139,13 @@ export function createFactorySchedule(client, {
   client.on?.('message', onMessage); client.on?.('automationSettingsChanged', onSettings); client.on?.('pong', onPong);
   return {
     active, nextAt, due: () => active() && nextAt() <= now(),
-    version: () => version, hasChecked: () => checkedOnce,
-    checked(state, { version: readVersion = version, progressed: madeProgress = false, slots: observedSlots } = {}) {
+    version: () => version, demandVersion: () => demandVersion, hasChecked: () => checkedOnce,
+    checked(state, { version: readVersion = version, demandVersion: readDemand = demandVersion, replan = false,
+      progressed: madeProgress = false, slots: observedSlots } = {}) {
       if (disposed) return;
       buildings = Array.isArray(state) ? structuredClone(state) : [];
       checkedAt = now(); checkedOnce = true; failed = false; progressed = !!madeProgress; slots = observedSlots;
-      if (readVersion >= version) {
+      if (readVersion >= version && readDemand >= demandVersion && !replan) {
         dirty = false; wakeAt = Infinity; signatures.clear(); knownFactories.clear();
         for (const building of buildings) if (building?.factory && typeof building.buildingId === 'string' && isFactory(building)) {
           signatures.set(building.buildingId, signature(building)); knownFactories.add(building.buildingId);

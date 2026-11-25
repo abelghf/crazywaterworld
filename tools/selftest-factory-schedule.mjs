@@ -82,6 +82,21 @@ test('最终读取前自身推送可消化，读取过程中的新推送不得�
   f.scheduler.checked([factory([job(0,1090)])],{version:readVersion,progressed:true,slots:1});
   assert.equal(f.scheduler.nextAt(),1_001_000); f.scheduler.dispose();
 });
+test('按需生产在库存扣减后唤醒，仅读建筑不能确认新的库存和需求', () => {
+  const f = fixture();
+  f.settings.factory.demandFirst = true;
+  const full = [factory([job(0,2000)])];
+  f.scheduler.checked(full,{slots:1});
+  const demandVersion = f.scheduler.demandVersion();
+  f.client.emit('message',{name:'SCUpdateItem',body:{items:[{itemId:'产品甲',num:0}]}});
+  assert.equal(f.scheduler.nextAt(),1_001_000);
+  f.scheduler.checked(full,{slots:1,version:f.scheduler.version(),demandVersion});
+  assert.equal(f.scheduler.nextAt(),1_001_000);
+  f.scheduler.checked(full,{slots:1,demandVersion:f.scheduler.demandVersion()});
+  assert.equal(f.scheduler.nextAt(),1_030_000);
+  f.scheduler.dispose();
+});
+
 test('满仓滞留成品无成功动作不热循环，检查失败沿用配置退避', () => {
   const f=fixture(); f.settings.factory.checkEverySeconds=11;
   f.scheduler.checked([factory([],[item(1)])],{version:0,progressed:false,slots:6});

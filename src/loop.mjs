@@ -543,6 +543,7 @@ export async function runLoop(client, protocol, {
         const cargoDemand = (!simulateNative || holdForOrders) && needsCargoDemand(currentSettings);
         const readCargo = (enabled('cargo') && holdForOrders) || cargoDemand;
         let version = factorySchedule.version();
+        const demandVersion = factorySchedule.demandVersion();
         const survey = await surveyWorld(client, protocol, { config, player,
           includeProductionTiming: canFactory('startProduce') && currentSettings?.factory?.produce !== false,
           includeWeekOrder: holdForOrders || cargoDemand,
@@ -566,6 +567,7 @@ export async function runLoop(client, protocol, {
         if (currentSettings?.factory?.cooperateNative && allow('startProduce')) observeNativePlan(survey, plan);
         const freshGuard = runtimeGuard(createActionGuard(client, getSettings, usageLedger, { player, enabled: current }));
         const result = await runWorldRound(client, protocol, plan, { ...harvestOptions, allowMutate, enabled: allow, onStep: stepLog('world'),
+          factoryPlanCurrent: step => demandVersion === factorySchedule.demandVersion() && (!step.queueReplan || version === factorySchedule.version()),
           beforeStep: freshGuard.before, afterStep: freshGuard.after, cancelStep: freshGuard.cancel });
         summary.world.planned += result.results.length;
         summary.world.results.push(...result.results);
@@ -575,7 +577,8 @@ export async function runLoop(client, protocol, {
           state = normalize(await client.request('OnWaterRequest', {}, 'OnWaterResponse')).building;
         }
         // 升级检查不能把尚未到期的工厂兜底时钟一再向后推迟。
-        if (current() && factoryDue) factorySchedule.checked(state, { version, slots: survey.factorySlots,
+        if (current() && factoryDue) factorySchedule.checked(state, { version, demandVersion, slots: survey.factorySlots,
+          replan: result.results.some(entry => entry.step.queueReplan && entry.ok),
           progressed: factoryProgress(result.results) });
         publishFactoryDeadline();
         const cargoHarvest = result.results.some(({ ok, step, body }) => ok && step?.kind === 'gainFactory'
@@ -1292,6 +1295,7 @@ export async function runLoop(client, protocol, {
         const cargoDemand = needsCargoDemand(settings) && (!simulateNative || readsOrders
           || allowWorld('speedUpProduce') && settings.factory.speedUpSources.includes('cargo'));
         const factoryReadVersion = factorySchedule.version();
+        const demandVersion = factorySchedule.demandVersion();
         const survey = await surveyWorld(client, protocol, { config, player,
           includeProductionTiming: allowWorld('startProduce') && settings?.factory?.produce !== false,
           includeCargo: cargoDemand || (!!isEnabled && enabled('cargo') && (factoryOrders || usesOrders)),
@@ -1302,7 +1306,7 @@ export async function runLoop(client, protocol, {
           extraDemand = baseDemands(extra, config, settings);
         }
         if (factorySchedule.active())
-          factorySchedule.checked(survey.factories, { version: factoryReadVersion, slots: survey.factorySlots, progressed: true });
+          factorySchedule.checked(survey.factories, { version: factoryReadVersion, demandVersion, slots: survey.factorySlots, progressed: true });
         const plan = planWorld(survey, { config, enabled: allowWorld, factoryWaitHistory,
           settings, blockedCollectionTypes: getBlockedCollectionTypes?.(), usage: usage(), extraDemand,
           allowSpeedUp: isEnabled ? enabled('speedUp') : allowSpeedUp,
@@ -1358,6 +1362,7 @@ export async function runLoop(client, protocol, {
         if (plan.actions.length) {
           const result = await runWorldRound(client, protocol, plan, { ...harvestOptions,
             allowMutate, enabled: allowWorld, rejected: rejected.world, onStep: stepLog('world'),
+            factoryPlanCurrent: step => demandVersion === factorySchedule.demandVersion() && (!step.queueReplan || factoryReadVersion === factorySchedule.version()),
           });
           summary.world.planned += result.followupCount;
           summary.world.results.push(...result.results);
@@ -1366,7 +1371,8 @@ export async function runLoop(client, protocol, {
           try {
             const factoryVersion = factorySchedule.version();
             const after = normalize(await client.request('OnWaterRequest', {}));
-            if (factorySchedule.active()) factorySchedule.checked(after.building, { version: factoryVersion,
+            if (factorySchedule.active()) factorySchedule.checked(after.building, { version: factoryVersion, demandVersion,
+              replan: summary.world.results.some(entry => entry.step?.queueReplan && entry.ok),
               slots: survey.factorySlots, progressed: factoryProgress(summary.world.results) });
             if (enabled('upgrade')) {
               summary.world.upgrades = [];

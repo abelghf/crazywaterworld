@@ -10,10 +10,10 @@ import { factoryProductionSnapshot } from './spend-evidence.mjs';
 import { factoryInsertions, saveFactoryInsertion } from './factory-insert-store.mjs';
 import { factoryProductionKey, factoryRecipeAvailability, factoryRecipeCosts, runWorld, startManualFactoryProduction } from './world.mjs';
 import { insertionSupplyPlanner } from './factory-insertion-supply.mjs';
+import { queueStamp as stamp } from './factory-replanning.mjs';
 
 const rows = (config, table) => config?.tables?.[table]?.data ?? [];
 const clock = client => Math.floor((Date.now() + (client.serverClockOffsetMs || 0)) / 1000);
-const stamp = queue => JSON.stringify(queue.map(j => [j.idx ?? 0, j.productId, j.finishTime ?? 0]));
 const nativeOn = (water, building, now) => building.factory.autoProductId && (water.autoProduceForever || water.autoProduceEndTime > now);
 const stale = () => new Error('工厂队列或所选任务已变化，请重新生成排产计划');
 

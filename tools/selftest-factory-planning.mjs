@@ -34,6 +34,29 @@ function fixture() {
 }
 const products = plan => plan.actions.filter(step => step.request === 'StartFactoryProduceRequest').map(step => step.body.productId);
 
+test('低优先级等待项和急件可同时开工时保留排队项，另一座空厂也可接急单', () => {
+  const f = fixture();
+  Object.assign(f.settings.factory,{demandFirst:true, demandPriority:['cargo'], keepStock:0});
+  f.config.tables.MonthCardCfg = table([{id:'普通月卡', effectList:[['第二生产位',1]]}]);
+  f.survey.productionTiming = {monthCards:{cardItem:[{type:1,endTime:-1}]}};
+  f.stock.set('短时品',0);
+  f.survey.cargoOrder.set('短时品',1);
+  const queue = f.factory.factory.factoryQ;
+  queue.push({idx:1,productId:'长时品',finishTime:200},{idx:2,productId:'长时品',finishTime:200},
+    {idx:3,productId:'长时品'},{idx:4,productId:'短时品'});
+  assert(!f.plan().actions.some(step=>step.queueReplan),'双生产位同时释放，急件不会延迟');
+  f.survey.productionTiming.monthCards.cardItem = [];
+  queue.splice(1,1);
+  assert(f.plan().actions.some(step=>step.queueReplan && step.body.index===3));
+  queue.pop();
+  const second = structuredClone(f.factory);
+  second.buildingId = '2食品厂'; second.factory.factoryQ = [];
+  f.survey.buildings = f.survey.factories = [f.factory,second];
+  const actions = f.plan().actions;
+  assert(!actions.some(step=>step.queueReplan));
+  assert(actions.some(step=>step.body.buildingId==='2食品厂' && step.body.productId==='短时品'));
+});
+
 test('模拟原生先做主产物，实际耗时 5 秒的候补归入短件档，同档按库存选品', () => {
   const f = fixture(), rows = f.config.tables.BuildingProduceCfg.data;
   const [short, long] = rows;

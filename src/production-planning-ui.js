@@ -2,6 +2,8 @@ let productionPlanOwner = null;
 let productionPlanVersion = 0;
 let productionPlanBusy = false;
 let selectedForecastFactory = null;
+let displayedProductionRevision = null;
+let nextProductionRefresh = 0;
 
 bindConsoleSlice('productionPlan', { productionPlanOwner, productionPlanBusy }, state => {
   productionPlanOwner = state.productionPlanOwner;
@@ -10,6 +12,8 @@ bindConsoleSlice('productionPlan', { productionPlanOwner, productionPlanBusy }, 
 
 function resetProductionPlan() {
   productionPlanVersion++;
+  displayedProductionRevision = null;
+  nextProductionRefresh = 0;
   selectedForecastFactory = null;
   setConsoleValue('productionPlan', 'productionPlanOwner', null);
   setConsoleValue('productionPlan', 'productionPlanBusy', false);
@@ -521,6 +525,8 @@ function renderProductionDay(day, orders) {
 
 function renderProductionPlan(data) {
   const box = clear($('production-plan-result'));
+  if (data.forecast?.initialQueueChanges?.length) box.appendChild(el('p', 'plan-day-note',
+    '预计备齐时间已计入本轮等待队列的优先级调整，挂机确认后更新实际队列。'));
   box.appendChild(productionPlanSummary(data));
   const timeline = data.timeline || [];
   const recipes = new Map((data.recipes || []).map(recipe => [recipe.productId, recipe]));
@@ -559,7 +565,13 @@ function productionAccountReady() {
   return !!current && snapshot.connected && !snapshot.syncingProduction && !snapshot.paused && !disconnected.has(current);
 }
 
-async function refreshProductionPlan({ afterInsert = false } = {}) {
+function refreshChangedProductionPlan() {
+  if (document.hidden || consoleStore.getState().view.page !== 'manual' || $('modal').open || productionPlanBusy
+    || productionPlanOwner !== current || !productionAccountReady() || Date.now() < nextProductionRefresh) return;
+  if (snapshot.productionRevision > displayedProductionRevision) return refreshProductionPlan({ background:true });
+}
+
+async function refreshProductionPlan({ afterInsert = false, background = false } = {}) {
   const account = current;
   if (productionPlanOwner !== null && productionPlanOwner !== account) resetProductionPlan();
   if (!productionAccountReady()) {
@@ -570,6 +582,7 @@ async function refreshProductionPlan({ afterInsert = false } = {}) {
   if (productionPlanBusy && !afterInsert) return;
   const hasList = productionPlanOwner === account && !$('production-day-picker').hidden;
   const version = ++productionPlanVersion;
+  const requestedRevision = snapshot.productionRevision ?? 0;
   setConsoleValue('productionPlan', 'productionPlanOwner', account);
   setConsoleValue('productionPlan', 'productionPlanBusy', true);
   if (!hasList) showProductionDayNotice('正在读取排产清单…');
@@ -579,18 +592,24 @@ async function refreshProductionPlan({ afterInsert = false } = {}) {
   try {
     const data = await call('/api/world/production-plan');
     if (version !== productionPlanVersion || account !== current || !productionAccountReady()) return;
+    displayedProductionRevision = data.productionRevision ?? requestedRevision;
     renderProductionPlan(data);
     if (!data.forecast) showProductionDayNotice('当前快照还没有排产清单，可点击「刷新计划」重试。');
     $('production-plan-status').textContent = Number.isFinite(data.snapshotTime)
       ? '数据更新于 ' + productionPlanTime(data.snapshotTime) + '（北京时间）' : '';
   } catch (error) {
     if (version !== productionPlanVersion || account !== current) return;
+    if (background) {
+      $('production-plan-status').textContent = '库存或队列已变化，正在等待重新读取；下方为上次估算。';
+      return;
+    }
     showProductionDayNotice('排产清单读取失败，请点击「刷新计划」重试。');
     clear($('production-plan-result'));
     $('production-plan-status').textContent = '生成失败，请重试';
     reportError(error);
   } finally {
     if (version === productionPlanVersion) {
+      nextProductionRefresh = Date.now() + 5000;
       setConsoleValue('productionPlan', 'productionPlanBusy', false);
       $('production-day-result').setAttribute('aria-busy', 'false');
       $('production-plan-refresh').disabled = !productionAccountReady();

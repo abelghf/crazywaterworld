@@ -3,7 +3,7 @@ import { loadProtocol } from '../src/proto.mjs';
 import { defaultSettings } from '../src/automation-settings.mjs';
 import { createActionGuard } from '../src/automation-policy.mjs';
 import { runFactoryProductionBatch } from '../src/factory-production.mjs';
-import { nativeFactoryControl, toggleNativeFactory, runWorld } from '../src/world.mjs';
+import { nativeFactoryControl, toggleNativeFactory, planWorld, runWorld } from '../src/world.mjs';
 import { pendingOrderMaterialSpends, beginOrderMaterialSpend, cancelOrderMaterialSpend } from '../src/order-reservations.mjs';
 
 const protocol = loadProtocol(), now = () => Math.floor(Date.now() / 1000);
@@ -70,6 +70,48 @@ function fixture() {
   const batch = (steps = Array.from({ length: 6 }, () => step()), extra = {}) => runFactoryProductionBatch(client, protocol, steps, { ...options(), ...extra });
   return { player, settings, config, state, client, add, step, options, batch };
 }
+
+await test('库存消耗后重排游戏等待项，先复核库存和开工状态，再按新缺口补单', async () => {
+  const {state, config, player, settings, client, options} = fixture();
+  settings.factory.demandPriority = ['cargo', 'resident'];
+  settings.factory.keepStock = 0;
+  const building = state.building;
+  building.type = '材料厂'; building.product = [];
+  const queue = building.factory.factoryQ;
+  queue.push({idx:40,productId:'产品甲',finishTime:now()+600}, {idx:41,productId:'产品乙'}, {idx:42,productId:'产品甲'});
+  state.stock.set('产品甲',3);
+  const survey = {now:now(),serverNow:now(), stock:state.stock, have:id=>state.stock.get(id)??0, stockKnown:true,
+    stockCap:50, factorySlots:3, buildings:[building], factories:[building], orders:[], weekOrder:new Map(),
+    cargoOrder:new Map([['产品甲',3]]), orderOfTheDay:{}, player};
+  const plan = () => planWorld(survey, {config,settings,enabled:k=>k==='startProduce'});
+  const run = (p,extra) => runWorld(client,protocol,p,{...options(),allowMutate:true,...extra});
+  assert(!plan().actions.some(s=>s.queueReplan));
+  state.stock.set('产品甲',0);
+  const next = plan();
+  assert.deepEqual(next.actions.map(s => [s.request,s.body.index]), [['CancelFactoryProduceRequest',41]]);
+  state.stock.set('产品甲',3);
+  assert((await run(next)).results[0].skipped);
+  state.stock.set('产品甲',0);
+  queue[1].finishTime = now()+500;
+  assert((await run(next)).results[0].skipped);
+  delete queue[1].finishTime;
+  const start = client.sendWatch.bind(client);
+  client.sendWatch = async (name,body,opts) => {
+    opts.beforeSend();
+    if (name !== 'CancelFactoryProduceRequest') return start(name,body,opts);
+    const i = queue.findIndex(j=>j.idx === body.index);
+    assert(i > 0 && !queue[i].finishTime);
+    queue.splice(i,1);
+    return {seq:1};
+  };
+  assert((await run(next,{factoryPlanCurrent:()=>false})).results[0].skipped);
+  assert.equal((await run(next)).results[0].status,'confirmed');
+  assert.deepEqual(queue.map(j=>j.idx),[40,42]);
+  const refill = plan();
+  assert.deepEqual(refill.actions.map(s=>s.body.productId),['产品甲']);
+  assert((await run(refill)).results[0].ok);
+  assert(!plan().actions.some(s=>s.queueReplan));
+});
 
 await test('原生开关优先当前产物，关闭后按相同角色与工厂恢复原目标', async () => {
   const { player, client, config, state } = fixture();

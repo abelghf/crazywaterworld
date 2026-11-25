@@ -850,6 +850,7 @@ function refreshAccountStatuses() {
       accountStatusRevision++;
       stateActions.mergeStatuses(data.accounts);
       renderAccountSelect();
+      refreshChangedProductionPlan();
       if (!$('tab-account').classList.contains('hidden')) refreshAccountCards();
     } catch {
       /* call 已记录错误，下次刷新继续读取。 */

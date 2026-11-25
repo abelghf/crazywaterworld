@@ -57,9 +57,15 @@ function fixture() {
       $('modal').open = true;
     };
     let current = env.current, snapshot = env.snapshot;
+    const document = {hidden:false};
     ${script}
     env.reset = resetProductionPlan;
     env.enter = refreshProductionPlan;
+    env.pollChanges = () => {
+      stateActions.setView({page:'manual'});
+      nextProductionRefresh = 0;
+      return refreshChangedProductionPlan();
+    };
     env.time = productionPlanTime;
     env.duration = productionPlanDuration;
     env.render = renderProductionPlan;
@@ -106,6 +112,31 @@ await test('断开、暂停、无账号和主动断开状态均不发送读取',
     await env.click();
     assert.deepEqual(env.calls, []);
   }
+});
+
+await test('正在查看的排产表随库存版本更新，重复推送合并，编辑插单时延后刷新', async () => {
+  const env = fixture();
+  env.snapshot.productionRevision = 1;
+  await env.enter();
+  await env.pollChanges();
+  assert.equal(env.calls.length,1);
+  env.snapshot.productionRevision = 3;
+  env.node('modal').open = true;
+  await env.pollChanges();
+  assert.equal(env.calls.length,1);
+  env.node('modal').open = false;
+  const pending = deferred();
+  env.respond = () => pending.promise;
+  const refreshing = env.pollChanges();
+  env.snapshot.productionRevision++;
+  await env.pollChanges();
+  assert.equal(env.calls.length,2);
+  pending.resolve({productionRevision:3});
+  await refreshing;
+  env.respond = async () => ({productionRevision:4});
+  await env.pollChanges();
+  await env.pollChanges();
+  assert.equal(env.calls.length,3);
 });
 
 await test('等待期间按钮禁用，失败后恢复点击并显示错误状态', async () => {

@@ -118,7 +118,7 @@ export function factoryItemSpeedEnabled(factory, productId) {
 }
 
 export function worldActionAllowed(settings, step, config) {
-  if (!settings) return true;
+  if (!settings) return !step.queueReplan;
   if (!worldPreferenceEnabled(settings, step.kind)) return false;
   if (step.kind === 'speedUpProduce' && step.verify?.productId) {
     if (!factoryItemSpeedEnabled(settings.factory, step.verify.productId) && !step.demandSources?.some(source =>
@@ -128,6 +128,9 @@ export function worldActionAllowed(settings, step, config) {
   const type = typeof id === 'string' ? (config?.tables?.BuildingCfg?.data ?? []).map(row => row.buildingType).sort((a, b) => b.length - a.length).find(t => id.endsWith(t)) : null;
   if (['build', 'upgrade', 'weekFactory'].includes(step.kind) && settings.building.disabledTypes.some(value => value === id || value === type)) return false;
   if (['startProduce', 'speedUpProduce'].includes(step.kind) && settings.factory.disabledTypes.some(value => value === id || value === type)) return false;
+  if (step.queueReplan) return settings.factory.produce && settings.factory.demandFirst && settings.factory.strategy !== 'nativeSimulation'
+    && JSON.stringify(settings.factory.demandPriority) === step.verify.priority;
+
   if (step.request === 'SetFactoryAutoProduceRequest' && (!settings.factory.cooperateNative || settings.factory.strategy === 'nativeSimulation')) return false;
   if (step.request === 'StartFactoryProduceRequest') {
     if (!settings.factory.produce || (step.factoryStrategy ?? 'smart') !== (settings.factory.strategy ?? 'smart')) return false;
