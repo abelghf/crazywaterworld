@@ -48,9 +48,14 @@ npm start
 
 `npm start` 构建界面后尝试打开浏览器，默认地址为 [http://127.0.0.1:17321/](http://127.0.0.1:17321/)。一键脚本和 `npm start` 均支持 `CW_PORT`，以终端显示的地址为准。[启动参数与入口差异](docs/console-guide.md#启动参数)
 
-控制台启动后会在后台同步**艺术资源**。同步工具从本机微信小游戏缓存读取图标和贴图，并尝试从 CDN 补齐缺页。同步期间或失败后都可以继续使用控制台。若提示缺少缓存，先用电脑版微信完整进入一次游戏，再在项目根目录手动执行以下命令。同步完成后刷新页面即可看到可用图标。
+首次启动请保持联网。控制台会检查游戏 CDN 的版本清单，下载并校验配置表和世界地图。之后默认每 30 分钟复查一次，版本一致且本地文件完整时会复用缓存。
+
+控制台打开后会在后台同步图标和贴图，复用已有文件，并按清单从 CDN 补齐缺少的图集。没有电脑版微信也能下载。首次同步期间可继续使用控制台，完成后刷新页面即可看到图标。
+
+如果首次下载失败，可在网络恢复后到项目根目录手动重试。两条命令都完成后刷新页面。
 
 ```sh
+npm run sync-resources
 npm run sync-art -- --fetch
 ```
 
@@ -138,9 +143,9 @@ npm run sync-art -- --fetch
 | `sh ./start-console.sh` | macOS 或 Linux 一键启动，默认端口 `17323` |
 | `npm start` | 构建界面并启动控制台，默认端口 `17321` |
 | `npm run build:ui` | 单独构建页面与样式 |
-| `npm run sync-resources` | 立即检查并更新配置表和世界地图 |
-| `npm run sync-art` | 仅从本机微信缓存同步界面图标和贴图到 `work/cdn/art/` |
-| `npm run sync-art -- --fetch` | 手动执行与启动时相同的艺术资源同步，缓存缺页时尝试从 CDN 下载 |
+| `npm run sync-resources` | 检查游戏 CDN 的版本清单，更新配置表和世界地图到 `work/cdn/resources/` |
+| `npm run sync-art` | 仅使用本地微信素材缓存同步图标和贴图 |
+| `npm run sync-art -- --fetch` | 使用版本清单从 CDN 补齐缺少的图集并更新 `work/cdn/art/` |
 | `npm run test:startup` | 检查启动准备、协议来源、监听地址与终端输出，无需游戏账号或真实协议包 |
 | `npm run test:offline` | 构建、类型检查并运行核心离线回归，无需本机游戏协议包 |
 
