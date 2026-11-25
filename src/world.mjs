@@ -27,7 +27,8 @@ import { readWeekOrder } from './activities.mjs';
 import { RESOURCE, displayMaterial } from './config.mjs';
 import { captureFarmMaterialState, farmInventory, settleFarmMaterialState } from './farm-planting.mjs';
 import { runFactoryProductionBatch, confirmFactoryProductionBeforeHarvest, prepareFactoryInterruption } from './factory-production.mjs';
-import { selectFactoryRefill, refillGoal, refillHistoryFor, refillRecipe, planFactoryRefill, readyRefillUnits } from './factory-refill.mjs';
+import { factoryIncomingStock, resolveFactoryRefills, refillGoal, refillHistoryFor, refillRecipe, planFactoryRefill, readyRefillUnits } from './factory-refill.mjs';
+export { factoryIncomingStock };
 import { readOrderReservedStock } from './order-reservations.mjs';
 import { activityProductionEnabled } from './activity-automation.mjs';
 import { createProductionEligibility, factoryRecipeAvailability, factoryRecipeCosts, insertionRecipeReady } from './production-eligibility.mjs';
@@ -101,16 +102,6 @@ export function factoryProductionKey(player, building, recipe) {
     factoryQ.map(job => [job.idx ?? 0, job.productId, job.finishTime ?? 0]),
     finishedProducts.map(item => [item.id, item.num]), recipe.itemId, recipe.costItem,
   ])).digest('hex').slice(0, 24);
-}
-
-export function factoryIncomingStock(factories) {
-  const incoming = new Map();
-  const add = (id, num) => incoming.set(id, (incoming.get(id) ?? 0) + num);
-  for (const { factory } of factories) {
-    for (const job of factory.factoryQ ?? []) add(job.productId, 1);
-    for (const item of factory.finishedProducts ?? []) add(item.id, Number(item.num));
-  }
-  return incoming;
 }
 
 export function manualFactoryProducts(building, survey, config, incoming) {
@@ -1244,24 +1235,26 @@ export function planWorld(survey, {
   const refillProducts = new Map();
   if (enabled('startProduce') && settings?.factory.produce && settings.factory.refillRules?.length) {
     refillHistory ??= refillHistoryFor(survey.player);
-    for (const b of survey.factories) {
+    const assignments = survey.stockKnown === false ? new Map() : resolveFactoryRefills(survey.factories,settings,{
+      config, cap:survey.stockCap, owned:warehouseCount, available:free, incoming, history:refillHistory, record:trackRefills,
+      festivals:survey.festivals, now:survey.serverNow ?? now, autoProduceForever:survey.autoProduceForever, autoProduceEndTime:survey.autoProduceEndTime,
+    });
+    const ordered = survey.factories.toSorted((a,b) => Number(!!assignments.get(a.buildingId)?.supply) - Number(!!assignments.get(b.buildingId)?.supply));
+    for (const b of ordered) {
       if (!(b.level > 0) || blockedFactory(b) || isNative(b)) continue;
       const id = b.buildingId;
-      const rules = settings.factory.refillRules.filter(rule => rule.buildingId === id);
-      if (!rules.length) continue;
       if (survey.stockKnown === false || !(survey.stockCap > 0)) {
-        if (!rules.some(r => refillRecipe(config, b, r, survey.festivals, survey.serverNow ?? now))) continue;
+        if (!settings.factory.refillRules.some(r => r.buildingId === id && refillRecipe(config, b, r, survey.festivals, survey.serverNow ?? now))) continue;
         refillProducts.set(id, null);
         factoryReasons.set(b.buildingId, '等待确认补库物品库存'); continue;
       }
-      const selected = selectFactoryRefill(rules, b, {config, festivals:survey.festivals, now:survey.serverNow ?? now,
-        owned:warehouseCount, cap:survey.stockCap, history:refillHistory, record:trackRefills});
+      const selected = assignments.get(id);
       if (!selected) continue;
       const {rule, recipe} = selected;
       refillProducts.set(id, rule.productId);
-      factoryReasons.set(b.buildingId, '优先补' + name(rule.productId) + '至 ' + refillGoal(rule, survey.stockCap) + ' 件');
+      factoryReasons.set(b.buildingId, (selected.supply ? '补上游原料' : '优先补') + name(rule.productId) + '至 ' + refillGoal(rule, survey.stockCap) + ' 件');
       actions.push(...planFactoryRefill(b, rule, recipe, { survey, owned:warehouseCount, incoming, free, reserve, credit,
-        useAccelerators:settings.factory.refillSpeedUp, factoryName:buildingName(b), productName:name(rule.productId) }));
+        supply:selected.supply, useAccelerators:!selected.supply && settings.factory.refillSpeedUp, factoryName:buildingName(b), productName:name(rule.productId) }));
     }
   }
   const refilling = new Set(refillProducts.keys());
@@ -2308,9 +2301,9 @@ export async function runWorld(client, protocol, plan, {
       let queueChanged = false;
       const observeQueue = ({name, body}) => {
         if (productionDemandChanged(name,body) || name === 'SCUpdateWaterBuilding'
-          && body?.building?.some(b => b.buildingId === step.body.buildingId)) queueChanged = true;
+          && body?.building?.some(b => step.refillSupply || b.buildingId === step.body.buildingId)) queueChanged = true;
       };
-      if (step.queueReplan) client.on?.('message',observeQueue);
+      if (step.queueReplan || step.refillRule) client.on?.('message',observeQueue);
       try {
         checkDemandPlan(step);
         if (step.refillRule && step.request === 'StartFactoryProduceRequest') throw new AutomationSkip('当前协议无法核对优先补库排产');
@@ -2473,7 +2466,7 @@ export async function runWorld(client, protocol, plan, {
         }
       }
       finally {
-        if (step.queueReplan) client.off?.('message',observeQueue);
+        if (step.queueReplan || step.refillRule) client.off?.('message',observeQueue);
       }
       linkOperationResult(entry, ticket);
     }

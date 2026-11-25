@@ -134,6 +134,8 @@ export function worldActionAllowed(settings, step, config) {
   if (['build', 'upgrade', 'weekFactory'].includes(step.kind) && settings.building.disabledTypes.some(value => value === id || value === type)) return false;
   if (['startProduce', 'speedUpProduce'].includes(step.kind) && settings.factory.disabledTypes.some(value => value === id || value === type)) return false;
   if (step.refillRule) {
+    if (step.refillSupply) return settings.factory.produce && !!settings.factory.refillRules?.length
+      && ['StartFactoryProduceRequest','CancelFactoryProduceRequest'].includes(step.request);
     if (step.request === 'SpeedUpFactoryProduceRequest' && !settings.factory.refillSpeedUp) return false;
     return settings.factory.produce && !!settings.factory.refillRules?.some(r => r.buildingId === id
       && r.productId === step.refillRule.productId && r.trigger === step.refillRule.trigger && r.target === step.refillRule.target);
