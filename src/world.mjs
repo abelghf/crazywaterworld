@@ -335,7 +335,7 @@ function rememberResidentOrders(session, orders) {
 
 // 只读探测：一次拉齐海面状态、库存、资源田、舰队。
 export async function surveyWorld(client, protocol, { config = null, player = null, includeWeekOrder = true, includeCargo = false,
-  ordersOnly = false, includeProductionTiming = true, includeInventoryCaps = false, timeout = 8000 } = {}) {
+  ordersOnly = false, buildingsView = false, includeProductionTiming = true, includeInventoryCaps = false, timeout = 8000 } = {}) {
   const get = async (name) => {
     const responseName = `${name.slice(0, -7)}Response`;
     if (!protocol[name] || !protocol[responseName]) return null;
@@ -359,11 +359,13 @@ export async function surveyWorld(client, protocol, { config = null, player = nu
   const water = await get('OnWaterRequest');
   if (!water) throw new Error('拿不到 OnWaterResponse，无法探测海面');
   const orderKeys = rememberResidentOrders(orderSession, water.workerOrder ?? []);
-  const [itemList, resourceList, resFields, fleets] = await Promise.all([
+  const readCaps = includeInventoryCaps && !ordersOnly;
+  const [itemList, resourceList, resFields, fleets, capacityEffects] = await Promise.all([
     get('AllItemRequest'),
     ordersOnly ? null : get('AllResourceRequest'),
-    ordersOnly ? null : get('MyResFieldsRequest'),
-    ordersOnly ? null : get('MyFleetsRequest'),
+    ordersOnly || buildingsView ? null : get('MyResFieldsRequest'),
+    ordersOnly || buildingsView ? null : get('MyFleetsRequest'),
+    readCaps ? get('GameEffectRequest') : null,
   ]);
   if (farmState) {
     try { settleFarmMaterialState(player, { ...farmState, water }, farmInventory(itemList)); }
@@ -484,7 +486,7 @@ export async function surveyWorld(client, protocol, { config = null, player = nu
   let orderCheckError = !stockKnown ? '未能读取仓库库存' : includeWeekOrder &&
     (!protocol.WeekInfoRequest || !protocol.WeekOrderInfoRequest) ? '无法确认商人订单预留' : '';
   if (includeCargo && !player?.level) orderCheckError = '无法确认贸易港的开放状态';
-  if (includeWeekOrder && itemList && protocol.WeekInfoRequest && protocol.WeekOrderInfoRequest) {
+  if (includeWeekOrder && (!buildingsView || orders.length) && itemList && protocol.WeekInfoRequest && protocol.WeekOrderInfoRequest) {
     try {
       const { needed, finished } = await readWeekOrder(client, undefined, config);
       if (!finished) weekOrder = needed;
@@ -518,12 +520,12 @@ export async function surveyWorld(client, protocol, { config = null, player = nu
   const slots = paramOf(config, SLOTS_PARAM);
   const secondLaneConfigured = rowsOf(config, 'MonthCardCfg').some(row =>
     Array.isArray(row.effectList) && row.effectList.some(effect => effect?.[0] === '第二生产位' && effect[1] > 0));
-  const readTiming = includeProductionTiming && !ordersOnly && factories.some(b =>
+  const readTiming = includeProductionTiming && !ordersOnly && !buildingsView && factories.some(b =>
     b.level > 0 && Array.isArray(b.factory.factoryQ) && (slots > b.factory.factoryQ.length || b.factory.factoryQ.some(job => !job.finishTime))
     && rowsOf(config, 'BuildingProduceCfg').some(recipe => recipe.buildType === b.type));
   const monthCards = readTiming && secondLaneConfigured ? await get('MonthCardRequest') : null;
   const serverClock = () => Math.floor((Date.now() + (client.serverClockOffsetMs || 0)) / 1000);
-  const effects = (includeInventoryCaps && !ordersOnly) || readTiming ? await get('GameEffectRequest') : null;
+  const effects = readTiming && !readCaps ? await get('GameEffectRequest') : capacityEffects;
   const heroes = readTiming && rowsOf(config, 'HeroSkillCfg').length
     ? observedProductionHeroes(client) ?? (await get('AllHeroRequest'))?.heroes : null;
   // RAW_MATERIAL_UPPER_BOUND is the account's current per-material capacity, including bonuses.
@@ -684,6 +686,7 @@ export function planWorld(survey, {
   refillHistory,
   trackRefills = false,
   checkShortFeeds = true,
+  residentDecisionsOnly = false,
 } = {}) {
   const { now, have } = survey;
   // 规划是同步的。运行时检查可能读取磁盘，每种动作在本次规划中只查询一次。
@@ -1106,6 +1109,8 @@ export function planWorld(survey, {
       decision(blockers.length ? 'productionSkipped' : 'missing', blockers.length ? skipReason(blockers) : '材料不足：' + short, shortages);
     }
   }
+
+  if (residentDecisionsOnly) return { orderDecisions };
 
   // 5. 排产：按需求补料；原生自动目标仅在协同开关开启时调整，保留正在生产项。
   if (borrowedTotals.size) creditExistingProduction();

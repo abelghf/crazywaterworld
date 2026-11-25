@@ -121,7 +121,9 @@ async function fixture(gameProtocol = protocol) {
   apps.add(app);
   const root = await app.listen();
   const response = async (route, body = null) => {
-    const result = await fetch(root + '/api/' + route + '?account=' + id, {
+    const url = new URL('/api/' + route, root);
+    url.searchParams.set('account', id);
+    const result = await fetch(url, {
       ...(body === null ? {} : { method: 'POST', body: JSON.stringify(body) }), signal: AbortSignal.timeout(8000),
     });
     return { status: result.status, data: await result.json() };
@@ -162,11 +164,23 @@ try {
       factory.factory.factoryQ.push({ idx: 1, productId: '面包', finishTime: f.state.now + 60 });
       farm.farm = { productId: '小麦', ripeTime: f.state.now + 30 };
       await f.api('connect', {});
-      const world = await f.api('world');
+      const full = await f.api('world');
+      f.state.requests.length = 0;
+      const world = await f.api('world?view=buildings');
+      assert.deepEqual(world.orders, full.orders);
+      assert.deepEqual(world.orderProgress, full.orderProgress);
+      assert.deepEqual(world.stock, full.stock);
+      assert.equal(world.plan, undefined);
+      assert(!f.state.requests.includes('AllGuildAbstractionRequest'));
       assert.equal(world.factories[0].jobs[0].productId, '面包');
       assert.equal(world.farms[0].productId, '小麦');
       assert.deepEqual(world.recipes.map(recipe => [recipe.productId, recipe.output, recipe.inputs[0].id, recipe.inputs[0].num]),
         [['面包', 1, '小麦', 5], ['小麦', 5, '小麦种子', 1]]);
+      f.state.responses.OnWaterRequest.workerOrder = [];
+      f.state.requests.length = 0;
+      const empty = await f.api('world?view=buildings');
+      assert.deepEqual(empty.orders, []);
+      assert.deepEqual(f.state.requests.sort(), ['AllItemRequest', 'AllResourceRequest', 'GameEffectRequest', 'OnWaterRequest']);
     } finally { await f.close(); }
   });
   await test('仓库消耗后重新读取排产页，预计备齐时间包括撤下等待项的收益', async () => {
@@ -416,7 +430,10 @@ try {
       assert.equal(writes.length, 0);
       const pair = await Promise.all([speed(active), speed(active)]);
       assert.deepEqual(pair.map(r => r.status).sort(), [200, 400]);
-      assert.match(pair.find(r => r.status === 200).data.label, /使用 3 个加速器，已收取成品/);
+      const confirmed = pair.find(r => r.status === 200).data;
+      assert.match(confirmed.label, /使用 3 个加速器，已收取成品/);
+      assert(confirmed.worldUpdateId && f.session().log.some(entry => entry.extra?.worldUpdateId === confirmed.worldUpdateId),
+        '加速回执与建筑更新推送应共用同一次刷新');
       assert.equal(factory.factory.factoryQ[0].idx, 12);
       assert.deepEqual(writes[1], { name: 'GainFactoryProduceRequest', body: { buildingId: factory.buildingId } });
       const partial = await speed(crop);

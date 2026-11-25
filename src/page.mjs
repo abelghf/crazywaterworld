@@ -742,7 +742,7 @@ function subscribe() {
     const entry = JSON.parse(event.data);
     appendLog(entry);
     if ((entry.extra?.pauseChanged || entry.extra?.loginBlocked) && entry.account === current) void loadAccounts(false);
-    if (entry.extra?.worldUpdated && entry.account === current && Date.now() - entry.t < 10_000) refreshManualWorld();
+    if (entry.extra?.worldUpdated && entry.account === current && Date.now() - entry.t < 10_000) refreshWorldUpdate(entry.extra.worldUpdateId);
     if (entry.extra?.lineupChanged && entry.account === current && Date.now() - entry.t < 10_000) void refreshSavedLineups();
   };
 }
@@ -889,7 +889,7 @@ function renderAccountSelect() {
   $('production-plan-refresh').disabled = productionPlanBusy || !planReady;
   if (productionPlanOwner === null) {
     $('production-plan-status').textContent = snapshot.syncingProduction ? '正在同步生产状态' : planReady ? '' : '连接账号后自动加载';
-    if (consoleStore.getState().view.page === 'manual') void refreshProductionPlan();
+    if (consoleStore.getState().view.page === 'manual') void loadManualProductionPlan();
   }
   renderHostingControl();
   paintConnection();
@@ -1555,15 +1555,15 @@ function worldProductionTimer(finishTime, readyText, activeText = '剩余 ') {
   return timer;
 }
 
-const pendingProductionSpeeds = new Set();
+const pendingProductionSpeeds = new Map();
 function updateProductionSpeedButton(button, now) {
   const { productionSpeedUntil, speedStock, speedKey } = button.dataset;
   const minutes = Math.max(0, Math.ceil((Number(productionSpeedUntil) - now) / 60));
   const cost = Math.min(minutes, Number(speedStock));
-  const pending = pendingProductionSpeeds.has(speedKey);
+  const pending = pendingProductionSpeeds.get(speedKey);
   button.hidden = !minutes;
-  button.disabled = !cost || pending || snapshot.paused || disconnected.has(current);
-  button.textContent = pending ? '加速中…' : cost > 0 ? '加速 ×' + cost
+  button.disabled = !cost || !!pending || snapshot.paused || disconnected.has(current);
+  button.textContent = pending ? pending.label : cost > 0 ? '加速 ×' + cost
     : speedStock === '' ? '库存未同步' : '加速器不足';
   button.setAttribute('aria-label', button.title + '，' + button.textContent);
   button.dataset.speedCost = String(cost);
@@ -1571,7 +1571,7 @@ function updateProductionSpeedButton(button, now) {
 
 function productionSpeedButton(target, stock, label) {
   const button = component('ui-button');
-  const account = current, key = JSON.stringify([account, target.kind, target.buildingId, target.index]);
+  const account = current, key = JSON.stringify([account, target.kind, target.buildingId, target.index, target.productId, target.finishTime]);
   button.type = 'button';
   button.title = '使用加速器加速' + label + '，每个缩短 1 分钟';
   button.dataset.productionSpeedUntil = String(target.finishTime);
@@ -1584,16 +1584,30 @@ function productionSpeedButton(target, stock, label) {
     updateProductionSpeedButton(button, now());
     if (button.disabled) return;
     const maxUse = Number(button.dataset.speedCost);
-    pendingProductionSpeeds.add(key);
+    const state = { account, label: '加速中…', settled: false };
+    pendingProductionSpeeds.set(key, state);
     updateProductionSpeedButton(button, now());
+    let updateId;
     try {
-      await call('/api/world/production-speed', { method: 'POST',
+      const result = await call('/api/world/production-speed', { method: 'POST',
         body: JSON.stringify({ ...target, maxUse, confirm: true }) });
+      updateId = result.worldUpdateId;
+      state.label = result.confirmed ? '已加速 · 同步中' : '结果待核对';
     } catch (error) {
+      state.label = '待刷新';
       if (current === account) reportError(error, '手动生产加速');
     } finally {
-      try { if (current === account) await refreshManualWorld(true); }
-      finally { pendingProductionSpeeds.delete(key); updateWorldProductionTimers(); }
+      state.settled = true;
+      if (current === account) {
+        updateWorldProductionTimers();
+        // 日志推送可能早于 HTTP 回执，两者共享这次写入之后的读回。
+        void refreshWorldUpdate(updateId)?.then(applied => {
+          if (applied && pendingProductionSpeeds.get(key) === state) {
+            pendingProductionSpeeds.delete(key);
+            if (current === account) updateWorldProductionTimers();
+          }
+        });
+      } else pendingProductionSpeeds.delete(key);
     }
   };
   return button;
@@ -1682,17 +1696,18 @@ function chooseFactoryProduct(factory, account, key) {
       if (!available() || selected.reason) throw Error('账号或工厂状态已变化，请重新选择产物');
       pendingFactoryStarts.add(key);
       showFactoryStartState(key, '正在提交排产…');
-      let message;
+      let message, updateId;
       try {
         const result = await call('/api/world/production-start', { method: 'POST', body: JSON.stringify({
           buildingId: factory.buildingId, productId: selected.productId, productionKey: selected.productionKey, confirm: true,
         }) });
         message = result.label;
+        updateId = result.worldUpdateId;
       } catch (error) {
         message = error.message;
         throw error;
       } finally {
-        try { if (current === account) await refreshManualWorld(true); }
+        try { if (current === account) await refreshWorldUpdate(updateId); }
         finally {
           pendingFactoryStarts.delete(key);
           if (current === account) showFactoryStartState(key, message);
@@ -2256,40 +2271,85 @@ function renderWorld(data) {
     obox.appendChild(el('p', 'resident-order-empty', Array.isArray(data.orders)
       ? '当前没有待处理的居民订单。' : '居民订单列表尚未同步。'));
   }
-  renderInventory(data.stock);
+  if (!$('tab-inventory').classList.contains('hidden')) renderInventory(data.stock);
 }
 
 let worldVersion = 0, worldRead = null, displayedWorldAccount;
+const recentWorldUpdates = new Map();
+function refreshWorldUpdate(id) {
+  if (displayedWorldAccount === current && recentWorldUpdates.has(id)) return recentWorldUpdates.get(id);
+  const job = refreshManualWorld(true);
+  if (job && id != null) {
+    recentWorldUpdates.set(id, job);
+    if (recentWorldUpdates.size > 32) recentWorldUpdates.delete(recentWorldUpdates.keys().next().value);
+    void job.then(applied => {
+      if (!applied && recentWorldUpdates.get(id) === job) recentWorldUpdates.delete(id);
+    });
+  }
+  return job;
+}
+
+async function loadManualProductionPlan() {
+  if (!productionAccountReady()) return refreshProductionPlan();
+  const account = current;
+  if (worldRead || displayedWorldAccount !== account || !lastWorldData) await refreshManualWorld();
+  if (current === account && consoleStore.getState().view.page === 'manual') return refreshProductionPlan();
+}
+
 function refreshManualWorld(force = false) {
-  if (force) { worldVersion++; worldRead = null; }
-  if ($('tab-manual').classList.contains('hidden')&&$('tab-inventory').classList.contains('hidden')) return;
+  if ($('tab-manual').classList.contains('hidden') && $('tab-inventory').classList.contains('hidden')) {
+    if (force) { worldVersion++; worldRead = null; }
+    return;
+  }
   const account = current;
   const available = account && !snapshot.paused && !disconnected.has(account);
   if (displayedWorldAccount !== account || !available) {
     $('inventory-status').textContent = available ? '正在读取库存' : !account ? '请先选择账号'
       : snapshot.paused ? '账号已暂停' : '账号已断开连接';
     displayedWorldAccount = account;
+    lastWorldData = null;
+    recentWorldUpdates.clear();
     resetInventory();
     worldVersion++;
     worldRead = null;
     for (const id of ['world-factories', 'world-orders', 'world-stock', 'resident-order-progress']) clear($(id));
     if (!available) $('world-view').textContent = account ? '账号已断开连接' : '请先选择账号';
   }
-  if (!available || worldRead?.account === account) return;
+  if (!available) return;
+  if (worldRead?.account === account) {
+    if (force) worldRead.again = true;
+    return worldRead.job;
+  }
   const version = ++worldVersion;
-  worldRead = { account, version };
+  const read = worldRead = { account, again: false };
+  const isCurrent = () => version === worldVersion && current === account;
   $('world-view').textContent = '正在读取海面数据…';
-  return call('/api/world').then(data => {
-    if (version === worldVersion && current === account) renderWorld(data);
-  }).catch(error => {
-    if (version === worldVersion && current === account) {
-      $('inventory-status').textContent='库存读取失败，请重试';
-      $('world-view').textContent = '海面数据读取失败，请重新打开「建筑一览」重试。';
-      reportError(error);
+  read.job = (async () => {
+    while (isCurrent()) {
+      read.again = false;
+      try {
+        const data = await call('/api/world?view=buildings');
+        if (!isCurrent()) break;
+        if (read.again) continue;
+        for (const [key, state] of pendingProductionSpeeds) {
+          if (state.account === account && state.settled) pendingProductionSpeeds.delete(key);
+        }
+        renderWorld(data);
+        return true;
+      } catch (error) {
+        if (!isCurrent()) break;
+        if (read.again) continue;
+        $('inventory-status').textContent = '库存读取失败，请重试';
+        $('world-view').textContent = '海面数据读取失败，请重新打开「建筑一览」重试。';
+        reportError(error);
+        break;
+      }
     }
-  }).finally(() => {
-    if (worldRead?.version === version) worldRead = null;
+    return false;
+  })().finally(() => {
+    if (worldRead === read) worldRead = null;
   });
+  return read.job;
 }
 $('inventory-refresh').onclick=()=>refreshManualWorld(true);
 
@@ -3078,7 +3138,12 @@ function activateConsolePage(button, resource = selectedResource) {
     }
     refreshProgression();
     if (button.dataset.tab === 'overview') {refreshOverview();refreshLoop();}
-    if(isResource&&resource==='inventory')refreshManualWorld();
+    if (isResource && resource === 'inventory') {
+      if (current && displayedWorldAccount === current && !snapshot.paused && !disconnected.has(current) && lastWorldData?.stock) {
+        renderInventory(lastWorldData.stock);
+      }
+      refreshManualWorld();
+    }
     if (target === 'lineups') void refreshSavedLineups();
     if (button.dataset.tab === 'account') {
       renderAccounts();
@@ -3087,7 +3152,7 @@ function activateConsolePage(button, resource = selectedResource) {
     }
     if (target === 'manual') {
       refreshManualWorld();
-      void refreshProductionPlan();
+      void loadManualProductionPlan();
     }
     if (button.dataset.tab === 'settings') {
       if (!location.hash.startsWith('#config-group-')) configActivate(configEditor.category);
@@ -3160,7 +3225,7 @@ setInterval(() => { if (!document.hidden && accounts.some(account => account.sta
 document.addEventListener('visibilitychange',()=>{
   if (document.hidden) return;
   void refreshAccountStatuses(); refreshLoop(); refreshStages();
-  if (consoleStore.getState().view.page === 'manual') void refreshProductionPlan();
+  if (consoleStore.getState().view.page === 'manual') void loadManualProductionPlan();
 });
 setInterval(() => { void refreshAccountStatuses(); if (!loopReads) refreshLoop(); }, 3000);
 setInterval(refreshStages, 3000);

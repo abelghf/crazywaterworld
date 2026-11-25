@@ -2072,36 +2072,28 @@ export function createConsole({ host = '127.0.0.1', port = 17321, onLog, recover
     };
   }
 
-  async function world(session, account, allowAccelerators = false) {
+  async function world(session, account, allowAccelerators = false, buildingsView = false) {
     const instance = await ensureConnected(session, account);
     const config = loadConfigSafe();
     const survey = await surveyWorld(instance, protocolFor(instance), { config, player: session.player,
-      includeInventoryCaps: true, includeCargo: session.loop.tasks.cargo || needsCargoDemand(session.preferences) });
+      buildingsView, includeInventoryCaps: true, includeCargo: session.loop.tasks.cargo || needsCargoDemand(session.preferences) });
     const settings = session.preferences;
     const usage = usageFor(session).snapshot();
-    const extra = settings ? await surveyBaseAutomation(instance, protocolFor(instance), config, session.player, settings, survey, { ledger: usageFor(session), enabled: () => session.client === instance && instance.connected !== false }) : null;
-    const plan = planWorld(survey, { config, settings, usage, extraDemand: extra ? baseDemands(extra, config, settings) : [],
+    const extra = settings && (!buildingsView || survey.orders.length) ? await surveyBaseAutomation(instance, protocolFor(instance), config, session.player, settings, survey, { ledger: usageFor(session), enabled: () => session.client === instance && instance.connected !== false }) : null;
+    const planOptions = { config, settings, usage,
+      extraDemand: extra ? baseDemands(extra, config, settings) : [],
       allowSpeedUp: allowAccelerators && (!settings || session.loop.tasks.speedUp),
-      ...(settings ? { enabled: kind => session.loop.tasks[worldTaskKey(kind)] === true, allowReroll: settings.resident.reroll, minOrderExp: settings.resident.minExp } : {}) });
-    plan.actions = plan.actions.filter(step => allowAccelerators || !(step.costs ?? []).some(cost => cost.id === '加速器' && cost.num > 0));
+      ...(settings ? { enabled: kind => session.loop.tasks[worldTaskKey(kind)] === true, allowReroll: settings.resident.reroll, minOrderExp: settings.resident.minExp } : {}) };
+    const plan = buildingsView ? null : planWorld(survey, planOptions);
+    if (plan) plan.actions = plan.actions.filter(step => allowAccelerators || !(step.costs ?? []).some(cost => cost.id === '加速器' && cost.num > 0));
     // Manual preview and idle execution can use different toggles. The order
     // table describes what the account's idle loop can actually deliver.
-    const autoOrders = settings || !survey.orders.length ? plan.orderDecisions : planWorld(survey, {
-      config, enabled: kind => session.loop.tasks[worldTaskKey(kind)] === true,
-      allowReroll: session.loop.tasks.denyOrder, minOrderExp: null,
-      settings, usage,
+    const autoOrders = !survey.orders.length ? [] : settings && plan ? plan.orderDecisions : planWorld(survey, {
+      ...planOptions, residentDecisionsOnly: true, enabled: kind => session.loop.tasks[worldTaskKey(kind)] === true,
+      allowReroll: settings ? settings.resident.reroll : session.loop.tasks.denyOrder, minOrderExp: settings?.resident.minExp ?? null,
     }).orderDecisions;
-    let map = null, mapError;
-    try {
-      map = await loadMapAsset(Number(session.player?.scenarioId ?? 0), config?.resources ?? null);
-    } catch (error) {
-      mapError = error.message;
-    }
-    let guilds=null;try{guilds=(await instance.request('AllGuildAbstractionRequest',{},'AllGuildAbstractionResponse')).guilds;}catch{/*主城动态等级读取失败时显示未同步。*/}
-    const fields = { ...survey.resFields, text: formatFieldReport(survey, map, mapError), rows:resourceFieldRows(config,session.player,survey.resFields,guilds) };
-    fields.totals=resourceFieldTotals(survey.resFields,fields.rows);
     const typeNames = new Map(config?.tables?.BuildingCfg?.data.map(row => [row.buildingType, row.name]));
-    const timing = createProductionTiming({ config, ...survey.productionTiming, serverNow: survey.serverNow });
+    const timing = plan && createProductionTiming({ config, ...survey.productionTiming, serverNow: survey.serverNow });
     const incoming = factoryIncomingStock(survey.factories);
     const now = Date.now() / 1000;
     const result = {
@@ -2128,11 +2120,11 @@ export function createConsole({ host = '127.0.0.1', port = 17321, onLog, recover
       factories: survey.factories.map(b => {
         const queueKnown = Array.isArray(b.factory.factoryQ);
         const queue = queueKnown ? b.factory.factoryQ : [];
-        const planned = plan.actions.filter(step => step.request === 'StartFactoryProduceRequest'
-          && step.body.buildingId === b.buildingId);
+        const planned = plan?.actions.filter(step => step.request === 'StartFactoryProduceRequest'
+          && step.body.buildingId === b.buildingId) ?? [];
         // The timing simulation uses the submitted queue first, then the proposed
         // inputs in dispatch order. The game snapshot itself stays unchanged.
-        const schedule = queueKnown && queue.every(job => job?.productId)
+        const schedule = timing && queueKnown && queue.every(job => job?.productId)
           ? timing.factoryQueue(b, [...queue, ...planned.map(step => step.body)]).jobs : [];
         const finishes = new Map(schedule.map(entry => [entry.job, entry.finish]));
         let canEstimate = queueKnown && (!queue.length || queue.some(job => job?.finishTime > 0));
@@ -2149,7 +2141,7 @@ export function createConsole({ host = '127.0.0.1', port = 17321, onLog, recover
             estimatedFinishTime: !finishTime && canEstimate ? finishes.get(job) : null,
           };
         });
-        const plannedJobs = queueKnown ? planned.map(step => {
+        const plannedJobs = plan && queueKnown ? planned.map(step => {
           const { productId } = step.body;
           if (step.needsConfirmedBorrow || !finishes.has(step.body)) canEstimate = false;
           return { productId, name: step.displayProduct || displayMaterial(config, productId),
@@ -2198,11 +2190,24 @@ export function createConsole({ host = '127.0.0.1', port = 17321, onLog, recover
       stock: inventoryStockRows(survey, config).map(row => ({
         ...row, name: displayMaterial(config, row.id), sources: config?.materialSources(row.id), icon: materialIcon(row.id),
       })),
-      resFields: fields,
-      plan: plan.actions,
-      notes: [...survey.notes, ...plan.notes],
-      text: formatWorldPlan(survey, plan),
     };
+    if (plan) {
+      let map = null, mapError;
+      try {
+        map = await loadMapAsset(Number(session.player?.scenarioId ?? 0), config?.resources ?? null);
+      } catch (error) {
+        mapError = error.message;
+      }
+      let guilds = null;
+      try { guilds = (await instance.request('AllGuildAbstractionRequest', {}, 'AllGuildAbstractionResponse')).guilds; }
+      catch { /* 主城动态等级读取失败时显示未同步。 */ }
+      const rows = resourceFieldRows(config, session.player, survey.resFields, guilds);
+      result.resFields = { ...survey.resFields, text: formatFieldReport(survey, map, mapError), rows,
+        totals: resourceFieldTotals(survey.resFields, rows) };
+      result.plan = plan.actions;
+      result.notes = [...survey.notes, ...plan.notes];
+      result.text = formatWorldPlan(survey, plan);
+    }
     const products = result.farms.map(plot => plot.productId);
     for (const factory of result.factories) {
       for (const job of [...factory.jobs, ...(factory.plannedJobs ?? [])]) products.push(job.productId);
@@ -4758,11 +4763,15 @@ export function createConsole({ host = '127.0.0.1', port = 17321, onLog, recover
       if (route === 'GET /api/world') {
         const { account, session } = scoped_(parsed);
         const allowAccelerators = parsed.searchParams.get('speedUp') === 'true';
-        if (!session.worldRead || session.worldReadSpeedUp !== allowAccelerators) {
-          const job = readJob(session, () => world(session, account, allowAccelerators)).finally(() => { if (session.worldRead === job) session.worldRead = null; });
-          session.worldRead = job; session.worldReadSpeedUp = allowAccelerators;
+        const buildingsView = parsed.searchParams.get('view') === 'buildings';
+        const reads = session.worldRead ??= new Map();
+        const view = buildingsView ? 'buildings' : allowAccelerators ? 'speedUp' : 'full';
+        const readKey = session.generation + ':' + view;
+        if (!reads.has(readKey)) {
+          const job = readJob(session, () => world(session, account, allowAccelerators, buildingsView));
+          reads.set(readKey, job.finally(() => reads.delete(readKey)));
         }
-        json(await session.worldRead);
+        json(await reads.get(readKey));
         return;
       }
       if (['POST /api/world/production-speed', 'POST /api/world/production-start', 'POST /api/world/production-auto'].includes(route)) {
@@ -4783,8 +4792,9 @@ export function createConsole({ host = '127.0.0.1', port = 17321, onLog, recover
           else if (start) result = await startManualFactoryProduction(client, protocolFor(client), payload, { ...context, settings: session.preferences });
           else result = await speedUpProduction(client, protocolFor(client), payload, { ...context, getSettings: () => session.preferences });
           session.worldRead = null;
-          emit(session, result.confirmed ? 'info' : 'warn', result.label, { worldUpdated: true });
-          return result;
+          const worldUpdateId = randomUUID();
+          emit(session, result.confirmed ? 'info' : 'warn', result.label, { worldUpdated: true, worldUpdateId });
+          return { ...result, worldUpdateId };
         }, label);
         json(result);
         return;
