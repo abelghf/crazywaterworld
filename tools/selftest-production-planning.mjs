@@ -39,6 +39,30 @@ let passed = 0;
 function test(name, run) { run(); passed++; console.log('通过：' + name); }
 
 {
+  const { snapshot, settings, plan } = fixture();
+  settings.factory.demandPriority = ['cargo'];
+  settings.cargo.enabled = true;
+  snapshot.orders = [
+    { id: 'cargo:1', requirements: [{ id: '小麦', num: 4 }, { id: '面包', num: 1 }] },
+    { id: 'cargo:2', requirements: [{ id: '小麦', num: 4 }] },
+  ].map(order => ({ ...order, source: 'cargo', kind: 'order', metadata: { enabled: true } }));
+  snapshot.inventory[0].num = 4;
+  const result = plan();
+  assert.equal(result.orders.find(row => row.id === 'cargo:2').completionAt, snapshot.serverNow);
+  const forecast = await forecastProductionDay(snapshot, config, settings, result.orders);
+  assert.equal(forecast.completions.find(row => row.id === 'cargo:2')?.at, snapshot.serverNow);
+  assert(!forecast.completions.some(row => row.id === 'cargo:1' && row.at === snapshot.serverNow));
+  settings.factory.demandPriority.unshift('merchant');
+  snapshot.orders.unshift({ id: 'merchant:1', source: 'merchant', kind: 'order', requirements: [{ id: '小麦', num: 4 }] });
+  const protectedPlan = plan();
+  assert.equal(protectedPlan.orders.find(row => row.source === 'merchant').completionAt, snapshot.serverNow);
+  assert(protectedPlan.orders.find(row => row.id === 'cargo:2').completionAt > snapshot.serverNow);
+  const protectedDay = await forecastProductionDay(snapshot, config, settings, protectedPlan.orders);
+  assert(!protectedDay.completions.some(row => row.id === 'cargo:2' && row.at === snapshot.serverNow));
+  passed++; console.log('通过：一船还缺面包时，同批小麦可立即发出另一船');
+}
+
+{
   const {snapshot,settings} = fixture(), start = snapshot.serverNow;
   const jobs = { '1食品厂':{jobs:[{id:'面包',quantity:2,pinned:true,at:start+90000},{id:'面包',at:start+90001}]},
     '9失联工厂':{jobs:[{id:'面包',quantity:4,pinned:true}]} };

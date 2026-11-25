@@ -26,6 +26,8 @@ try {
     'MyFleetsRequest', 'MyFleetsResponse', 'WeekInfoRequest', 'WeekInfoResponse',
     'GuildInfoRequest', 'GuildInfoResponse', 'GainFactoryProduceRequest', 'GainFactoryProduceResponse',
     'StartFactoryProduceRequest', 'GameEffectRequest', 'GameEffectResponse',
+    'CargoShipsRequest', 'CargoShipsResponse', 'FillCargoShipRequest', 'FillCargoShipResponse',
+    'WeekOrderInfoRequest', 'WeekOrderInfoResponse',
   ]) : loadProtocol();
 
   function integration({ rounds = 2, mainEveryMs = 3600000, cli = false, offset = 0, finishAfterMs = 5000, fallbackSeconds = 30 } = {}) {
@@ -94,7 +96,7 @@ try {
     };
     const leave = write => { if (write) writesInFlight--; else readsInFlight--; };
     client.request = async (name, body = {}, response = name.replace(/Request$/, 'Response')) => {
-      const write = name === 'GainFactoryProduceRequest'; enter('request', name, body, write);
+      const write = ['GainFactoryProduceRequest', 'FillCargoShipRequest'].includes(name); enter('request', name, body, write);
       try {
         codec(name, body); await beforeRead?.(name); mature();
         let result;
@@ -105,6 +107,17 @@ try {
         else if (name === 'MyResFieldsRequest') result = { fields: [] };
         else if (name === 'MyFleetsRequest') result = { fleets: [] };
         else if (name === 'WeekInfoRequest') result = { activityTime: [] };
+        else if (name === 'CargoShipsRequest') result = { ship: state.ships ?? [] };
+        else if (name === 'FillCargoShipRequest') {
+          const ship = state.ships.find(row => row.index === body.shipIndex);
+          assert.deepEqual(body.cargoIndex, [1]);
+          assert.equal(ship.status, 0);
+          assert.equal(state.stock.get('产品甲'), 1);
+          state.stock.set('产品甲', 0);
+          ship.orderItem[0].filled = true;
+          ship.status = 1;
+          result = {};
+        }
         else if (name === 'GuildInfoRequest') result = { guild: { guildId: 1, welfarePack: [], gotWelfareTime: 0 }, gotTitle: 0, gotTitleTime: 0 };
         else if (name === 'GainFactoryProduceRequest') {
           const assets = state.building.factory.finishedProducts;
@@ -176,6 +189,20 @@ try {
     assert(writes(f)[0].at >= base + 5000 && writes(f)[0].at <= base + 6000, '应在五秒完工附近收货，不能等待主轮或三十秒兜底');
     assert.equal(f.roundsDone.length, 1, '辅助生产检查不能推进主轮计数');
     assert(f.scheduled() >= 2); await f.clean();
+  });
+  await test('轮间收取最后一件货时立即装船', async () => {
+    const f = integration();
+    f.settings.cargo.enabled = true; f.flags.add('cargo');
+    f.state.ships = [{ index: 1, status: 0, orderItem: [{ filled: false, asset: { type: 0, id: '产品甲', num: 1 } }] }];
+    f.sleepHook(ms => { if (wall >= base + 5000) f.abort(); else wall += ms; });
+    await f.run();
+    const loads = f.protocolCalls.filter(row => row.name === 'FillCargoShipRequest');
+    assert.equal(loads.length, 1);
+    const gain = f.protocolCalls.find(row => row.name === 'GainFactoryProduceRequest');
+    assert.equal(loads[0].job, gain.job, '收取成品和装船应在同一次账号调度中完成');
+    assert(loads[0].at >= base + 5000 && loads[0].at <= base + 6000);
+    assert.equal(f.roundsDone.length, 1);
+    await f.clean();
   });
   await test('模拟原生在首轮和完工补产时只需生产数据，即使设置保留了按订单优先', async () => {
     const f = integration();

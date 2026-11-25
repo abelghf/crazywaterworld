@@ -500,6 +500,34 @@ export async function runLoop(client, protocol, {
         : reasons.join('；') || '本轮没有需要调整的原生生产目标';
       stepLog('world')({ taskKey: 'nativeProduce', title: '原生自动生产目标', skipped: true, reason });
     }
+    async function checkCargo(cargoLoadLimits, actionGuard, current = () => true) {
+      const active = () => current() && enabled('cargo');
+      if (!isEnabled || !active()) return;
+      const unlockLevel = config?.tables?.CargoUnlockCfg?.data?.[0]?.playerLevel ?? 9;
+      try {
+        let waitReason;
+        if (player?.level >= unlockLevel) {
+          waitReason = '已检查贸易港，暂无可交付或领取的货物';
+          await serviceCargo(client, config, {
+            enabled: active, getSettings, ledger: usageLedger, cargoLoadLimits,
+            beforeAction: actionGuard.before, afterAction: actionGuard.after, cancelAction: actionGuard.cancel,
+            log(title, details) {
+              waitReason = details?.reason;
+              const entry = { taskKey: 'cargo', title, note: title, ok: !details?.skipped, ...details };
+              summary.world.planned++;
+              summary.world.results.push(entry);
+              stepLog('world')(entry);
+            },
+          });
+        } else {
+          waitReason = player?.level ? '贸易港需要角色达到 ' + unlockLevel + ' 级' : '角色等级尚未同步';
+        }
+        if (waitReason && active()) {
+          rewards.observe('cargo', waitReason);
+          rewards.expect('cargo', rewards.now() + Math.ceil(getEveryMs() / 1000));
+        }
+      } catch (error) { phaseFailure('world', '贸易港', error); }
+    }
     // 主轮内已持有账号队列，直接调用；轮间由 schedule 调用。推送回调不执行协议。
     async function checkFactoryDue({ checkUpgrade = false, checkpoint = false } = {}) {
       if (stop.aborted || client.connected === false || checkpoint && !factorySchedule.hasChecked()) return;
@@ -513,11 +541,12 @@ export async function runLoop(client, protocol, {
         const simulateNative = currentSettings?.factory?.strategy === 'nativeSimulation';
         const holdForOrders = (!simulateNative && canFactory('startProduce')) || enabled('finishOrder') || checkUpgrade;
         const cargoDemand = (!simulateNative || holdForOrders) && needsCargoDemand(currentSettings);
+        const readCargo = (enabled('cargo') && holdForOrders) || cargoDemand;
         let version = factorySchedule.version();
         const survey = await surveyWorld(client, protocol, { config, player,
           includeProductionTiming: canFactory('startProduce') && currentSettings?.factory?.produce !== false,
           includeWeekOrder: holdForOrders || cargoDemand,
-          includeCargo: (enabled('cargo') && holdForOrders) || cargoDemand });
+          includeCargo: readCargo });
         // 募兵、上船和订单可能已改变需求，不能沿用主轮的备料快照。
         let demand = [];
         if (currentSettings && canFactory('startProduce') && (!simulateNative || checkUpgrade)) {
@@ -549,6 +578,12 @@ export async function runLoop(client, protocol, {
         if (current() && factoryDue) factorySchedule.checked(state, { version, slots: survey.factorySlots,
           progressed: factoryProgress(result.results) });
         publishFactoryDeadline();
+        const cargoHarvest = result.results.some(({ ok, step, body }) => ok && step?.kind === 'gainFactory'
+          && (!readCargo || survey.orderCheckError || !Array.isArray(body?.products?.asset)
+            || body.products.asset.some(item => survey.cargoOrder.has(item.id))));
+        if (cargoHarvest) {
+          await checkCargo(plan.cargoLoadLimits, freshGuard, current);
+        }
       } catch (error) {
         if (stop.aborted) return;
         if (factoryDue) factorySchedule.failed();
@@ -1379,32 +1414,7 @@ export async function runLoop(client, protocol, {
             publishFactoryDeadline();
           } catch (error) { factorySchedule.failed(); publishFactoryDeadline(); phaseFailure('world', '核对海面建筑状态', error); }
         }
-        if (isEnabled && enabled('cargo')) {
-          const unlockLevel = config?.tables?.CargoUnlockCfg?.data?.[0]?.playerLevel ?? 9;
-          try {
-            let waitReason;
-            if (player?.level >= unlockLevel) {
-              waitReason = '已检查贸易港，暂无可交付或领取的货物';
-              await serviceCargo(client, config, {
-                enabled: () => enabled('cargo'), getSettings, ledger: usageLedger, cargoLoadLimits: plan.cargoLoadLimits,
-                beforeAction: guard.before, afterAction: guard.after, cancelAction: guard.cancel,
-                log(title, details) {
-                  waitReason = details?.reason;
-                  const entry = { taskKey: 'cargo', title, note: title, ok: !details?.skipped, ...details };
-                  summary.world.planned++;
-                  summary.world.results.push(entry);
-                  stepLog('world')(entry);
-                },
-              });
-            } else {
-              waitReason = player?.level ? '贸易港需要角色达到 ' + unlockLevel + ' 级' : '角色等级尚未同步';
-            }
-            if (waitReason && enabled('cargo')) {
-              rewards.observe('cargo', waitReason);
-              rewards.expect('cargo', rewards.now() + Math.ceil(getEveryMs() / 1000));
-            }
-          } catch (error) { phaseFailure('world', '贸易港', error); }
-        }
+        await checkCargo(plan.cargoLoadLimits, guard);
       }
       yield;
       const latest = getSettings();

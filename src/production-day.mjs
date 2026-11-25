@@ -1,6 +1,6 @@
 import { setImmediate as yieldToLoop } from 'node:timers/promises';
 import { planWorld, displayBuilding } from './world.mjs';
-import { insertionRecipeReady } from './production-eligibility.mjs';
+import { insertionRecipeReady, readyCargoOrdersFirst } from './production-eligibility.mjs';
 import { createProductionTiming, nextFactoryLane, commitFactoryLane } from './production-timing.mjs';
 import { resourceReserve } from './automation-policy.mjs';
 import { consumeInsertionUnit, insertionYieldsToProduction, nextInsertionIndex } from './factory-insertion-queue.mjs';
@@ -299,13 +299,20 @@ export async function forecastProductionDay(
     nextYield = performance.now() + 24;
   function processOrders() {
     const reserved = new Map();
-    for (const order of [...remainder]) {
+    const free = id => Math.max(0, have(id) - (resourceReserve(settings, id) || 0) - (reserved.get(id) ?? 0));
+    const autoCargo = order => order.source === 'cargo' && order.metadata?.enabled;
+    let cargo;
+    for (const entry of [...remainder]) {
+      let order = entry;
+      if (autoCargo(entry)) {
+        cargo ??= readyCargoOrdersFirst(remainder.filter(autoCargo), free).values();
+        order = cargo.next().value;
+      }
       const expiry = order.metadata?.refreshAt;
       if ((expiry && now >= expiry) || (order.deadline && now > order.deadline)) {
         remainder.splice(remainder.indexOf(order), 1);
         continue;
       }
-      const free = id => Math.max(0, have(id) - (resourceReserve(settings, id) || 0) - (reserved.get(id) ?? 0));
       if (order.requirements.every(r => free(r.id) >= r.num)) {
         const consume =
           order.kind === 'order' &&
