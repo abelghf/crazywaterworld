@@ -125,7 +125,7 @@ function simulate(world, settings) {
     const history = [...markets.values()];
     if (cargo.moveToCityId && time < cargo.moveEndTime) {
       const speed = planMerchantSpeed(config,event,state,radar,budget.stock,settings,time,{...budget, markets:history,
-        usedPointers:voyage.pins, plannedOpening:voyage.opening, exploration:voyage.exploration, actionSeconds:step});
+        usedPointers:voyage.pins, closingPointers:voyage.closing, plannedOpening:voyage.opening, exploration:voyage.exploration, actionSeconds:step});
       if (speed.kind === 'speed') {
         pins += speed.useNum; daily[d] += speed.useNum; voyage.pins += speed.useNum;
         cargo.moveEndTime = speed.expected.afterEndTime;
@@ -149,8 +149,8 @@ function simulate(world, settings) {
     }
     const options = { markets:history, settings, actionSeconds:step, preferredPort:voyage.origin, plannedOpening:voyage.opening, openingCargoPids:openingCargo };
     let plan = planMerchant(config,event,state,market,radar,time,[...itinerary],options);
-    if (settings.autoSpeedUp && ['goal', 'eventFree', 'targetFirst'].includes(settings.speedUpMode) && d >= 2 && !openingCargo.length &&
-      timing.tradingOpen && (plan.kind === 'wait' || plan.exploration) &&
+    if (settings.autoSpeedUp && ['goal', 'eventFree', 'targetFirst'].includes(settings.speedUpMode) && !openingCargo.length &&
+      timing.tradingOpen && (plan.kind === 'wait' || plan.exploration || plan.mode === 'OVERNIGHT') &&
       time + timing.travelSeconds + (1 + 2 * market.goods.length + player.goods.length) * step >= timing.tradeEndTime)
       plan = merchantClosingRoute(config,event,state,market,radar,radar,time,[...itinerary],options,budget) ?? plan;
     plan = merchantStrategyPlan(plan,config,event,state,settings,time,{keyRecords:()=>departures});
@@ -171,7 +171,7 @@ function simulate(world, settings) {
       player.goods = player.goods.filter(b => b.pid !== g.pid);
       openingCargo = openingCargo.filter(p => p !== g.pid); itinerary.clear();
     } else if (plan.kind === 'move') {
-      voyage = {origin:cargo.cityId, opening:plan.plannedOpening, exploration:plan.exploration, pins:0};
+      voyage = {origin:cargo.cityId, opening:plan.plannedOpening, exploration:plan.exploration, pins:0, closing:plan.accelerationRequired};
       openingCargo = plan.plannedOpening ? player.goods.map(b => b.pid) : [];
       itinerary.add(cargo.cityId); cargo.moveStartTime = time; cargo.moveEndTime = time + timing.travelSeconds;
       cargo.moveToCityId = plan.destination;

@@ -91,6 +91,7 @@ const merchantActivityFields = [
     configField('merchant.refreshWindowMinutes','刷新后加速窗口','number',{ parent: 'merchant.speedUpMode',unit:'分钟',when:d=>['refresh','arrival'].includes(d.merchant.speedUpMode),help:'仅在真实配置刷新时刻之后的此窗口内加速，窗口外等待；交易截止前仍可补救。'}),
     configField('merchant.dailyPointerLimit','每日指针使用上限','number',{ parent: 'merchant.autoSpeedUp',unit:'根',when:d=>d.merchant.autoSpeedUp,help:'默认28，0 禁止使用；跨重启保留已用和未确认用量。'}),
     configField('merchant.periodPointerLimit','本期自动用针总上限','number',{ parent:'merchant.autoSpeedUp',unit:'根',help:'整期累计扣除自动使用的指南针，切换方案或重启后继续计数。0 全程零针，-1 表示仅按每日上限和库存执行。'}),
+    configField('merchant.speedUpIntelPorts','用针所需紧缺情报','number',{ parent:'merchant.autoSpeedUp',unit:'个港',when:d=>d.merchant?.autoSpeedUp,help:'默认 0，不限制。填写后，已知紧缺港少于此数就先自然航行，情报补齐后再用针。每天 10:00 至 22:00 交易，开市后照常自然走商，这里只限制用针。收盘前 7 小时即 15:00 起不再受限。手动情报一并计入。'}),
     configField('merchant.autoBuyPointers','允许用钻石补购指南针','switch',{help:'按账号保存，跨期生效。开启指南针加速后，只补当前加速方案缺少的数量。购买前核对实际钻石余额、补购预算和游戏购买次数。'}),
     configField('merchant.pointerDailyDiamondLimit','每日购买指针钻石上限','number',{ parent: 'merchant.autoBuyPointers',when:d=>d.merchant.autoBuyPointers,help:'只用于补购指南针，填 0 停止补购。'}),
     configField('merchant.profitLimit','本期累计利润上限','number',{unit:'商会币',help:'0 表示不额外限制。5000 万利润对应 50000000 商会币。达到上限后停止新航次、采购、升级与加速。已到港的隔夜货会继续清舱。共享情报和领奖按各自开关执行。'}),

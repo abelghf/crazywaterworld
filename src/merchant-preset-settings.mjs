@@ -10,7 +10,8 @@ export function merchantPresetSettings(defaults, version = 'current') {
     eventFree: { ...common, autoSpeedUp: true, speedUpMode: 'eventFree', speedUpMaxPerLeg: 4,
       estimateDiscountPercent: current ? 7 : 10, dailyPointerLimit: current ? 100 : legacy ? 45 : 10 },
     sprint: { ...common, autoSpeedUp: true, speedUpMode: legacy ? 'goal' : 'targetFirst', speedUpMaxPerLeg: 4,
-      dailyPointerLimit: legacy ? 45 : 100, periodPointerLimit: legacy ? 139 : current ? 220 : -1 },
+      dailyPointerLimit: legacy ? 45 : 100, periodPointerLimit: legacy ? 139 : current ? 220 : -1,
+      speedUpIntelPorts: current ? 12 : 0 },
   };
 }
 
@@ -24,7 +25,7 @@ export function migrateMerchantPreset(settings, defaults) {
   if (missingChain && missingReturn && ['merchantTrade','merchantRewards','tradeTasks'].every(key => settings.schedule?.[key] === true)) {
     const old = merchantPresetSettings(defaults, 'legacy');
     const match = Object.keys(old).find(id => Object.entries(old[id]).every(([k,v]) =>
-      k === 'knownPortChains' || k === 'minPurchaseReturnPercent' || saved[k] === v));
+      k === 'knownPortChains' || k === 'minPurchaseReturnPercent' || (Object.hasOwn(saved, k) ? saved[k] : defaults[k]) === v));
     if (match) {
       merchant = { ...merchant, ...merchantPresetSettings(defaults, 'v70')[match] };
       // 旧版文件继续使用已保存的针数预算。主动套用新版冲刺时才启用达标优先。

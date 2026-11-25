@@ -64,7 +64,7 @@ export const DEFAULT_SETTINGS = {
   merchant: { enabled: false, fullCargoRoutes: false, autoShareIntel: false, quoteMaxAgeSeconds: 300, estimateDiscountPercent: 0, refreshWaitSeconds: 120, liquidationMinutes: 120,
     maxLossPercent: 0, minExpectedProfit: 1, knownPortChains: true, minPurchaseReturnPercent: 0, autoSpeedUp: false, keepPointers: 0,
     speedUpMode: 'deadline', guardLastPointer: false, speedUpMaxPerLeg: 4, monitorSeconds: 60,
-    refreshWindowMinutes: 8, dailyPointerLimit: 28, periodPointerLimit: -1, autoBuyPointers: false, pointerDailyDiamondLimit: 0,
+    refreshWindowMinutes: 8, dailyPointerLimit: 28, periodPointerLimit: -1, speedUpIntelPorts: 0, autoBuyPointers: false, pointerDailyDiamondLimit: 0,
     profitLimit: 0, firstDepartureMode: 'smart', firstDepartureTime: '10:00', firstDepartureWaitMinutes: 29,
     autoUpgrade: false },
   loop: { rounds: 0, everySeconds: 60, tasks: false, dailies: false, world: false, heroes: false },
@@ -140,7 +140,7 @@ const constraints = {
   'merchant.refreshWaitSeconds': int(3600), 'merchant.liquidationMinutes': int(1440), 'merchant.maxLossPercent': int(100),
   'merchant.minExpectedProfit': int(1000000000, 1), 'merchant.keepPointers': int(1000000),
   'merchant.speedUpMode': { kind: 'choice', values: ['deadline', 'refresh', 'arrival', 'race', 'full', 'goal', 'targetFirst', 'eventFree'] }, 'merchant.speedUpMaxPerLeg': int(100, 1),
-  'merchant.refreshWindowMinutes': int(30, 1), 'merchant.dailyPointerLimit': int(1000), 'merchant.periodPointerLimit': int(1000000, -1), 'merchant.pointerDailyDiamondLimit': int(100000),
+  'merchant.refreshWindowMinutes': int(30, 1), 'merchant.dailyPointerLimit': int(1000), 'merchant.periodPointerLimit': int(1000000, -1), 'merchant.speedUpIntelPorts': int(100), 'merchant.pointerDailyDiamondLimit': int(100000),
   'merchant.profitLimit': int(1000000000), 'merchant.firstDepartureMode': { kind: 'choice', values: ['smart', 'time'] },
   'merchant.firstDepartureTime': { kind: 'time' }, 'merchant.firstDepartureWaitMinutes': int(120),
   'merchant.monitorSeconds': int(300, 10),
@@ -393,6 +393,10 @@ function validateCurrentSettings(input, { partial = false, catalog = null } = {}
   input = migrateMerchantPreset(input, DEFAULT_SETTINGS.merchant);
   if (plain(input?.merchant) && !Object.hasOwn(input.merchant, 'periodPointerLimit')) {
     input = { ...input, merchant: { ...input.merchant, periodPointerLimit: DEFAULT_SETTINGS.merchant.periodPointerLimit } };
+  }
+  // 新增的情报门槛默认关闭，已保存的用针策略保持原样。
+  if (plain(input?.merchant) && !Object.hasOwn(input.merchant, 'speedUpIntelPorts')) {
+    input = { ...input, merchant: { ...input.merchant, speedUpIntelPorts: DEFAULT_SETTINGS.merchant.speedUpIntelPorts } };
   }
   if (plain(input?.resourceFields) && !Object.hasOwn(input.resourceFields, 'refillAfterLoss')) {
     input = { ...input, resourceFields: { ...input.resourceFields, refillAfterLoss: false } };

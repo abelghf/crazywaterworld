@@ -24,7 +24,7 @@ export const MERCHANT_DEFAULTS = Object.freeze({
   autoSpeedUp: false,
   keepPointers: 0,
   speedUpMode: 'deadline', guardLastPointer: false, speedUpMaxPerLeg: 4, monitorSeconds: 60,
-  refreshWindowMinutes: 8, dailyPointerLimit: 28, periodPointerLimit: -1, autoBuyPointers: false, pointerDailyDiamondLimit: 0,
+  refreshWindowMinutes: 8, dailyPointerLimit: 28, periodPointerLimit: -1, speedUpIntelPorts: 0, autoBuyPointers: false, pointerDailyDiamondLimit: 0,
   profitLimit: 0, firstDepartureMode: 'smart', firstDepartureTime: '10:00', firstDepartureWaitMinutes: 29,
   autoUpgrade: false
 });
@@ -547,7 +547,10 @@ export function planMerchant(config, event, state, market, radar, time, visited 
           definitions.get(port.specGoodsId).itemName + '。开市前可见同盟在途船 ' + (port.openingShips ?? 0) + ' 艘，开市后核对实价和库存' };
     }
   }
-  if (advance && time < opening && canArrive(1) && !closing && (occupied || buySlots)) {
+  // 收盘前到港的异地货先按本港实价卖出，回款后再备隔夜货。次日紧缺重置，带过夜只能按普通价清舱。
+  const sellBeforeOvernight = timing.tradingOpen && player.goods.some(b => b.cityId !== cargo.cityId &&
+    positive(quotes.get(b.goodsId)?.price) && profit(quotes.get(b.goodsId).price, b, ship) > 0);
+  if (advance && time < opening && canArrive(1) && !closing && (occupied || buySlots) && !sellBeforeOvernight) {
     const portsForSale = ports.filter(p => p.cityId !== cargo.cityId && player.goods.every(b => b.cityId !== p.cityId));
     if (portsForSale.length) {
       const held = player.goods.length;
@@ -610,7 +613,8 @@ export function planMerchant(config, event, state, market, radar, time, visited 
       const salePort = advance ? { ...port, rareGoodsId: 0 } : port;
       let value = expectedPrice(definition, salePort, snapshot, pastRounds.get(port.cityId), peers, cargo.cityId,
         sameRound && snapshot && saleAt - snapshot.observedAt <= settings.quoteMaxAgeSeconds, settings.estimateDiscountPercent);
-      if (closing && value) {
+      // 末日收尾的货过期作废，卖价封顶到基准价。次日仍开市的收盘前航次即使没赶上，货也能留到开市再卖，按已知紧缺正常估价。
+      if (closing && !options.eveningLeg && value) {
         const known = snapshot?.goods.find(g => g.goodsId === definition.goodsId)?.price;
         const price = merchantGoalSalePrice(definition, port, known, settings.estimateDiscountPercent);
         if (price < value.price) value = { ...value, price, source: '收尾用针保守估价' };

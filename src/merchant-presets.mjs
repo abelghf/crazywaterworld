@@ -9,7 +9,7 @@ export const merchantPresets = [
     settings: { merchant: policies.free, schedule } },
   { id: 'eventFree', label: '仅用本期免费针', description: '保留原有库存，用本期新领的免费针加速，解锁后用钻石升船。',
     settings: { merchant: policies.eventFree, schedule } },
-  { id: 'sprint', label: '冲刺 5,000 万（达标优先）', description: '前期加速载货回款升船，最后一个交易日优先加速成交。累计利润达到 5,000 万后停针，继续自然走商。',
+  { id: 'sprint', label: '冲刺 5,000 万（达标优先）', description: '每天等已知紧缺港达到 12 个或 15:00 后再用针，加速载货回款升船，最后一个交易日优先加速成交。累计利润达到 5,000 万后停针，继续自然走商。',
     settings: { merchant: policies.sprint, schedule } },
 ];
 

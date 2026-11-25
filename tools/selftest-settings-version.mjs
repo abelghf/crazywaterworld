@@ -828,6 +828,7 @@ try {
       expected.merchant.periodPointerLimit = document.settings.merchant.periodPointerLimit ?? -1;
       expected.merchant.knownPortChains = true;
       expected.merchant.minPurchaseReturnPercent = 0;
+      expected.merchant.speedUpIntelPorts = 0;
       expected.guildShip.checkEverySeconds = 60;
       expected.afk = { claimIntervalHours: 0 };
       expected.seasonMerit = { enabled: false, targetRank: 0, leadMinutes: 0 };

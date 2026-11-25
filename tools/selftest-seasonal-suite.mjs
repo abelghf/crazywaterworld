@@ -1261,6 +1261,36 @@ await test('手动选择省针追赶时，末日 21:15 从空船购货，用成�
   assert.equal(f.sent('TradeBuyRequest').length, 1);
   assert.equal(f.state.stock['海商王加速'], 7);
 });
+await test('次日仍开市的 20:30 改跑收盘前加速航次，当天成交，没有针时照常隔夜', async () => {
+  for (const pins of [10, 0]) {
+    const f = setup(), at = f.now + 8.5 * 3600; // 北京时间 20:30，自然航行 22:30 才到。
+    const run = () => f.run(merchantActivity, 'merchantTrade');
+    Object.assign(f.settings.merchant, merchantPresets.find(p => p.id === 'sprint').settings.merchant, { speedUpMode: 'goal' });
+    f.client.serverClockOffsetMs = at * 1000 - Date.now();
+    f.state.stock['海商王加速'] = pins;
+    await run();
+    await run();
+    assert.equal(f.sent('TradeBuyRequest').length, 1);
+    assert.equal(f.sent('TradeMoveRequest').length, 1);
+    const move = Object.values(f.ledger.keyRecords()).find(r => r.details?.expected?.request === 'TradeMoveRequest').details.expected;
+    await run();
+    if (!pins) {
+      assert.equal(move.accelerationRequired, undefined);
+      assert.ok(move.plannedOpening > at, '没有针时仍是隔夜航次');
+      assert.equal(f.sent('TradeSpeedRequest').length, 0);
+      continue;
+    }
+    assert.deepEqual([move.accelerationRequired, move.plannedOpening], [2, undefined]);
+    assert.deepEqual(f.sent('TradeSpeedRequest').map(r => r.body.useNum), [2]);
+    const cargo = f.state.trade.cargo;
+    assert.equal(cargo.moveEndTime, cargo.moveStartTime + 3600);
+    f.client.serverClockOffsetMs = cargo.moveEndTime * 1000 - Date.now();
+    Object.assign(cargo, { cityId: cargo.moveToCityId, moveToCityId: 0, moveEndTime: 0 });
+    await run();
+    assert.equal(f.sent('TradeSellRequest').length, 1, '21:30 前后到港，当天按实价成交');
+    assert.equal(f.state.stock['海商王加速'], 8);
+  }
+});
 await test('收尾采购复核时库存不足或报价涨过成本线，取消依赖用针的采购', async () => {
   for (const change of ['stock', 'price']) {
     const f = setup(), at = f.now + 9 * 3600;

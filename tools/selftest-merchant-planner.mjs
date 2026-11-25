@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { merchantActionSeconds, merchantOpeningCargo, merchantSettings, merchantSpeedSalePrices, merchantTiming, optimizePurchasePlan, planMerchant } from '../src/merchant-planner.mjs';
 import { merchantStrategyPlan } from '../src/merchant-strategy.mjs';
+import { merchantClosingRoute } from '../src/merchant-speed.mjs';
 import { fullMerchantLoad } from '../src/merchant-loading.mjs';
 import { merchantOpeningRadar } from '../src/merchant-race.mjs';
 
@@ -277,6 +278,69 @@ test('新预设隔夜按本金和舱位挑选折价货，达不到门槛留港',
   const wait = f.plan();
   assert.equal(wait.kind, 'wait');
   assert(wait.nextCheckAt > f.now);
+});
+
+test('收盘前到达紧缺港先按实价卖出异地货，回款后再备隔夜货', () => {
+  const f = fixture(), close = merchantTiming(f.config, f.event, f.now).tradeEndTime;
+  f.now = close - 1800;
+  f.settings.minPurchaseReturnPercent = 5;
+  f.state.cargo.cityId = 20;
+  f.radar.radar[1].rareGoodsId = 1;
+  f.market = { specGoodsId: 2, rareGoodsId: 1, goods: [{ goodsId: 1, price: 115, stock: 0 }, { goodsId: 2, price: 170, stock: 0 }] };
+  f.state.player = { profit: 0, coins: 0, goods: [f.batch({ buyPrice: 87 })] };
+  const sale = f.plan();
+  assert.deepEqual([sale.kind, sale.mode, sale.pid, sale.price, sale.gain], ['sell', 'TRADE', 1, 115, 289],
+    '紧缺溢价当天有效，不能原样带去隔夜');
+  f.state.player = { profit: 289, coins: 1159, goods: [] };
+  const buy = f.plan();
+  assert.deepEqual([buy.kind, buy.mode, buy.goodsId, buy.count], ['buy', 'OVERNIGHT', 2, 6]);
+  f.state.player = { profit: 0, coins: 0, goods: [f.batch({ buyPrice: 120 })] };
+  const loss = f.plan();
+  assert.deepEqual([loss.kind, loss.mode, loss.destination], ['move', 'OVERNIGHT', 30], '本港卖不出利润的货仍随船隔夜');
+  f.state.player.goods = [f.batch({ buyPrice: 87 })];
+  f.now = close + 60;
+  const closed = f.plan();
+  assert.deepEqual([closed.kind, closed.mode], ['move', 'OVERNIGHT'], '休市后无法成交，按原隔夜流程出航');
+});
+
+test('收盘前来不及自然跑完一程时，核对针数后改跑当天成交的加速航次，末日仍按基准价保守估价', () => {
+  const f = fixture(), close = merchantTiming(f.config, f.event, f.now).tradeEndTime;
+  f.config.tables.ActivityTradeCfg.data.push({ key: '海商王加速时长', value: '30' });
+  f.settings = merchantSettings({ estimateDiscountPercent: 10, autoSpeedUp: true, speedUpMode: 'goal', liquidationMinutes: 0 });
+  f.market.goods[0].price = 95;
+  f.radar.radar[1].rareGoodsId = 1;
+  const pointer = '海商王加速';
+  const at = time => {
+    f.now = time;
+    // 30 号港本轮的紧缺报价高出基准价 15%，同档紧缺货据此估价 103。
+    f.markets = [f.history(30, 115, { specGoodsId: 3, rareGoodsId: 1 })];
+  };
+  const route = (pins, used = 0) => merchantClosingRoute(f.config, f.event, f.state, f.market, f.radar, f.radar, f.now, [],
+    { settings: f.settings, markets: f.markets, actionSeconds: 60 },
+    pins === null ? null : { stock: new Map([[pointer, pins]]), dailyUsed: used, periodRemaining: pins });
+  at(close - 5400); // 20:30。
+  assert.deepEqual([f.plan().kind, f.plan().mode], ['buy', 'OVERNIGHT'], '自然航行赶不上收盘，原计划是隔夜备货');
+  const buy = route(4);
+  // 一根 22:00 才到，退成次日备货；两根 21:30 到港，当天按紧缺价成交。
+  assert.deepEqual([buy.kind, buy.mode, buy.goodsId, buy.count, buy.destination, buy.accelerationRequired], ['buy', 'TRADE', 1, 10, 20, 2]);
+  assert.equal(buy.purchases[0].expectedPrice, 103);
+  assert.match(buy.label, /收盘前加速航次已核对 2 根库存指南针/);
+  assert.equal(route(1), null, '一根赶不上当天成交，不改原计划');
+  assert.equal(route(null), null, '额度或库存未确认时不改原计划');
+  assert.equal(route(4, 28), null, '每日额度用完');
+  f.state.player = { profit: 0, coins: 50, goods: [f.batch({ buyPrice: 95 })] };
+  const move = route(4);
+  assert.deepEqual([move.kind, move.destination, move.accelerationRequired, move.plannedOpening], ['move', 20, 2, undefined]);
+  at(close - 200); // 21:56:40，四根立即到港能卖，但留不出备隔夜货的时间。
+  assert.equal(route(4), null, '到港后来不及备隔夜货就不改原计划');
+  at(close - 5400);
+  f.state.player = { profit: 0, coins: 1000, goods: [] };
+  f.event.endTime = close; // 末日收尾，货过期作废。
+  assert.equal(route(4), null, '末日卖价封顶到基准价的九折 90，买价 95 不采购');
+  f.market.goods[0].price = 85;
+  const final = route(4);
+  assert.deepEqual([final.kind, final.accelerationRequired, final.purchases[0].expectedPrice], ['buy', 2, 90]);
+  assert.match(final.label, /收尾航线已核对 2 根库存指南针/);
 });
 
 test('亏损清舱只认最近隔夜航程出发时的原批次，其他船货仍按普通规则', () => {

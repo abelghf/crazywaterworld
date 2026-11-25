@@ -221,6 +221,7 @@ try {
     assert(m.enabled && m.autoUpgrade && m.autoSpeedUp && m.autoShareIntel);
     assert.deepEqual([m.speedUpMode, m.speedUpMaxPerLeg, m.dailyPointerLimit, m.profitLimit], ['targetFirst', 4, 100, 0]);
     assert.equal(m.periodPointerLimit, 220);
+    assert.equal(m.speedUpIntelPorts, 12);
     assert.equal(m.knownPortChains, true);
     assert.equal(m.minPurchaseReturnPercent, 5);
     assert.equal(m.autoBuyPointers, false);
