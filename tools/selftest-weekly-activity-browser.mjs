@@ -161,19 +161,21 @@ try {
     assert.equal(await field(page, kind + 'Stop').isVisible(), true, kind + ' 点击展开后显示参数');
   }
   await field(page, 'enabled').click();
-  const ticketLink = branch(page, 'antique').getByRole('button', { name: /用券招募/ });
-  await ticketLink.click();
+  const antiqueOptions = branch(page, 'antique');
+  assert(await field(page, 'antiqueStop').isVisible());
+  assert.equal(await antiqueOptions.getByRole('button', { name: /用券招募/ }).count(), 0);
+  await page.locator('[data-config-tab=antique]').click();
+  await page.locator('#config-subtab-antique-recruit').click();
   const ticketSwitch = field(page, 'antiqueRecruitTickets'), ticketLimit = field(page, 'antiqueTicketLimit');
   assert.equal(await ticketSwitch.getAttribute('aria-checked'), 'false');
   await ticketSwitch.click();
   assert.equal(await ticketLimit.inputValue(), ''); assert.equal(await ticketLimit.getAttribute('placeholder'), '用完为止');
   await ticketLimit.fill('63'); await saved(page);
-  await page.locator('[data-config-tab=daily]').click();
-  assert.match(await ticketLink.textContent(), /当日最多 63 张/);
-  await ticketLink.click(); await ticketLimit.fill(''); await saved(page);
+  assert.equal(loadAutomationSettings('weekly-a').settings.weeklyActivity.antiqueTicketLimit, 63);
+  await ticketLimit.fill(''); await saved(page);
   assert.equal(loadAutomationSettings('weekly-a').settings.weeklyActivity.antiqueTicketLimit, 0);
   await page.locator('[data-config-tab=daily]').click();
-  assert.match(await ticketLink.textContent(), /用完为止/);
+  assert.equal(await antiqueOptions.getByRole('button', { name: /用券招募/ }).count(), 0);
   for (const name of ['farmRecruitTimes','farmSpeedUp','petQualityOrder','forgeQualityOrder']) assert(await field(page, name).isVisible());
   assert(await field(page, 'farmStop').getByLabel('全天参与', { exact: true }).isChecked());
   await field(page, 'farmRecruitTimes').fill('15'); await field(page, 'farmSpeedUp').click();

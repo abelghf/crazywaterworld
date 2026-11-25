@@ -917,10 +917,6 @@ function configUpdateVisibility() {
     widget.row.hidden = !visible && !hasError;
     widget.node.hidden = widget.row.hidden;
     if (widget.spec.kind === 'switch') configPaintSwitch(widget.control, configSwitchValue(spec));
-    if (widget.recruitLink) {
-      const { antiqueRecruitTickets, antiqueTicketLimit } = configEditor.draft.weeklyActivity;
-      widget.recruitLink.textContent = '用券招募 · ' + (antiqueRecruitTickets ? (antiqueTicketLimit ? '当日最多 ' + antiqueTicketLimit + ' 张' : '用完为止') : '已关闭') + ' ›';
-    }
     if (widget.moduleNote) {
       const enabled = configSwitchValue(spec);
       const blocked = (spec.gates ?? []).filter(path => !configGet(path));
@@ -1010,13 +1006,6 @@ function configRenderFields(fields, host) {
     row.classList.add('has-children');
     widget.control.setAttribute('aria-controls', panel.id);
     widget.node = branch; widget.childPanel = panel; widget.disclosure = disclosure;
-    if (spec.key === 'weeklyActivity.antiqueEnabled') {
-      widget.recruitLink = configButton('', () => {
-        configActivate('antique'); configActivateGroup('antique-recruit');
-        configEditor.widgets.get('weeklyActivity.antiqueRecruitTickets').control.focus();
-      });
-      panel.append(widget.recruitLink);
-    }
     for (const field of childFields) {
       const child = render(field, spec.key);
       widget.children.push(child); panel.append(child.node);
