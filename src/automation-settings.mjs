@@ -23,7 +23,7 @@ export const settingsFile = () => path.join(dataDirectory(), 'automation-setting
 export const SETTINGS_FORMAT = 'crazywaterworld-automation';
 // 文件 version / 账号 settingsVersion 是格式编号，只随结构迁移调整；
 // revision 是每次保存递增的修订号，仅用于并发冲突检查，不能用作格式版本。
-export const SETTINGS_SCHEMA_VERSION = 66;
+export const SETTINGS_SCHEMA_VERSION = 67;
 const LEGACY_SETTINGS_FORMAT = 'crazywaterword-automation';
 const treasureQualityLabels = { ORANGE: '万吨货轮', PURPLE: '中型货轮', BLUE: '小型货轮' };
 const treasureChaseDefaults = {
@@ -793,6 +793,8 @@ settingsMigrations.set(64, settings => plain(settings?.factory) && !Object.hasOw
   ? { ...settings, factory: { ...settings.factory, refillRules: [] } } : settings);
 settingsMigrations.set(65, settings => plain(settings?.factory) && !Object.hasOwn(settings.factory, 'refillSpeedUp')
   ? { ...settings, factory: { ...settings.factory, refillSpeedUp: false } } : settings);
+settingsMigrations.set(66, settings => plain(settings?.weeklyActivity)
+  ? { ...settings, weeklyActivity: migrateWeeklyActivitySettings(settings.weeklyActivity) } : settings);
 const supportedSettingsVersion = version => Number.isSafeInteger(version) && version >= 1;
 const entrySettingsVersion = entry => Object.hasOwn(entry, 'settingsVersion') ? entry.settingsVersion : 1;
 function newestSettingsVersion(store) {

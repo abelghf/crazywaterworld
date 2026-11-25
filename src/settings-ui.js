@@ -123,7 +123,7 @@ const weeklyActivityFields = [
   ...[
     ['farm','周一 · 种田发育','活动日独立收获和种植，不受普通农田开关限制；已选自定义种植时沿用作物目标，否则智能种植。普通联盟城市募兵按本页次数参与。种田加速仍遵守加速器保留量和消费权限。'],
     ['pet','周二 · 海兽培养','按基地 → 海兽中已选的物种范围和最高品质参与培育，按本页品质顺序选择可执行方案。未选物种时等待。'],
-    ['antique','周三 · 藏品培养','活动日独立执行藏品升星和套装经验养成，不要求开启普通养成开关。复用藏品配置中已选的升星与套装品质及目标，未选品质时等待，升星时沿用万能碎片设置。'],
+    ['antique','周三 · 藏品培养','活动日按所选品质升星和升级套装，沿用目标星级及万能碎片设置。在「藏品招募」开启用券后，活动日也会按设定数量抽取藏品。'],
     ['order','周四 · 基地订单','复用基地 → 居民订单的材料过滤、最低奖励及每日次数限制；货船和工厂加速仅按原有开关、目标及预算参与。'],
     ['forge','周五 · 装备打造','装备打造主题当天独立领取和制造，即使普通自动锻造、领取或续产开关关闭也可执行。沿用已选工厂、配方和万能材料设置，按本页品质顺序选配方。其他日子或活动达标后，普通锻造仍按自身开关运行。游戏原生模式由游戏处理。'],
     ['hero','周日 · 英雄培养','英雄培养主题当天独立执行指定英雄升星，不要求开启普通英雄养成或升星开关。复用英雄名单、星级目标及材料权限；未选择英雄时等待。普通用券招募按自身开关运行。'],
@@ -547,6 +547,8 @@ const configGroups = [
   ] },
   { id: 'antique-recruit', title: '藏品招募', category: 'antique', fields: [
     configField('schedule.antiqueAdRecruit','藏品广告招募','switch',{help:'每天3次，不消耗招募券或钻石。无免广告权益时按设置的等待时间领取。'}),
+    configField('weeklyActivity.antiqueRecruitTickets','军备竞赛藏品日使用藏品券','switch',{collapsible:false,help:'需开启军备竞赛及「周三 · 藏品培养」。优先五十连，其次十连，余下单抽。每批抽取前检查活动积分。'}),
+    configField('weeklyActivity.antiqueTicketLimit','当日最多用券','number',{parent:'weeklyActivity.antiqueRecruitTickets',unit:'张',emptyAsZero:'用完为止',help:'留空或填 0 表示用完库存。设置目标积分时，达标后停止用券。'}),
   ] },
   { id: 'rewards', title: '任务与奖励', category: 'daily', fields: [
     configField('tasks.main', '领取主线奖励'), configField('tasks.branch', '领取支线奖励'), configField('tasks.achievements', '领取成就奖励'),
@@ -915,6 +917,10 @@ function configUpdateVisibility() {
     widget.row.hidden = !visible && !hasError;
     widget.node.hidden = widget.row.hidden;
     if (widget.spec.kind === 'switch') configPaintSwitch(widget.control, configSwitchValue(spec));
+    if (widget.recruitLink) {
+      const { antiqueRecruitTickets, antiqueTicketLimit } = configEditor.draft.weeklyActivity;
+      widget.recruitLink.textContent = '用券招募 · ' + (antiqueRecruitTickets ? (antiqueTicketLimit ? '当日最多 ' + antiqueTicketLimit + ' 张' : '用完为止') : '已关闭') + ' ›';
+    }
     if (widget.moduleNote) {
       const enabled = configSwitchValue(spec);
       const blocked = (spec.gates ?? []).filter(path => !configGet(path));
@@ -1004,6 +1010,13 @@ function configRenderFields(fields, host) {
     row.classList.add('has-children');
     widget.control.setAttribute('aria-controls', panel.id);
     widget.node = branch; widget.childPanel = panel; widget.disclosure = disclosure;
+    if (spec.key === 'weeklyActivity.antiqueEnabled') {
+      widget.recruitLink = configButton('', () => {
+        configActivate('antique'); configActivateGroup('antique-recruit');
+        configEditor.widgets.get('weeklyActivity.antiqueRecruitTickets').control.focus();
+      });
+      panel.append(widget.recruitLink);
+    }
     for (const field of childFields) {
       const child = render(field, spec.key);
       widget.children.push(child); panel.append(child.node);
@@ -1209,10 +1222,14 @@ function configRenderField(spec) {
   } else if (spec.kind === 'discountRules') {
     control = configDiscountRules(spec, id, name); box.append(control);
   } else if (spec.kind === 'number') {
-    const line = el('div', 'config-number'); control = el('input'); control.type = 'number'; control.required = true; control.step = '1';
+    const line = el('div', 'config-number'); control = el('input'); control.type = 'number'; control.required = !spec.emptyAsZero; control.step = '1';
     const rule = configEditor.data.rules?.numbers?.[spec.key] ?? { min: 0, max: 1000000000 };
     control.min = String(rule.min); control.max = String(rule.max); control.id = id; control.value = String(configGet(spec.key)); control.dataset.configNumber = spec.key;
-    control.oninput = () => { configSet(spec.key, control.value === '' ? null : Number(control.value)); };
+    if (spec.emptyAsZero) {
+      control.placeholder = spec.emptyAsZero;
+      if (configGet(spec.key) === 0) control.value = '';
+    }
+    control.oninput = () => { configSet(spec.key, control.value === '' && !spec.emptyAsZero ? null : Number(control.value)); };
     line.append(control); if (spec.unit) line.append(el('span', '', spec.unit)); box.append(line);
 
   } else if (spec.kind === 'time') {

@@ -819,6 +819,7 @@ try {
       expected.afk = { claimIntervalHours: 0 };
       expected.seasonMerit = { enabled: false, targetRank: 0, leadMinutes: 0 };
       expected.schedule.afkUpgrade = false;
+      Object.assign(expected.weeklyActivity, { antiqueRecruitTickets: false, antiqueTicketLimit: 0 });
       expected.museum.targetFragments = [];
       expected.museum.unlockCases = false;
       Object.assign(expected.pet, { levelUp: false, levelUids: [] });
@@ -918,7 +919,7 @@ try {
     assert.throws(() => validateSettings(settings), error => !!error.fields['alliance.memberIds']);
   });
   test('版本1升级后重复迁移保持一致，保留有效的用户值', () => {
-    assert.equal(SETTINGS_SCHEMA_VERSION, 66);
+    assert.equal(SETTINGS_SCHEMA_VERSION, 67);
     const settings = legacySettings();
     settings.factory.checkEverySeconds = 270;
     settings.resources.diamondDailyLimit = 1234;
