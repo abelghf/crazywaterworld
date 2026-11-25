@@ -123,7 +123,7 @@ const weeklyActivityFields = [
   ...[
     ['farm','周一 · 种田发育','活动日独立收获和种植，不受普通农田开关限制；已选自定义种植时沿用作物目标，否则智能种植。普通联盟城市募兵按本页次数参与。种田加速仍遵守加速器保留量和消费权限。'],
     ['pet','周二 · 海兽培养','按基地 → 海兽中已选的物种范围和最高品质参与培育，按本页品质顺序选择可执行方案。未选物种时等待。'],
-    ['antique','周三 · 藏品培养','活动日按所选品质升星和升级套装，沿用目标星级及万能碎片设置。在「藏品招募」开启用券后，活动日也会按设定数量抽取藏品。'],
+    ['antique','周三 · 藏品培养','活动日按所选品质升星和升级套装，沿用目标星级及万能碎片设置。展开后可开启藏品券招募并设置当日用券上限。'],
     ['order','周四 · 基地订单','复用基地 → 居民订单的材料过滤、最低奖励及每日次数限制；货船和工厂加速仅按原有开关、目标及预算参与。'],
     ['forge','周五 · 装备打造','装备打造主题当天独立领取和制造，即使普通自动锻造、领取或续产开关关闭也可执行。沿用已选工厂、配方和万能材料设置，按本页品质顺序选配方。其他日子或活动达标后，普通锻造仍按自身开关运行。游戏原生模式由游戏处理。'],
     ['hero','周日 · 英雄培养','英雄培养主题当天独立执行指定英雄升星，不要求开启普通英雄养成或升星开关。复用英雄名单、星级目标及材料权限；未选择英雄时等待。普通用券招募按自身开关运行。'],
@@ -133,6 +133,10 @@ const weeklyActivityFields = [
     if (kind === 'farm') fields.push(
       configField('weeklyActivity.farmRecruitTimes','临时募兵次数','number',{parent:prefix+'Enabled',unit:'次/日',help:'普通联盟城市募兵，默认10次，0表示不参与。由本活动分项授权，仍遵守服务器次数、材料过滤、资源保留及预算限制。'}),
       configField('weeklyActivity.farmSpeedUp','种田加速','switch',{parent:prefix+'Enabled',help:'默认关闭。只在当日种田主题及积分目标内使用已授权的加速资源。'}),
+    );
+    if (kind === 'antique') fields.push(
+      configField('weeklyActivity.antiqueRecruitTickets','使用藏品券招募','switch',{parent:prefix+'Enabled',collapsible:false,help:'藏品日按库存和当日剩余额度优先五十连，其次十连，余下单抽。设置目标积分时，每批招募前检查是否达标。'}),
+      configField('weeklyActivity.antiqueTicketLimit','当日最多用券','number',{parent:'weeklyActivity.antiqueRecruitTickets',unit:'张',emptyAsZero:'用完为止',help:'留空或填 0 表示用完库存。设置目标积分时，达标后停止用券。'}),
     );
     if (kind === 'pet' || kind === 'forge') fields.push(configField(prefix+'QualityOrder',kind === 'pet' ? '培育品质顺序' : '打造品质顺序','radio',{
       parent:prefix+'Enabled',options:[['asc','从低到高'],['desc','从高到低']],help:'只调整已配置且材料充足的候选方案顺序，不扩大可用物种、配方或材料范围。',
@@ -547,8 +551,6 @@ const configGroups = [
   ] },
   { id: 'antique-recruit', title: '藏品招募', category: 'antique', fields: [
     configField('schedule.antiqueAdRecruit','藏品广告招募','switch',{help:'每天3次，不消耗招募券或钻石。无免广告权益时按设置的等待时间领取。'}),
-    configField('weeklyActivity.antiqueRecruitTickets','军备竞赛藏品日使用藏品券','switch',{collapsible:false,help:'需开启军备竞赛及「周三 · 藏品培养」。优先五十连，其次十连，余下单抽。每批抽取前检查活动积分。'}),
-    configField('weeklyActivity.antiqueTicketLimit','当日最多用券','number',{parent:'weeklyActivity.antiqueRecruitTickets',unit:'张',emptyAsZero:'用完为止',help:'留空或填 0 表示用完库存。设置目标积分时，达标后停止用券。'}),
   ] },
   { id: 'rewards', title: '任务与奖励', category: 'daily', fields: [
     configField('tasks.main', '领取主线奖励'), configField('tasks.branch', '领取支线奖励'), configField('tasks.achievements', '领取成就奖励'),

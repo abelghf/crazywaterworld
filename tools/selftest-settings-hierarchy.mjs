@@ -149,10 +149,10 @@ test('军备竞赛主项平铺且参数可展开收起，全天参与与积分�
   const group = f.editor.groups.get('weekly-activities');
   assert.equal(group.title, '军备竞赛');
   assert(!f.editor.groups.has('military-week'));
-  const recruitSettings = ['antiqueRecruitTickets', 'antiqueTicketLimit'];
-  for (const key of recruitSettings) assert.equal(f.widget('weeklyActivity.' + key).spec.groupId, 'antique-recruit');
   assert.deepEqual(new Set(group.fields.map(field => field.key)),
-    new Set([...Object.keys(defaultSettings().weeklyActivity).filter(key => !recruitSettings.includes(key) && !/(?:Start|End)$/.test(key)).map(key => 'weeklyActivity.' + key), 'schedule.armsRaceRewards']));
+    new Set([...Object.keys(defaultSettings().weeklyActivity).filter(key => !/(?:Start|End)$/.test(key)).map(key => 'weeklyActivity.' + key), 'schedule.armsRaceRewards']));
+  assert.equal(f.widget('weeklyActivity.antiqueRecruitTickets').parentKey, 'weeklyActivity.antiqueEnabled');
+  assert.equal(f.widget('weeklyActivity.antiqueTicketLimit').parentKey, 'weeklyActivity.antiqueRecruitTickets');
   assert.equal(group.description, undefined);
   assert(!group.fields.some(field => /(?:Start|End)$/.test(field.key) || field.kind === 'time'));
   assert.deepEqual(f.widget('weeklyActivity.petStop').spec.options, [['allDay','全天参与'],['score','达到积分值时']]);
@@ -225,8 +225,7 @@ test('英雄、藏品、装备各有唯一设置入口，原有分组书签指�
   for (const [id, keys] of Object.entries({
     'hero-recruit': ['schedule.freeRecruit', 'schedule.heroAdRecruit', 'schedule.heroRecruitRewards'],
     appointments: ['appointments.enabled', 'appointments.priorities'],
-    'antique-recruit': ['schedule.freeAntiqueRecruit', 'schedule.antiqueAdRecruit', 'schedule.antiqueRecruitRewards',
-      'weeklyActivity.antiqueRecruitTickets', 'weeklyActivity.antiqueTicketLimit'],
+    'antique-recruit': ['schedule.freeAntiqueRecruit', 'schedule.antiqueAdRecruit', 'schedule.antiqueRecruitRewards'],
   })) assert.deepEqual(new Set(f.editor.groups.get(id).fields.map(field => field.key)), new Set(keys));
   for (const key of ['schedule.equipmentCollect', 'schedule.equipmentCraft']) {
     assert(!f.editor.fields.has(key), '旧装备开关不应动态生成到其他分组：' + key);
