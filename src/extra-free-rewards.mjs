@@ -1,4 +1,5 @@
 import { normalize } from './worlds.mjs';
+import { rowsForSeason, seasonOf, seasonRows } from './season-config.mjs';
 import { exactAutomationId, automationWireId } from './automation-policy.mjs';
 import { adAccess, takeAdSlot, prepareAd, coolAd, isAdNotFinished, AD_PACED_REASON, AD_NOT_FINISHED_REASON, AD_PAUSED_REASON } from './ad-shop.mjs';
 
@@ -61,12 +62,7 @@ export async function claimVipDaily(client, config, { player, enabled, ledger, r
 export function limitedFreeCandidates(config,player,type){
  const typeNames={1:'日礼包',2:'周礼包',3:'月礼包',4:'赛季礼包'};
  let packs=rows(config,'LimitedPackCfg').filter(r=>r.type===typeNames[type]);
- if(type===4){
-  const world=exactAutomationId(player?.worldId),season=world?Math.floor(Number(world)/1e6)%1000:0;
-  if(!valid(season)||season<1)return [];
-  const selected=Math.max(0,...packs.filter(r=>valid(r.season)&&r.season<=season).map(r=>r.season));
-  if(selected<1)return [];packs=packs.filter(r=>r.season===selected);
- }
+ if(type===4)packs=rowsForSeason(packs,seasonOf(player));
  const vip=player?.vip?.vipLevel;
  return packs.filter(r=>r.price===0&&r.limitedTimes>0&&!(r.weekDay>0)&&valid(r.vipLevel??0)&&(r.vipLevel??0)<=(valid(vip)?vip:0));
 }
@@ -164,9 +160,8 @@ export async function claimLinkageFree(client,config,{player,enabled,ledger,repo
   }
   if(enabled('festivalFreeGift')){
    const sub=liveSub(row,6,nowOf(client)),data=sub?.dailyCombGift;if(!data||!Array.isArray(data.boughtGiftId))continue;
-   const season=Math.floor(Number(player?.worldId?.toString?.()??player?.worldId)/1e6)%1000;
-   const eligible=rows(config,'LinkageLSRDailyDealCfg').filter(r=>r.season>0&&r.season<=season),chosen=Math.max(0,...eligible.map(r=>r.season));
-   for(const cfg of eligible.filter(r=>r.season===chosen&&r.price===0&&!r.chargeId)){
+   const eligible=seasonRows(config,'LinkageLSRDailyDealCfg',player);
+   for(const cfg of eligible.filter(r=>r.price===0&&!r.chargeId)){
     if(data.boughtGiftId.includes(cfg.packId))continue;
     const allowed=()=>enabled('festivalFreeGift')&&dayOf(nowOf(client))===day&&!!liveSub(active()??{},6,nowOf(client));
     const reply=await claimOnce(client,{ledger,key:'lsr-free:'+id+':'+day+':'+cfg.packId,title:'酆都诡事 · 每日特惠免费礼包',request:'ClaimDailyCombGiftRequest',body:{activityId:automationWireId(id),giftId:cfg.packId},enabled:allowed,report});

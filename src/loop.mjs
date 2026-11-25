@@ -45,7 +45,7 @@ import { claimAdShop, beginAdRound } from './ad-shop.mjs';
 import { claimAfkAd, claimAdSpeedUps } from './ad-rewards.mjs';
 import { rewardSchedule } from './reward-schedule.mjs';
 import { normalize } from './worlds.mjs';
-import { surveyTasks, runTasks } from './tasks.mjs';
+import { surveyTaskRewards, runTasks, claimOrderDaily, orderRewardsEnabled } from './tasks.mjs';
 import { surveyDailies, runDailies } from './dailies.mjs';
 import { surveyWorld, planWorld, runWorldRound, displayBuilding } from './world.mjs';
 import { createFactorySchedule } from './factory-schedule.mjs';
@@ -78,6 +78,7 @@ import { claimExtraRewards, extraRewardKeys } from './extra-rewards.mjs';
 import { setTimeout as pause } from 'node:timers/promises';
 import { claimRewards } from './claim-rewards.mjs';
 import { upgradeAfk } from './afk-upgrade.mjs';
+import { dailyCardKeys } from './daily-card-rewards.mjs';
 import { claimWeekly, runLinkage, weekSchedule, readWeekOrder, runAutomaticWeekOrder } from './activities.mjs';
 import { automationTasks, dailyTaskKey, defaultCompassSpinCount, worldTaskKey } from './automation.mjs';
 import { automationControls } from './automation-controls.mjs';
@@ -105,10 +106,12 @@ export async function runLoop(client, protocol, {
   sleep = defaultSleep,
   stop = { aborted: false },
   isEnabled,
+  includeCard = () => true,
   getCompassSpinCount = () => defaultCompassSpinCount,
   isStageBusy = () => false,
   isTrialBusy = () => false, isPirateBusy = () => false,
   challengeRun = createChallengeRun(),
+  materialRestock = {},
   getSettings = () => null, getHeroSettings = getSettings, getBlockedCollectionTypes, onFishBookComplete,
   getAfkSettings = getSettings, getAfkClaimHours = () => getAfkSettings()?.afk?.claimIntervalHours,
   usageLedger = null, heroUsageLedger = usageLedger,
@@ -406,6 +409,8 @@ export async function runLoop(client, protocol, {
     const selected = key => !stop.aborted && isActivityTaskAvailable(key, client)
       && nativePreferenceEnabled(getSettings(), key) && (!isEnabled || isEnabled(key));
     const enabled = key => selected(key) && (!rewards || rewards.due(key)) && runtimeActive();
+    const orderSelected = () => selected('tasks') && runtimeActive();
+    const orderDue = () => orderSelected() && orderRewardsEnabled(getSettings()) && (!rewards || rewards.due('orderDaily'));
     const guard = runtimeGuard(createActionGuard(client, getSettings, usageLedger, { player, enabled: () => !stop.aborted && client.connected }));
     const usage = () => usageLedger?.snapshot() ?? { counters: {} };
     let extraDemand = [];
@@ -600,7 +605,7 @@ export async function runLoop(client, protocol, {
           if (kind === 'upgrade') return checkUpgrade && enabled('upgrade') && orderRead;
           return ['startProduce', 'nativeProduce'].includes(kind) && canFactory('startProduce') && (simulateNative || orderRead);
         };
-        const plan = planWorld(survey, { config, enabled: allow, settings: currentSettings, blockedCollectionTypes: getBlockedCollectionTypes?.(), usage: usage(), extraDemand: demand, factoryWaitHistory, trackRefills:true });
+        const plan = planWorld(survey, { config, enabled: allow, settings: currentSettings, blockedCollectionTypes: getBlockedCollectionTypes?.(), usage: usage(), extraDemand: demand, factoryWaitHistory, materialRestock, trackRefills:true });
         // 工厂巡检只处理材料规则换单；奖励筛选留给常规订单检查。
         plan.actions = plan.actions.filter(step => step.kind !== 'denyOrder' || step.materialRule);
         if (currentSettings?.factory?.cooperateNative && allow('startProduce')) observeNativePlan(survey, plan);
@@ -991,14 +996,22 @@ export async function runLoop(client, protocol, {
       yield;
       await checkAppointments();
       yield;
-      if (!isEnabled && enabled('tasks')) {
+      if (!isEnabled && enabled('tasks') && (!settings || settings.loop.tasks)) {
         try {
-          const survey = await surveyTasks(client, protocol, { config, player });
+          const survey = await surveyTaskRewards(client, { config });
           summary.tasks.planned = survey.plan.length;
           summary.tasks.results = await runTasks(client, protocol, survey, {
             allowMutate, enabled: () => enabled('tasks'), onStep: stepLog('tasks'), settings,
           });
         } catch (error) { phaseFailure('tasks', '任务检查', error); }
+      }
+      if (!isEnabled && orderDue()) {
+        try {
+          const entries = await claimOrderDaily(client, protocol, { config, player, allowMutate, scheduler: rewards,
+            enabled: () => orderSelected() && orderRewardsEnabled(getSettings()), onStep: stepLog('tasks') });
+          summary.tasks.planned += entries.length;
+          summary.tasks.results.push(...entries);
+        } catch (error) { phaseFailure('tasks', '每日订单', error, 'orderDaily'); }
       }
       yield;
       // 详细设置下付费点金由基地计划独立执行，普通日常的进度与重置时间只属于免费点金。
@@ -1007,7 +1020,7 @@ export async function runLoop(client, protocol, {
         try {
            const includeTask = id => id === 1007 || (id === 1010 && settings)
              ? false : !isEnabled || dailyKeys[id]?.some(enabled);
-          const survey = await surveyDailies(client, protocol, { config, player, includeTask, probeGift: !isEnabled, idle: !!isEnabled, allowRecruitTickets: false, settings, afkClaimHours: getAfkClaimHours(), ledger: usageLedger });
+          const survey = await surveyDailies(client, protocol, { config, player, includeTask, includeCard, probeGift: !isEnabled, idle: !!isEnabled, allowRecruitTickets: false, settings, afkClaimHours: getAfkClaimHours(), ledger: usageLedger ?? heroUsageLedger });
           for (const entry of survey.tasks) for (const key of dailyKeys[entry.task.id]??[]) rewards?.observe(key, entry.reason || (Number.isFinite(entry.task.progress)&&Number.isFinite(entry.task.targetProgress)?entry.task.progress+'/'+entry.task.targetProgress+(entry.task.progress>=entry.task.targetProgress?' · 今日目标已完成':' · 等待执行'):'已读取任务状态'));
            const recruit = survey.tasks.find(entry => entry.task.id === 1002 && entry.status === 'waiting');
            if (recruit && (includeRepeatedWaits || recruit.reason !== lastRecruitWait)) stepLog('dailies')({ title: recruit.task.title, skipped: true, reason: recruit.reason, taskKey: 'freeRecruit' });
@@ -1020,11 +1033,13 @@ export async function runLoop(client, protocol, {
            }
           summary.dailies.planned = survey.tasks.reduce((n, entry) =>
             n + (entry.actions ?? []).filter(action => allowDaily(entry.task.id, action)).length, 0);
-          if (!isEnabled) summary.dailies.planned += (survey.chests?.actions.length ?? 0) + (survey.gift?.actions.length ?? 0);
+          if (!isEnabled) summary.dailies.planned += (survey.chests?.actions.length ?? 0) + (survey.gift?.actions.length ?? 0)
+            + survey.cards.filter(card => card.state === 'claimable').length;
           if (summary.dailies.planned) {
             summary.dailies.results = await runDailies(client, protocol, survey, {
               allowMutate, allowPaid: isEnabled ? true : allowPaid, claimRewards: !isEnabled, config,
-              allowAction: allowDaily, onStep: stepLog('dailies'), ledger: usageLedger,
+              allowAction: allowDaily, onStep: stepLog('dailies'), ledger: usageLedger ?? heroUsageLedger,
+              rewardEnabled: key => !stop.aborted && runtimeActive() && client.connected !== false && (!dailyCardKeys.includes(key) || includeCard(key)),
               settings, getSettings, beforeAction: guard.before, afterAction: guard.after, cancelAction: guard.cancel,
             });
           }
@@ -1075,8 +1090,8 @@ export async function runLoop(client, protocol, {
           summary.dailies.results.push(entry); stepLog('dailies')(entry);
         }
       }
-      if (isEnabled && groupEnabled('领奖')) {
-        const results = await observed(['tasks','dailyRewards','chests','gift','mail','afk'],()=>claimRewards(client, protocol, config, logReward, enabled, rememberDeadline, rewards, player, { settings, getSettings }));
+      if (isEnabled && (groupEnabled('领奖') || orderDue())) {
+        const results = await observed(['tasks','dailyRewards','chests','gift','mail','afk', ...dailyCardKeys],()=>claimRewards(client, protocol, config, logReward, enabled, rememberDeadline, rewards, player, { settings, getSettings, ledger: usageLedger, orderSelected }));
         summary.tasks.planned += results.length;
         summary.tasks.results.push(...results);
         try { await claimAfkAdNow(); } catch (error) { phaseFailure('tasks', '闯关挂机广告收益', error); }
@@ -1356,7 +1371,7 @@ export async function runLoop(client, protocol, {
         }
         if (factorySchedule.active() || factorySchedule.due())
           factorySchedule.checked(survey.factories, { version: factoryReadVersion, demandVersion, slots: survey.factorySlots, progressed: true });
-        const plan = planWorld(survey, { config, enabled: allowWorld, factoryWaitHistory, trackRefills:true,
+        const plan = planWorld(survey, { config, enabled: allowWorld, factoryWaitHistory, materialRestock, trackRefills:true,
           settings, blockedCollectionTypes: getBlockedCollectionTypes?.(), usage: usage(), extraDemand,
           allowSpeedUp: isEnabled ? enabled('speedUp') : allowSpeedUp,
           allowReroll: isEnabled ? enabled('denyOrder') : allowReroll,
@@ -1614,6 +1629,7 @@ export function formatLoopStep(entry) {
   const category = automationControlLabels.get(entry.category) ?? entry.category
     ?? ({ tasks: '任务', dailies: '日常', world: '海面' })[entry.phase] ?? '挂机';
   const title = entry.step?.label || entry.title || entry.label;
+  if (dailyCardKeys.includes(entry.id)) return category + ' · ' + entry.label;
   const action = [title, entry.note && entry.note !== title ? entry.note : null].filter(Boolean).join(' · ') || '检查任务';
   const message = category + ' · ' + action;
   if (stepObservation(entry).state === 'pending') return message+'等待确认：'+(entry.reason||entry.error||'保留记录，不重复提交');

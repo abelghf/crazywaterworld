@@ -45,7 +45,7 @@ export function rewardSchedule(client) {
     defer(key, until) {
       if (Number.isFinite(until) && until > now()) {
         deadlines.set(key, Math.ceil(until));
-        if (!observations.has(key)) schedule.observe(key, '已检查，等待下次开放');
+        if (!observations.has(key)) schedule.observe(key, '已安排下次检查');
       }
     },
     clear(key) {
@@ -122,7 +122,7 @@ export function rewardSchedule(client) {
       case 'SCNewGuildWelfarePack': clearTask('guildWelfare'); break;
       case 'SCOrderOfTheDay': {
         const completed = schedule.status('orderDaily');
-        if (!Number.isSafeInteger(completed?.maxTier) || body?.orderOfTheDay?.rewardedNum !== completed.maxTier || schedule.due('orderDaily')) clearTask('orderDaily');
+        if (completed?.state !== 'completed' || body?.orderOfTheDay?.rewardedNum !== completed.maxTier || schedule.due('orderDaily')) clearTask('orderDaily');
         break;
       }
       case 'SCActivityActiveScoreUpdate': clearTask('festivalActive'); break;

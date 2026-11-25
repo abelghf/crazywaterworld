@@ -1,6 +1,7 @@
 import { displayMaterial } from './config.mjs';
 import { readOrderReservedStock, beginOrderMaterialSpend, cancelOrderMaterialSpend, confirmOrderMaterialOperation, refreshOrderMaterialSpends } from './order-reservations.mjs';
 import { toNumber } from './client.mjs';
+import { rowsForSeason } from './season-config.mjs';
 
 const key = 'guildOrders';
 const label = '联盟募兵';
@@ -64,8 +65,7 @@ export function guildOrderQuota(config, player) {
   const invalid = () => new Error('缺少或存在异常的联盟募兵次数配置');
   if (!Array.isArray(all) || !all.length
     || all.some(row => !Number.isSafeInteger(row?.season) || row.season < 1)) throw invalid();
-  const configSeason = all.reduce((best, row) => row.season <= season ? Math.max(best, row.season) : best, 0);
-  const available = all.filter(row => row.season === configSeason);
+  const available = rowsForSeason(all, season);
   // A missing season may fall back; a malformed tier must not silently fall
   // back to a different quota (possibly an unlimited one).
   if (available.some(row => !Number.isSafeInteger(row.playerLevel) || row.playerLevel < 1

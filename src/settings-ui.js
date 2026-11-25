@@ -293,15 +293,15 @@ const configGroups = [
     configField('factory.enabled', '总开关'), configField('factory.gain', '自动领取产品'),
     configField('factory.blockedCollectionTypes', '禁止自动领取', 'multi', { catalog: 'collectionBuildings', empty: '未禁止任何建筑类型', help: '按类型选择要保留产物的建筑。挂机会跳过该类型所有建筑的产出、工厂成品或成熟作物。' }),
     configField('factory.produce', '自动生产', 'switch', { editChildrenWhenOff:true, help: '按原料、库存、在产和待收数量填充空余队列格。已建成的工厂升级时仍可生产当前等级的配方。' }),
-    configField('factory.strategy', '排产策略', 'choice', { parent:'factory.produce', options: [['smart','智能排产（默认）'],['nativeSimulation','模拟游戏原生自动生产']], help: '智能排产使用账号加成、需求和备货水位。模拟原生按空闲生产位逐件选品，最多补到游戏仓容。' }),
+    configField('factory.strategy', '排产策略', 'choice', { parent:'factory.produce', options: [['smart','智能排产（默认）'],['nativeSimulation','模拟游戏原生自动生产']], help: '智能排产按账号工时和生产位排队。开启按需生产、工厂补料及收取后，订单期间可先补 10 秒内能凑齐的一批短缺材料。模拟原生按空闲生产位逐件选品，最多补到游戏仓容。' }),
     configField('factory.simulatedTargets', '模拟原生主产物', 'multi', { parent:'factory.produce', catalog: 'factoryProducts', empty: '使用工厂已设目标或首个解锁配方', when: d => d.factory.strategy === 'nativeSimulation', help: '每厂优先生产主产物。缺料或满仓时，先选实际耗时不超过 5 秒的候补，同档选库存最少的。下游开工扣料、成品收取后都会重新判断主产物缺口。' }),
     configField('factory.refillRules', '强制补库', 'refillRules', { parent:'factory.produce', wide:true, help:'同厂可开工的补库物品从上到下优先生产。缺少可加工的原料时，上游先做自己的补库物品，再按缺口补料。拖动手柄或使用上移、下移调整顺序。' }),
     configField('factory.refillSpeedUp', '强制补库时使用加速器', 'switch', { parent:'factory.produce', help:'补库品已排队或原料够做一件时，先撤下其他等待项。再用保留量以外的加速器加速占位的旧品，单生产位一件，双生产位最多两件。关闭时等待自然完工。' }),
     configField('factory.cooperateNative', '按需求调整游戏自动生产目标', 'switch', { when: d => d.factory.strategy !== 'nativeSimulation', help:'只控制游戏中已开启的原生自动生产目标；关闭后，普通排产仍由“自动生产”和“按需优先生产”控制。开启时补齐种子及上游需求，保留正在生产队列，目标调整后回读确认并间隔至少60秒，不购买材料。' }),
     configField('factory.disabledTypes', '禁用工厂', 'multi', { catalog: 'factories', empty: '未选择，允许全部工厂', help: '控制台不再新增生产或加速，已完成产品仍按领取开关处理。游戏内已有的原生自动生产设置保持原状。' }),
-    configField('factory.keepStock', '备货水位', 'number', { when: d => d.factory.strategy !== 'nativeSimulation', unit: '件 / 产品', help: '计入库存、待领取与在产数量，实际不超过游戏仓库上限。0 表示只为需求生产。' }),
+    configField('factory.keepStock', '备货水位', 'number', { when: d => d.factory.strategy !== 'nativeSimulation', unit: '件 / 产品', help: '计入仓库、待领取和在产数量，上限取账号仓容。普通材料厂先按缺口补布匹、长绳、粗纸，首次达到水位后恢复常规备货。设为 0 时只为需求生产。' }),
     configField('factory.checkEverySeconds', '兜底检查间隔', 'number', { unit: '秒', help: '优先按服务端完工时间和建筑状态推送领取、补产；没有可靠完工时间、缺料、满仓或发生错误时，按此间隔复查。独立于主循环间隔；账号队列占用时等待。' }),
-    configField('factory.demandFirst', '按需优先生产', 'switch', { help: '库存变化后按需求优先级重新排产。游戏队列中尚未开工的任务也可调整，已开工的继续生产。同级需求先选耗时短的产品，有效月卡开启双生产位时可调整同批顺序以缩短工期。关闭后按备货水位从短到长补库存。联盟募兵、红船的独立备料开关仍各自生效。' }),
+    configField('factory.demandFirst', '按需优先生产', 'switch', { help: '库存变化后按需求优先级重新排产。已进游戏队列的等待项也可调整，已开工的继续生产。同级优先短件，双生产位可调整同批顺序。订单期间，启用工厂补料和收取后可提前补一批短缺品，排队加加工最多 10 秒，并给正常派单留一个空位。需求清空后优先补不足下游一批的品种。关闭后，除材料厂首次补齐基础料外，常规备货按耗时从短到长。联盟募兵、红船的独立备料开关分别生效。' }),
     configField('factory.demandPriority', '需求优先级', 'sortableOrder', { wide: true, catalog: 'demandSources', help: '开启按需优先生产后，智能排产按列表顺序分配原料和生产位。「工厂补料」排在某项需求前时，优先补至备货水位。海兽进阶、培育喂养和博物馆也按相对顺序使用材料。勾选“工厂加速”后，会加速该来源仍缺少的在产物品。移除的来源不会自动补回。' }),
     configField('factory.speedUp', '自动加速生产', 'switch', { help: '与按来源加速独立；两种方式都遵守加速器保留量。' }),
     configField('factory.speedUpItems', '加速物品', 'multi', { parent: 'factory.speedUp', catalog: 'materials', empty: '未选择，允许全部在产物品', when: d => d.factory.speedUp }),
@@ -559,6 +559,8 @@ const configGroups = [
     configField('tasks.main', '领取主线奖励'), configField('tasks.branch', '领取支线奖励'), configField('tasks.achievements', '领取成就奖励'),
     configField('dailies.enabled', '日常总开关', 'switch', { help: '控制本组每日任务与奖励。基地页的付费点金独立设置。' }), configField('dailies.claimTasks', '领取其他每日任务奖励', 'switch', {help:'竞技场和积分赛的每日任务奖励在各自页签设置。'}),
     configField('dailies.claimDailyChest', '领取每日活跃宝箱'), configField('dailies.claimWeeklyChest', '领取每周活跃宝箱'), configField('dailies.claimGift', '领取每日免费赠礼'),
+    configField('schedule.monthCardDaily', '领取月卡每日奖励', 'switch', { parent: 'dailies.enabled', help: '普通月卡和高级月卡分别领取，有效期内每天各领一次。' }),
+    configField('schedule.seasonCardDaily', '领取赛季卡每日奖励', 'switch', { parent: 'dailies.enabled', help: '开通赛季卡后，请先在游戏内选满三项自选奖励。' }),
     configField('schedule.afk', '闯关挂机收益', 'switch', { editChildrenWhenOff: true, help: '自动领取本段挂机收益和已达到的等级奖励。' }),
     configField('afk.claimIntervalHours', '领取间隔', 'number', { parent: 'schedule.afk', unit: '小时', help: '填 0 表示存满再领。填 6 表示本段挂机累计 6 小时就领取，领取后重新计时。游戏收益先存满时会提前领取。' }),
     configField('schedule.afkUpgrade', '自动升级挂机等级', 'switch', { parent: 'schedule.afk', help: '连续用定位芯片升级，每次选当前能升的最高档（1、5 或 10 级），直到芯片用完或达到主线允许的等级。升级可独立开启，领取间隔只控制收益领取。' }),
@@ -1697,7 +1699,7 @@ function configRenderUsage() {
   if (themes) body.append(el('p', 'runtime-message', '已选 '+themes+' 个活动主题'));
   if (!items.length && !themes) body.append(el('p', 'dim runtime-message', '此分组暂无独立运行记录'));
   const latest = relevant.reduce((best, control, index) => {
-    if (!['waiting','sent','ok','unsynced'].includes(items[index].state)) return best;
+    if (!['waiting','sent','ok','unsynced','completed','inProgress','claimable'].includes(items[index].state)) return best;
     return best < 0 || (control.observation?.checkedAt ?? 0) > (relevant[best].observation?.checkedAt ?? 0) ? index : best;
   }, -1);
   const featured = issues.length ? issues.slice(0, 2) : latest >= 0 ? [items[latest]] : [];

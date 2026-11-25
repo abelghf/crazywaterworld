@@ -1,6 +1,7 @@
 // 每日免费海盗扫荡：仅使用扫荡次数，不读取舰队或汽油，也不参与派遣调度。
 import {exactAutomationId} from './automation-policy.mjs';
 import {loadProtocol} from './proto.mjs';
+import { seasonRows } from './season-config.mjs';
 import { recordsInWorld } from './fleet-settlement.mjs';
 import { pirateConfirmationStart, pirateConfirmationTimedOut, pirateHuntEnabled } from './pirates.mjs';
 const rows=(c,n)=>c?.tables?.[n]?.data??[];
@@ -47,8 +48,7 @@ export async function readPirateSweeps(client,config,player,settings,usage={}){
  }
  if(!valid(limit))throw Error('每日扫荡总次数无效');
  state.limit=limit;state.used=all.sweepTimes;state.left=Math.max(0,limit-state.used);
- const season=Math.floor(Number(world)/1e6)%1000;
- const configs=rows(config,'WorldPirateCfg').filter(row=>Number(row.season)===season);
+ const configs=seasonRows(config,'WorldPirateCfg',player);
  const prefix='pirate-sweep:'+world+':';
  // Refresh dispatch records after the network reads; offline previews can pass a snapshot.
  const keyRecords = usage.keyRecords?.() ?? usage;

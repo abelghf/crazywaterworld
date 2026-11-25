@@ -228,7 +228,9 @@ ChurnInfo            UltraOpen            BlackList
 
 周活动实测 5 条，每条 `{type, period, startTime, endTime}`，type 取值 1、2、4、5、6，period 是区分同类活动的周期编号（4021、104001、140011、4001、4001）。
 
-月卡 `MonthCardRequest.cardItem[]`，元素含 `type`、`endTime`、`gotDailyReward`；`endTime > now` 即生效。
+月卡状态来自 `MonthCardResponse.cardItem[]`。有效期晚于服务器时间或 `endTime = -1`（永久）时，未领的普通月卡和高级月卡分别用 `MonthCardDailyRewardRequest{type}` 领取，类型分别为 1 和 2。按同一类型回读 `gotDailyReward` 确认。
+
+赛季卡从 `SeasonCardResponse` 读取。游戏领取按钮要求 `isPaid` 为真、`gotDaily` 为假且 `customId` 已选满三项。工具用空体 `SeasonCardGotDailyRequest` 领取并回读 `gotDaily`。自选内容由玩家在游戏内设置。
 
 ### 3.10 引导与主线
 
@@ -283,7 +285,8 @@ DrawDailyRewardRequest{index}        领取每日活跃宝箱，无响应类型
 DrawDailyTaskRewardRequest{id}       领取每日任务奖励
 GotAchievementRewardRequest{id}      领取成就奖励，无响应类型
 QuickGotReadEmailRequest{all}        一键处理未读邮件与附件，无专属响应类型
-MonthCardDailyRewardRequest          领取月卡每日奖励，无响应类型
+MonthCardDailyRewardRequest          按类型领取普通或高级月卡每日奖励，无响应类型
+SeasonCardGotDailyRequest            领取赛季卡每日奖励，无响应类型
 ```
 
 ### 4.5 采集侧与发放侧的对应关系
@@ -479,7 +482,8 @@ node tools/selftest-describe.mjs    # 字段布局还原自检
 每日订单进度奖励：`OnWaterResponse.orderOfTheDay = {orderNum, rewardedNum}`，
 `rewardedNum` 是「最后一个已领档位的 reqNum」，所以下一档是第一个大于它的
 `OrderDailyRewardCfg.reqNum`（6/12/18/24/30/40 …），领取用空体 `GetNextOrderOTDRewardRequest{}`，
-一次领一档。
+一次领一档。按本服赛季选取表中已生效的最近一组，再按开服天数确定档位。当前配置中，
+S5 至 S9 沿用 S4 的 6、12、18、24、30、40、45 单档，S10 使用 S10 组。
 
 ### 12.2 建筑 ID 与工厂队列
 
@@ -575,8 +579,8 @@ node tools/selftest-describe.mjs    # 字段布局还原自检
 | 每日 | `DailyActivityRewardCfg` | 20/40/60/80/100 | 加速器 120 |
 | 每周 | `WeeklyActivityRewardCfg` | 120/240/360/480/600 | 藏品券 10 |
 
-两张表都是 4 个 season × 5 档，`id` 在季节之间重复，只有第 5 档的奖励随赛季变，
-所以判「哪几档可领」只用 `id`，不用挑季节。领法：`DrawDailyRewardRequest{index:[…]}` /
+两张表各有 4 个赛季，每季 5 档。已知本服赛季时取已生效的最近一组，按该组的活跃度门槛和
+服务端已领 `id` 计算可领档位。领取使用 `DrawDailyRewardRequest{index:[…]}` /
 `DrawWeeklyRewardRequest{index:[…]}`，都是 repeated int32、都无 Response。
 
 > 踩过的坑：一开始拿 `DailyActivityRewardCfg` 去算周宝箱，85 周活跃被算成「可领 1-4 档」，
@@ -654,7 +658,7 @@ node tools/selftest-describe.mjs    # 字段布局还原自检
 
 ### 13.4 网页控制台
 
-- 控制台主导航包括总览、挂机配置、建筑一览、挑战、阵容、活动、杂项和账号。登录设置位于账号卡片上。阵容页展示游戏中的各支队伍，可编辑并应用、载入或另存账号预设，也可将推荐阵容填入草稿。杂项下分联盟、仓库、英雄与装备、礼包兑换、日常任务、商店和聊天，默认打开联盟。活动按限时、周期、常驻分类。运行日志显示操作结果和跳过原因，可筛选警告与错误。
+- 控制台主导航包括总览、挂机配置、建筑一览、挑战、阵容、活动、杂项和账号。登录设置位于账号卡片上。阵容页展示游戏中的各支队伍，可编辑并应用、载入或另存账号预设，也可将推荐阵容填入草稿。杂项下分联盟、仓库、装备与徽章、礼包兑换、日常任务、商店和聊天，默认打开联盟。活动按限时、周期、常驻分类。运行日志显示操作结果和跳过原因，可筛选警告与错误。
 - 账号页支持从电脑微信或抖音添加账号，以及导出账号。开始采集前有勾选和倒计时确认。页头分别提供挂机与托管控制，**暂停挂机** 停止自动循环并保留连接，控制台手动操作继续可用。**暂停托管** 停止任务并断开连接，退出游戏后可点击 **恢复托管** 按已保存的轮数和间隔运行。
 - 手动交居民订单、装备强化、试炼挑战和海盗出征等操作按账号排队，点击后可在主日志查看结果。
 - 挂机页展示模块开关，旁边的“配置”跳到游戏配置对应项目；挂机配置分为基地、世界、英雄、藏品、装备、日常六类。保存只更新当前账号设置，不会启动挂机；已在运行的挂机在后续检查时使用新设置。首杀连续推进、主线自动挑战和联盟互助仍需单独启动。

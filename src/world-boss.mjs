@@ -3,6 +3,7 @@ import { claimOnce } from './extra-free-rewards.mjs';
 import { fleetRecordReason, dispatchReservationReason, reserveDispatch, reconcileBossFleets } from './fleet-availability.mjs';
 import { pendingPetrol } from './dispatch-preview.mjs';
 import { exactAutomationId } from './automation-policy.mjs';
+import { seasonRows } from './season-config.mjs';
 import { prepareWorldBossLineups, markWorldBossLineupsDispatched, markWorldBossLineupsCancelled, recoverWorldBossLineups } from './world-boss-lineups.mjs';
 
 const now=c=>Math.floor((Date.now()+(c.serverClockOffsetMs||0))/1000);
@@ -99,8 +100,7 @@ export async function claimWorldBossDamage(client,config,{player,enabled,ledger,
  const label='世界Boss伤害达标奖励',state=(await read(client,'WorldBossInfo')).info;
  if(!state||!integer(state.bossId)||state.bossId===0){report({label,skipped:true,reason:'当前没有开放的世界Boss'});return;}
  if(!integer(state.bestDamage)||!integer(state.gotRewardLevel))throw Error('世界Boss伤害及已领档位未确认');
- const season=Math.floor(Number(exactAutomationId(player.worldId))/1e6)%1000;
- const tiers=config?.tables?.WorldBossDamageRewardCfg?.data?.filter(r=>r.season===season&&r.bossId===state.bossId&&r.damage<=state.bestDamage&&r.level>state.gotRewardLevel)??[];
+ const tiers=seasonRows(config,'WorldBossDamageRewardCfg',player).filter(r=>r.bossId===state.bossId&&r.damage<=state.bestDamage&&r.level>state.gotRewardLevel);
  if(!tiers.length){report({label,skipped:true,reason:'最高伤害 '+state.bestDamage+'，已领至第 '+state.gotRewardLevel+' 档'});return;}
  const target=Math.max(...tiers.map(r=>r.level)),today=day(now(client));
  await claimOnce(client,{ledger,key:'world-boss-damage:'+today+':'+state.bossId+':'+target,title:label,request:'WorldBossGetDamageRewardRequest',enabled:()=>enabled()&&day(now(client))===today,report,verify:async r=>{

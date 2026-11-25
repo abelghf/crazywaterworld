@@ -109,7 +109,7 @@ section h2:first-child { margin-top:0 }
 .runtime-summary strong,.runtime-name strong { font-weight:600; color:var(--foreground) }
 .runtime-badge { display:inline-flex; align-items:center; justify-self:start; gap:6px; font-size:13px; font-weight:500; white-space:nowrap; color:var(--muted-foreground) }
 .runtime-badge::before { content:""; width:7px; height:7px; border-radius:50%; background:currentColor; flex:none }
-.runtime-badge:is([data-state=running],[data-state=ok]) { color:var(--success) }
+.runtime-badge:is([data-state=running],[data-state=ok],[data-state=completed]) { color:var(--success) }
 .runtime-badge[data-state=error] { color:var(--destructive) }
 .runtime-badge:is([data-state=pending],[data-state=blocked],[data-state=setup],[data-state=recovery]),.runtime-summary .runtime-count { color:var(--warning) }
 .runtime-summary>.runtime-badge { padding:3px 9px; border-radius:5px; background:color-mix(in srgb,currentColor 9%,transparent) }
@@ -518,6 +518,26 @@ button.factory-empty:disabled { cursor:wait; opacity:.6 }
   .gift-record-toolbar { display:grid; grid-template-columns:auto minmax(0,1fr) }
   .gift-record-toolbar>button { grid-column:1 / -1 }
   .gift-account>.dim { flex-basis:100%; padding-left:24px }
+}
+
+/* ---- 装备制造 ---- */
+.crafting-layout { display:grid; grid-template-columns:minmax(13rem,1fr) minmax(0,2fr); gap:clamp(14px,2.5vw,32px); align-items:start }
+.crafting-summary { display:grid; justify-items:start; align-content:start; gap:8px; padding:14px 16px; border-radius:var(--radius); background:var(--muted) }
+.crafting-summary:only-child { grid-column:1 / -1 }
+.crafting-product { display:flex; flex-wrap:wrap; align-items:baseline; gap:4px 10px; overflow-wrap:anywhere }
+.crafting-product strong { font-size:1.25rem; font-weight:650; line-height:1.35 }
+.crafting-time,.crafting-recipe-meta { color:var(--muted-foreground); font-size:13px; font-variant-numeric:tabular-nums }
+.crafting-recipe,.crafting-preview { display:grid; gap:10px; min-width:0 }
+.crafting-recipe-bar { display:flex; flex-wrap:wrap; align-items:center; justify-content:space-between; gap:6px 12px }
+.crafting-recipe-bar .choice-field { display:flex; flex-wrap:wrap; align-items:center; gap:6px 10px }
+.crafting-recipe-bar .choice-field select { max-width:100% }
+.crafting-preview>button { justify-self:end }
+.crafting-costs th.num,.crafting-costs th:nth-child(4) { text-align:right !important }
+.crafting-costs td:nth-child(4) { text-align:right; white-space:nowrap }
+.crafting-costs td:first-child,.crafting-costs td:last-child { overflow-wrap:anywhere }
+@media (max-width:700px) {
+  .crafting-layout { grid-template-columns:minmax(0,1fr); gap:12px }
+  .crafting-summary { padding:10px 12px; gap:5px }
 }
 
 /* ---- 挑战 ---- */

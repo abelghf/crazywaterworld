@@ -1,5 +1,6 @@
 import {createHash} from 'node:crypto';
 import { normalize } from './worlds.mjs';
+import { seasonRows } from './season-config.mjs';
 import { claimOnce } from './extra-free-rewards.mjs';
 import { exactAutomationId, automationWireId } from './automation-policy.mjs';
 import { weeklyActivityEnabled } from './activity-automation.mjs';
@@ -10,7 +11,6 @@ const rows=(config,name)=>config?.tables?.[name]?.data??[];
 const now=c=>Math.floor((Date.now()+(c.serverClockOffsetMs||0))/1000);
 const day=c=>Math.floor((now(c)+28800)/86400);
 const integer=n=>Number.isSafeInteger(n)&&n>=0;
-const season=p=>Math.floor(Number(exactAutomationId(p?.worldId))/1e6)%1000;
 // protobuf 默认的0/false位于原型上；保留这些值，编号始终保持精确字符串。
 export function rewardData(value,key=''){
  if(value==null||typeof value!=='object')return value;
@@ -33,8 +33,8 @@ export async function claimOpenRank(client,config,{player,enabled,ledger,report}
  const state=await readState();
  if(!integer(state.progress)||!Array.isArray(state.gotRewardId)||!integer(state.endTime))throw Error(label+'状态未完整返回');
  if(now(client)>=state.endTime)return wait(report,label,'本期活动未开放或已结束');
- const all=rows(config,table),s=season(player),chosen=all.some(r=>r.season===s)?s:Math.max(0,...all.map(r=>r.season??0));
- const eligible=all.filter(r=>(r.season===undefined||r.season===chosen)&&integer(r.score)&&r.score<=state.progress&&!state.gotRewardId.includes(r.score));
+ const tiers=seasonRows(config,table,player,{includeCommon:true});
+ const eligible=tiers.filter(r=>integer(r.score)&&r.score<=state.progress&&!state.gotRewardId.includes(r.score));
  if(!eligible.length)return wait(report,label,'当前进度 '+state.progress+'，暂无未领取的达标档位');
  for(const tier of eligible){
   if(!enabled()||now(client)>=state.endTime)break;

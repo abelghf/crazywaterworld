@@ -289,7 +289,14 @@ export function inventoryPage() {
 
 export function heroesPage() {
   return renderToStaticMarkup(<div className="grid gap-3">
-    <Panel title="装备制造"><div className="bar"><Button id="crafting-refresh" variant="outline">刷新装备厂</Button></div><div id="crafting-view" className="progression-view" aria-live="polite" /></Panel>
+    <div id="items-root" />
+    <Card className="gap-3 py-4">
+      <CardHeader className="flex flex-row items-center justify-between">
+        <CardTitle role="heading" aria-level={2}>装备制造</CardTitle>
+        <Button id="crafting-refresh" type="button" variant="outline" size="sm">刷新装备厂</Button>
+      </CardHeader>
+      <CardContent><div id="crafting-view" className="progression-view" aria-live="polite" /></CardContent>
+    </Card>
   </div>)
 }
 

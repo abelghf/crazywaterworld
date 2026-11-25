@@ -89,6 +89,8 @@ export function nativePreferenceEnabled(settings, key) {
     dailyRewards: () => settings.dailies.enabled && (settings.dailies.claimTasks || settings.arena?.claimTask || settings.league?.claimTask),
     chests: () => settings.dailies.enabled && (settings.dailies.claimDailyChest || settings.dailies.claimWeeklyChest),
     gift: () => settings.dailies.enabled && settings.dailies.claimGift,
+    monthCardDaily: () => settings.dailies.enabled && settings.schedule.monthCardDaily,
+    seasonCardDaily: () => settings.dailies.enabled && settings.schedule.seasonCardDaily,
     tasks: () => settings.loop.tasks || (settings.loop.world && settings.resident.rewards),
     adSpeedUpProduce: () => settings.loop.world && settings.factory.enabled,
     adSpeedUpBuilding: () => settings.loop.world && settings.building.enabled,

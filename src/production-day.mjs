@@ -119,7 +119,7 @@ export async function forecastProductionDay(
   config,
   settings,
   orders,
-  { pendingMaterials = [], checkCurrent = () => {}, insertions: savedInsertions = {}, anchors } = {},
+  { pendingMaterials = [], checkCurrent = () => {}, insertions: savedInsertions = {}, anchors, materialRestock: initialRestock } = {},
 ) {
   const startAt = snapshot.serverNow,
     endAt = startAt + day;
@@ -266,6 +266,7 @@ export async function forecastProductionDay(
     },
   };
   const slots = snapshot.factories[0]?.capacity ?? 0;
+  const materialRestock = { ...initialRestock };
   const {history:refillHistory} = snapshotRefills(snapshot, config, settings);
   const waitHistory = new Map(),
     occupied = new Map();
@@ -393,6 +394,7 @@ export async function forecastProductionDay(
       settings: dispatchSettings,
       extraDemand,
       factoryWaitHistory: waitHistory,
+      materialRestock,
       refillHistory,
       enabled: kind => settings.loop.world && ['startProduce', 'gainFactory', 'farm'].includes(kind),
     });

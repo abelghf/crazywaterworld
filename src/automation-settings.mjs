@@ -24,7 +24,7 @@ export const settingsFile = () => path.join(dataDirectory(), 'automation-setting
 export const SETTINGS_FORMAT = 'crazywaterworld-automation';
 // 文件 version / 账号 settingsVersion 是格式编号，只随结构迁移调整；
 // revision 是每次保存递增的修订号，仅用于并发冲突检查，不能用作格式版本。
-export const SETTINGS_SCHEMA_VERSION = 70;
+export const SETTINGS_SCHEMA_VERSION = 71;
 const LEGACY_SETTINGS_FORMAT = 'crazywaterword-automation';
 const treasureQualityLabels = { ORANGE: '万吨货轮', PURPLE: '中型货轮', BLUE: '小型货轮' };
 const treasureChaseDefaults = {
@@ -290,7 +290,7 @@ export function settingsFromLegacyNative(tasks, options) {
     'building.enabled': ['collect', 'finishUpgrade', 'build', 'buildSupply', 'upgrade', 'speedUp', 'adSpeedUpBuilding'],
     'factory.enabled': ['collect', 'startProduce', 'buildSupply', 'speedUp', 'adSpeedUpProduce'],
     'gather.enabled': ['autoFish', 'fishEnhance', 'floaters', 'antiqueFloaters', 'autoDive', 'diveEnhance', 'autoSalvage', 'salvageEnhance'],
-    'dailies.enabled': ['dailyRewards', 'chests', 'gift', 'freeGold', 'freeRecruit', 'arena'],
+    'dailies.enabled': ['dailyRewards', 'chests', 'gift', 'monthCardDaily', 'seasonCardDaily', 'freeGold', 'freeRecruit', 'arena'],
     'loop.dailies': ['freeGold', 'freeRecruit', 'arena', 'paidGold'],
     'museum.runEnabled': ['museumCollect', 'museumExplore', 'museumRevenue', 'museumAchievements'],
     'radar.runEnabled': ['radarAuto', 'radarRepair'],
@@ -389,6 +389,7 @@ function validateCurrentSettings(input, { partial = false, catalog = null } = {}
   input = migrateVersion60Settings(input);
   input = migrateVersion61Settings(input);
   input = migrateVersion62Settings(input);
+  input = migrateVersion70Settings(input);
   input = migrateMerchantPreset(input, DEFAULT_SETTINGS.merchant);
   if (plain(input?.merchant) && !Object.hasOwn(input.merchant, 'periodPointerLimit')) {
     input = { ...input, merchant: { ...input.merchant, periodPointerLimit: DEFAULT_SETTINGS.merchant.periodPointerLimit } };
@@ -803,6 +804,7 @@ settingsMigrations.set(67, settings => plain(settings?.guildShip) && !Object.has
 settingsMigrations.set(68, settings => migrateMerchantPreset(settings, DEFAULT_SETTINGS.merchant));
 // 新增可选的达标优先模式，已保存的策略及预算继续按原值执行。
 settingsMigrations.set(69, settings => settings);
+settingsMigrations.set(70, migrateVersion70Settings);
 const supportedSettingsVersion = version => Number.isSafeInteger(version) && version >= 1;
 const entrySettingsVersion = entry => Object.hasOwn(entry, 'settingsVersion') ? entry.settingsVersion : 1;
 function newestSettingsVersion(store) {
@@ -1249,6 +1251,12 @@ function migrateVersion60Settings(settings) {
 function migrateVersion61Settings(settings) {
   if (!plain(settings?.schedule) || Object.hasOwn(settings.schedule, 'afkUpgrade')) return settings;
   return { ...settings, schedule: { ...settings.schedule, afkUpgrade: false } };
+}
+
+function migrateVersion70Settings(settings) {
+  const schedule = settings?.schedule;
+  if (!plain(schedule) || (Object.hasOwn(schedule, 'monthCardDaily') && Object.hasOwn(schedule, 'seasonCardDaily'))) return settings;
+  return { ...settings, schedule: { monthCardDaily: false, seasonCardDaily: false, ...schedule } };
 }
 
 function migrateVersion57Settings(settings) {

@@ -113,6 +113,7 @@ const core = [
   'tools/selftest-daily-schedule.mjs',
   'tools/selftest-polling-completion.mjs',
   'tools/selftest-afk-upgrade.mjs',
+  'tools/selftest-daily-card-rewards.mjs',
   'tools/selftest-daily-combat.mjs',
   'tools/selftest-league-challenge.mjs',
   'tools/selftest-ad-shop.mjs',
