@@ -1,6 +1,7 @@
 import { optimizeProductionSchedule } from './production-optimizer.mjs';
 import { planStockRefills, scheduleRankedStock } from './production-restock.mjs';
 import { nativeMaterialReceipts, simulateNativeFactoryStarts } from './factory-native-simulation.mjs';
+import { refillGoal, snapshotRefills } from './factory-refill.mjs';
 import { createProductionTiming } from './production-timing.mjs';
 import { resourceReserve, worldPreferenceEnabled } from './automation-policy.mjs';
 import { activityProductionEnabled } from './activity-automation.mjs';
@@ -240,6 +241,12 @@ export function planProduction(snapshot, config, settings, options = {}) {
     waitingLabels.set(id, harvest && factory ? '等待原生来料' : factory ? '等待原生工厂' : '等待农田来料');
   }
   const waitingSupplyCount = waitingLabels.size;
+  const {active:refillsInProgress} = snapshotRefills(snapshot, config, settings);
+  const refillNote = refillsInProgress.map(rule => {
+    const factory = snapshot.factories.find(f => f.id === rule.buildingId);
+    return displayBuilding(config, {...factory, buildingId:factory.id}) + '优先补' + (config?.materialName?.(rule.productId) || rule.productId)
+      + '至 ' + refillGoal(rule, snapshot.stockCap) + ' 件';
+  }).join('，');
   if (settings.factory?.strategy === 'nativeSimulation') {
     const name = id => config?.materialName?.(id) || id;
     const now = snapshot.serverNow;
@@ -258,7 +265,7 @@ export function planProduction(snapshot, config, settings, options = {}) {
     const canPlan = (snapshot.inventoryKnown ?? snapshot.complete) && now > 0 && snapshot.stockCap > 0
       && settings.factory.enabled && settings.factory.produce && settings.loop?.world !== false;
     const picks = canPlan ? simulateNativeFactoryStarts({
-      buildings: snapshot.buildings.filter(b => eligible.has(b.id)),
+      buildings: snapshot.buildings.filter(b => eligible.has(b.id) && !refillsInProgress.some(rule => rule.buildingId === b.id)),
       recipes: rows(config, 'BuildingProduceCfg'), availableProducts: unlocked,
       targets: settings.factory.simulatedTargets,
       timing: createProductionTiming({ config, ...snapshot.timing, serverNow: now }),
@@ -274,7 +281,7 @@ export function planProduction(snapshot, config, settings, options = {}) {
       ...job, machineName: model.machineNames.get(job.machineId), productName: name(job.itemId),
     }));
     return {
-      strategy: 'nativeSimulation', status: 'next-dispatch', scope: 'next-dispatch', snapshotTime: now, timeline,
+      strategy: 'nativeSimulation', status: 'next-dispatch', scope: 'next-dispatch', snapshotTime: now, timeline, refillNote,
       config: snapshot.config, estimated: true, completionAt: null, upperBound: null, lowerBound: null, stockTarget: snapshot.stockCap,
       statusLabel: '模拟原生 · 本轮排产', missingReads: model.input.missingReads,
       pending: pendingInputs.size > 0, waitingHarvestCount, waitingSupplyCount,
@@ -328,7 +335,7 @@ export function planProduction(snapshot, config, settings, options = {}) {
   });
   const blocks = new Map(blockedOrders);
   return {
-    ...result, scope, status: uncertainCompletion ? 'incomplete' : result.status,
+    ...result, scope, refillNote, status: uncertainCompletion ? 'incomplete' : result.status,
     statusLabel: refreshUncertain.size ? '方案越过订单刷新边界，齐套时间待确认'
       : waitingSupplyCount ? '部分需求的原生来料时间待定'
       : allSkipped ? '当前需求已全部跳过排产'

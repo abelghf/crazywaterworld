@@ -1,6 +1,7 @@
 import { setImmediate as yieldToLoop } from 'node:timers/promises';
 import { planWorld, displayBuilding } from './world.mjs';
 import { insertionRecipeReady, readyCargoOrdersFirst } from './production-eligibility.mjs';
+import { snapshotRefills } from './factory-refill.mjs';
 import { createProductionTiming, nextFactoryLane, commitFactoryLane } from './production-timing.mjs';
 import { resourceReserve } from './automation-policy.mjs';
 import { consumeInsertionUnit, insertionYieldsToProduction, nextInsertionIndex } from './factory-insertion-queue.mjs';
@@ -265,6 +266,7 @@ export async function forecastProductionDay(
     },
   };
   const slots = snapshot.factories[0]?.capacity ?? 0;
+  const {history:refillHistory} = snapshotRefills(snapshot, config, settings);
   const waitHistory = new Map(),
     occupied = new Map();
   const stockNeeds = {
@@ -378,6 +380,7 @@ export async function forecastProductionDay(
       settings: dispatchSettings,
       extraDemand,
       factoryWaitHistory: waitHistory,
+      refillHistory,
       enabled: kind => settings.loop.world && ['startProduce', 'gainFactory', 'farm'].includes(kind),
     });
     occupied.clear();
@@ -406,6 +409,10 @@ export async function forecastProductionDay(
         anchors?.delete(buildingId);
       }
     }
+    if (plan.actions.some(step => step.refillRule && step.request !== 'StartFactoryProduceRequest')) {
+      result.partial = true;
+      result.refillNote = '强制补库将调整生产队列。调整完成前，时间表暂按现有工时估算。';
+    }
     const isFull = id => (stock.get(id) ?? 0) + (occupied.get(id) ?? 0) >= snapshot.stockCap;
     const free = id => have(id) - (resourceReserve(settings,id) || 0);
     const ready = (factory, id) => insertionRecipeReady(recipes.get(id), factory.building.level, survey.festivals, now, free);
@@ -417,6 +424,7 @@ export async function forecastProductionDay(
         yield {request:'FarmPlantRequest', body:{args:[{buildingId:plot.buildingId,productId:job.id}]}, costs:[{id,num}], job};
       }
       for (const [buildingId, f] of manualFacilities) {
+        if (plan.refilling.has(buildingId)) continue;
         while (f.jobs.length < f.capacity && f.manual.length) {
           const index = nextInsertionIndex(f.manual, now, isFull, id => ready(f,id)), job = f.manual[index];
           if (!job || !ready(f,job.id)) break;
@@ -448,7 +456,7 @@ export async function forecastProductionDay(
           f = (step.job ? manualFacilities : active).get(buildingId);
         if (
           !f || f.jobs.length >= f.capacity || isFull(productId) ||
-          (!step.job && !insertionYieldsToProduction(survey.factoryInsertions[buildingId], now, isFull, id => ready(f,id)))
+          (!step.job && !step.refillRule && !insertionYieldsToProduction(survey.factoryInsertions[buildingId], now, isFull, id => ready(f,id)))
         )
           continue;
         const duration = liveTiming.factory(recipes.get(productId), { building: f.building }).seconds;

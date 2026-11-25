@@ -57,6 +57,68 @@ test('低优先级等待项和急件可同时开工时保留排队项，另一�
   assert(actions.some(step=>step.body.buildingId==='2食品厂' && step.body.productId==='短时品'));
 });
 
+test('每座工厂独立触发补库，仓容限制派单数，其他工厂继续普通生产', () => {
+  const {settings,survey,config,factory,stock} = fixture();
+  const second = structuredClone(factory); second.buildingId = '2食品厂';
+  survey.factories = survey.buildings = [factory,second];
+  survey.stockCap = 3;
+  settings.factory.refillRules = [{buildingId:'1食品厂', productId:'长时品', trigger:0, target:null}];
+  const plan = () => planWorld(survey,{settings,config,enabled:kind=>kind === 'startProduce'}).actions;
+  assert.deepEqual(plan().filter(s=>s.refillRule).map(s=>s.body.productId),Array(3).fill('长时品'));
+  assert(plan().some(s=>s.body.buildingId === '2食品厂' && s.body.productId === '短时品'));
+  stock.set('加速器',1); settings.resources.keepAccelerators = 1;
+  factory.factory.factoryQ = [{idx:0,productId:'短时品',finishTime:1000}, {idx:1,productId:'长时品'}];
+  settings.factory.refillRules[0].target = 1;
+  settings.factory.refillSpeedUp = true;
+  assert.equal(plan().filter(s=>s.refillRule).length,0,'保留量内的加速器不能花');
+  stock.set('加速器',3);
+  assert.deepEqual(plan().filter(s=>s.refillRule).map(s=>s.request),['SpeedUpFactoryProduceRequest'],'补库品虽已排足，仍应加速阻塞它的产品');
+  settings.factory.refillSpeedUp = false;
+  assert.equal(plan().filter(s=>s.refillRule).length,0,'关闭后即使加速器充足，也等在产品自然完工');
+  factory.factory.factoryQ = [];
+  assert.deepEqual(plan().filter(s=>s.refillRule).map(s=>s.body.productId),['长时品'],'生产位空出后继续补库');
+  survey.stockKnown = false;
+  assert(!plan().some(s=>s.body.buildingId === '1食品厂'));
+  survey.stockKnown = true; factory.factory.autoProductId = '短时品'; survey.autoProduceForever = true;
+  assert(!plan().some(s=>s.refillRule));
+});
+
+test('同时缺货时各厂按本厂物品顺序生产，规则跨厂排列不决定谁先分配原料', () => {
+  const {settings,survey,config,factory,stock} = fixture();
+  const other = {...factory, buildingId:'2食品厂'};
+  survey.factories = survey.buildings = [factory,other];
+  survey.factorySlots = 1; stock.set('短时品',0);
+  const makeRule = (buildingId, productId) => ({buildingId,productId,trigger:0,target:5});
+  const a = ['长时品','短时品'].map(id => makeRule(factory.buildingId,id));
+  const b = ['短时品','长时品'].map(id => makeRule(other.buildingId,id));
+  const starts = rules => {
+    settings.factory.refillRules = rules;
+    return planWorld(survey, {config,settings,enabled:kind => kind === 'startProduce'}).actions
+      .filter(step => step.refillRule).map(step => [step.body.buildingId,step.body.productId]);
+  };
+  assert.deepEqual(starts([...b,...a]), [['1食品厂','长时品'],['2食品厂','短时品']]);
+  assert.deepEqual(starts([...b,...a.toReversed()]), [['1食品厂','短时品'],['2食品厂','短时品']]);
+  stock.set('木材',1);
+  assert.deepEqual(starts([...a,...b]), [['1食品厂','长时品']]);
+  assert.deepEqual(starts([...b,...a]), starts([...a,...b]));
+});
+
+function materialFixture() {
+  const f = fixture();
+  Object.assign(f.factory, { buildingId: '1材料厂', type: '材料厂' });
+  const recipes = [['布匹', 3], ['长绳', 4], ['粗纸', 5], ['颜料', 1]].map(([itemId, produceTime]) => ({
+    itemId, produceTime, buildType: '材料厂', unlockLevel: 1, costItem: [['木材', 1]],
+  }));
+  f.config.tables.BuildingProduceCfg.data = recipes;
+  Object.assign(f.settings.factory, { demandFirst: true, demandPriority: ['cargo', 'factory'], keepStock: 3 });
+  const materialRestock = {};
+  const factoryWaitHistory = new Map();
+  const schedule = (state = materialRestock) => products(planWorld(f.survey, {
+    config: f.config, settings: f.settings, materialRestock: state, factoryWaitHistory, enabled: kind => kind === 'startProduce',
+  }));
+  return { ...f, recipes, schedule };
+}
+
 test('模拟原生先做主产物，实际耗时 5 秒的候补归入短件档，同档按库存选品', () => {
   const f = fixture(), rows = f.config.tables.BuildingProduceCfg.data;
   const [short, long] = rows;

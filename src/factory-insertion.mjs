@@ -10,6 +10,7 @@ import { factoryProductionSnapshot } from './spend-evidence.mjs';
 import { factoryInsertions, saveFactoryInsertion } from './factory-insert-store.mjs';
 import { factoryProductionKey, factoryRecipeAvailability, factoryRecipeCosts, runWorld, startManualFactoryProduction } from './world.mjs';
 import { insertionSupplyPlanner } from './factory-insertion-supply.mjs';
+import { selectFactoryRefill, refillFactoryType, refillHistoryFor } from './factory-refill.mjs';
 import { queueStamp as stamp } from './factory-replanning.mjs';
 
 const rows = (config, table) => config?.tables?.[table]?.data ?? [];
@@ -249,6 +250,15 @@ export async function advanceFactoryInsertion(client, protocol, ctx, buildingId)
     const stock = farmInventory(normalize(await client.request('AllItemRequest', {}, 'AllItemResponse')));
     if (!enabled()) return;
     const incoming = confirmedFactoryIncoming(water), cap = factoryStockCapacity(config, player);
+    const prefs = ctx.settings?.factory;
+    if (prefs?.enabled && prefs.produce && prefs.refillRules?.some(r => r.buildingId === buildingId)
+      && !prefs.disabledTypes.includes(buildingId) && !prefs.disabledTypes.includes(refillFactoryType(config, live.building))) {
+      const active = selectFactoryRefill(prefs.refillRules, live.building, {config, festivals:client.festivals, now:clock(client),
+        owned:id => stock.get(id) ?? 0, cap, history:refillHistoryFor(player), record:true});
+      if (active) {
+        note('优先补' + displayMaterial(config, active.rule.productId) + '，入库达标后继续插单'); return;
+      }
+    }
     const isFull = id => (stock.get(id) ?? 0) + (incoming.get(id) ?? 0) >= cap;
     const recipes = rows(config,'BuildingProduceCfg');
     const head = e.jobs[0];

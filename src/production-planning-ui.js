@@ -486,7 +486,7 @@ function renderProductionDay(day, orders) {
     + (count ? ' · 预计备齐 ' + day.completions.length + ' / ' + count + ' 笔需求' : '')));
   if (day.unavailable) {
     box.appendChild(el('p','plan-day-note',day.unavailable + '以下保留已保存的计划和已知游戏队列。'));
-  } else if (day.partial) box.appendChild(el('p', 'plan-day-note', '部分快照数据或材料扣款待确认，仅按已知条件推演。'));
+  } else if (day.partial) box.appendChild(el('p', 'plan-day-note', day.refillNote || '部分快照数据或材料扣款待确认，仅按已知条件推演。'));
   if (!facilities.length) {
     box.appendChild(el('p', 'plan-day-note', '当前快照中没有已建工厂。'));
     return;
@@ -527,6 +527,7 @@ function renderProductionPlan(data) {
   const box = clear($('production-plan-result'));
   if (data.forecast?.initialQueueChanges?.length) box.appendChild(el('p', 'plan-day-note',
     '预计备齐时间已计入本轮等待队列的优先级调整，挂机确认后更新实际队列。'));
+  if (data.refillNote) box.appendChild(el('p', 'plan-day-note', data.refillNote + '。实际入库达标后恢复常规策略，下方为常规排产估算。'));
   box.appendChild(productionPlanSummary(data));
   const timeline = data.timeline || [];
   const recipes = new Map((data.recipes || []).map(recipe => [recipe.productId, recipe]));

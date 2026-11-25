@@ -5149,7 +5149,7 @@ export function createConsole({ host = '127.0.0.1', port = 17321, onLog, recover
         const settings = session.preferences;
         const usage = usageFor(session).snapshot();
         const extra = settings ? await surveyBaseAutomation(instance, protocolFor(instance), config, session.player, settings, survey, { ledger: usageFor(session), enabled: () => session.client === instance && instance.connected !== false }) : null;
-        const plan = planWorld(survey, { config, settings, usage, extraDemand: extra ? baseDemands(extra, config, settings) : [],
+        const plan = planWorld(survey, { config, settings, usage, trackRefills:true, extraDemand: extra ? baseDemands(extra, config, settings) : [],
           allowSpeedUp: allowAccelerators && (!settings || session.loop.tasks.speedUp), allowReroll: settings ? settings.resident.reroll : payload.reroll === true,
           ...(settings ? { enabled: kind => session.loop.tasks[worldTaskKey(kind)] === true, minOrderExp: settings.resident.minExp } : {}) });
         plan.actions = plan.actions.filter(step => allowAccelerators || !(step.costs ?? []).some(cost => cost.id === '加速器' && cost.num > 0));

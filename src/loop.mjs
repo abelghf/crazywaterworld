@@ -566,7 +566,7 @@ export async function runLoop(client, protocol, {
           if (kind === 'upgrade') return checkUpgrade && enabled('upgrade') && orderRead;
           return ['startProduce', 'nativeProduce'].includes(kind) && canFactory('startProduce') && (simulateNative || orderRead);
         };
-        const plan = planWorld(survey, { config, enabled: allow, settings: currentSettings, blockedCollectionTypes: getBlockedCollectionTypes?.(), usage: usage(), extraDemand: demand, factoryWaitHistory });
+        const plan = planWorld(survey, { config, enabled: allow, settings: currentSettings, blockedCollectionTypes: getBlockedCollectionTypes?.(), usage: usage(), extraDemand: demand, factoryWaitHistory, trackRefills:true });
         // 工厂巡检只处理材料规则换单；奖励筛选留给常规订单检查。
         plan.actions = plan.actions.filter(step => step.kind !== 'denyOrder' || step.materialRule);
         if (currentSettings?.factory?.cooperateNative && allow('startProduce')) observeNativePlan(survey, plan);
@@ -1312,7 +1312,7 @@ export async function runLoop(client, protocol, {
         }
         if (factorySchedule.active() || factorySchedule.due())
           factorySchedule.checked(survey.factories, { version: factoryReadVersion, demandVersion, slots: survey.factorySlots, progressed: true });
-        const plan = planWorld(survey, { config, enabled: allowWorld, factoryWaitHistory,
+        const plan = planWorld(survey, { config, enabled: allowWorld, factoryWaitHistory, trackRefills:true,
           settings, blockedCollectionTypes: getBlockedCollectionTypes?.(), usage: usage(), extraDemand,
           allowSpeedUp: isEnabled ? enabled('speedUp') : allowSpeedUp,
           allowReroll: isEnabled ? enabled('denyOrder') : allowReroll,

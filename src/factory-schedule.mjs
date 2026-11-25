@@ -108,8 +108,8 @@ export function createFactorySchedule(client, {
       collectEligible: building => collectEligible(building, blocked), produceEligible });
     // A bag shortage can occur while every slot is full and its next timer is hours away.
     const factory = preferences();
-    return mode.produce && factory?.produce && factory.demandFirst && factory.strategy !== 'nativeSimulation'
-      ? Math.min(next, checkedAt + interval(factory.checkEverySeconds) * 1000) : next;
+    return mode.produce && factory?.produce && (factory.refillRules?.length || factory.demandFirst && factory.strategy !== 'nativeSimulation')
+      ? Math.min(next, checkedAt + interval(preferences().checkEverySeconds) * 1000) : next;
   };
   const nextAt = () => active() ? Math.min(baseDeadline(), wakeAt)
     : residentOrderChanged && watchResidentOrders() ? wakeAt : Infinity;
@@ -122,10 +122,16 @@ export function createFactorySchedule(client, {
   const onMessage = ({ name, body } = {}) => {
     if (disposed) return;
     if (productionDemandChanged(name, body)) {
-      const residentChanged = name === 'SCWorkerOrder' && watchResidentOrders();
-      if (residentChanged) residentOrderChanged = true;
+      if (name === 'SCWorkerOrder' && watchResidentOrders()) {
+        residentOrderChanged = true;
+        demandVersion++; version++; wake();
+        return;
+      }
       const factory = preferences();
-      if (residentChanged || modes().produce && factory?.produce && factory.demandFirst && factory.strategy !== 'nativeSimulation') {
+      const items = Array.isArray(body?.items) ? body.items : [];
+      const dynamic = factory?.demandFirst && factory.strategy !== 'nativeSimulation';
+      const refill = items.some(item => factory?.refillRules?.some(rule => rule.productId === item?.itemId));
+      if (modes().produce && (dynamic || factory?.produce && refill)) {
         demandVersion++; version++; wake();
       }
       return;

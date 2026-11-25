@@ -285,9 +285,11 @@ const configGroups = [
   { id: 'factory', title: '工厂', category: 'base', fields: [
     configField('factory.enabled', '总开关'), configField('factory.gain', '自动领取产品'),
     configField('factory.blockedCollectionTypes', '禁止自动领取', 'multi', { catalog: 'collectionBuildings', empty: '未禁止任何建筑类型', help: '按类型选择要保留产物的建筑。挂机会跳过该类型所有建筑的产出、工厂成品或成熟作物。' }),
-    configField('factory.produce', '自动生产', 'switch', { help: '按原料、库存、在产和待收数量填充空余队列格。已建成的工厂升级时仍可生产当前等级的配方。' }),
-    configField('factory.strategy', '排产策略', 'choice', { options: [['smart','新版智能排产（推荐）'],['nativeSimulation','模拟游戏原生自动生产']], help: '智能排产使用账号加成、需求和备货水位。模拟原生按空闲生产位逐件选品，最多补到游戏仓容。' }),
-    configField('factory.simulatedTargets', '模拟原生主产物', 'multi', { catalog: 'factoryProducts', empty: '使用工厂已设目标或首个解锁配方', when: d => d.factory.strategy === 'nativeSimulation', help: '每厂优先生产主产物。缺料或满仓时，先选实际耗时不超过 5 秒的候补，同档选库存最少的。下游开工扣料、成品收取后都会重新判断主产物缺口。' }),
+    configField('factory.produce', '自动生产', 'switch', { editChildrenWhenOff:true, help: '按原料、库存、在产和待收数量填充空余队列格。已建成的工厂升级时仍可生产当前等级的配方。' }),
+    configField('factory.strategy', '排产策略', 'choice', { parent:'factory.produce', options: [['smart','智能排产（默认）'],['nativeSimulation','模拟游戏原生自动生产']], help: '智能排产使用账号加成、需求和备货水位。模拟原生按空闲生产位逐件选品，最多补到游戏仓容。' }),
+    configField('factory.simulatedTargets', '模拟原生主产物', 'multi', { parent:'factory.produce', catalog: 'factoryProducts', empty: '使用工厂已设目标或首个解锁配方', when: d => d.factory.strategy === 'nativeSimulation', help: '每厂优先生产主产物。缺料或满仓时，先选实际耗时不超过 5 秒的候补，同档选库存最少的。下游开工扣料、成品收取后都会重新判断主产物缺口。' }),
+    configField('factory.refillRules', '强制补库', 'refillRules', { parent:'factory.produce', wide:true, help:'同厂物品越靠前，补库优先级越高。拖动左侧手柄或使用上移、下移调整顺序。补库时会撤下本厂其他排队产品。高优先级物品实际入库达标后，再继续补下一项。' }),
+    configField('factory.refillSpeedUp', '强制补库时使用加速器', 'switch', { parent:'factory.produce', help:'开启后，工厂使用保留量以外的加速器，加快占用生产位的其他物品。关闭时等待这些物品自然完工。此设置适用于本账号所有补库规则。' }),
     configField('factory.cooperateNative', '按需求调整游戏自动生产目标', 'switch', { when: d => d.factory.strategy !== 'nativeSimulation', help:'只控制游戏中已开启的原生自动生产目标；关闭后，普通排产仍由“自动生产”和“按需优先生产”控制。开启时补齐种子及上游需求，保留正在生产队列，目标调整后回读确认并间隔至少60秒，不购买材料。' }),
     configField('factory.disabledTypes', '禁用工厂', 'multi', { catalog: 'factories', empty: '未选择，允许全部工厂', help: '控制台不再新增生产或加速，已完成产品仍按领取开关处理。游戏内已有的原生自动生产设置保持原状。' }),
     configField('factory.keepStock', '备货水位', 'number', { when: d => d.factory.strategy !== 'nativeSimulation', unit: '件 / 产品', help: '计入库存、待领取与在产数量，实际不超过游戏仓库上限。0 表示只为需求生产。' }),
@@ -1249,6 +1251,8 @@ function configRenderField(spec) {
     control = configPriorityEditor(spec, id); box.append(control);
   } else if (spec.kind === 'crops') {
     control = configCropEditor(spec, id); box.append(control);
+  } else if (spec.kind === 'refillRules') {
+    control = configRefillRules(spec, id); box.append(control);
   }
   if (control) {
     control.dataset.configKey = spec.key;
@@ -1267,6 +1271,134 @@ function configRenderField(spec) {
   return row;
 }
 
+function configRefillRules(spec, id) {
+  const root = component('ui-refill'); root.id = id; root.tabIndex = -1;
+  root.setAttribute('role', 'group'); root.setAttribute('aria-labelledby', id + '-label');
+  const list = root.querySelector('[data-refill-rules]');
+  const [factoryPicker, itemPicker] = root.querySelectorAll('select');
+  const itemControl = itemPicker.closest('[data-slot=native-select-wrapper]');
+  const add = root.querySelector('button');
+  const catalog = configEditor.data.catalog ?? {};
+  const factories = catalog.refillFactories ?? [], products = catalog.factoryProducts ?? [];
+  const items = new Map((catalog.materials ?? []).map(row => [row.value, row.label]));
+  function availableProducts(factory, currentProduct) {
+    if (!factory) return [];
+    const rules = configGet(spec.key) ?? [];
+    return products.filter(p => p.factoryType === factory.factoryType && (p.value === currentProduct
+      || !rules.some(r => r.buildingId === factory.value && r.productId === p.value)));
+  }
+  function fillProducts(select, options) {
+    clear(select);
+    for (const p of options) select.add(new Option(items.get(p.value) ?? p.value, p.value));
+  }
+  function updateAdd(preferredProduct) {
+    const options = availableProducts(factories.find(f => f.value === factoryPicker.value));
+    fillProducts(itemPicker, options);
+    if (options.some(p => p.value === preferredProduct)) itemPicker.value = preferredProduct;
+    else if (options.some(p => p.value === '淡水')) itemPicker.value = '淡水';
+    itemControl.hidden = !factoryPicker.value;
+    add.disabled = !itemPicker.value;
+  }
+  function title(factory) {
+    if (!factories.some(f => f.value !== factory.value && f.label === factory.label)) return factory.label;
+    const number = factory.value.match(/^\d+/)?.[0];
+    return number ? factory.label + '（' + number + ' 号）' : factory.value;
+  }
+  const rowAt = index => list.querySelector('[data-rule-index="' + index + '"]');
+  const owner = configEditor.owner;
+  const editable = () => owner === current && owner === configEditor.owner && !configEditor.loading
+    && (!configEditor.busy || configEditor.saving) && root.isConnected && root.getClientRects().length > 0;
+  const drag = configOrderDrag(editable, () => configGet(spec.key));
+  const status = el('span', 'sr-only'); status.setAttribute('role', 'status'); root.append(status);
+  function paint() {
+    drag.cancel();
+    const selectedFactory = factoryPicker.value, selectedItem = itemPicker.value;
+    clear(list); clear(factoryPicker); factoryPicker.add(new Option('选择工厂', ''));
+    const rules = configGet(spec.key) ?? [];
+    for (const f of factories.filter(f => availableProducts(f).length)) factoryPicker.add(new Option(title(f), f.value));
+    if ([...factoryPicker.options].some(o => o.value === selectedFactory)) factoryPicker.value = selectedFactory;
+    updateAdd(selectedItem);
+    const byFactory = new Map();
+    for (const [index, rule] of rules.entries()) {
+      if (!byFactory.has(rule.buildingId)) byFactory.set(rule.buildingId, []);
+      byFactory.get(rule.buildingId).push(index);
+    }
+    for (const [buildingId, peers] of byFactory) {
+      const factory = factories.find(f => f.value === buildingId);
+      const group = component('ui-refill-factory');
+      const heading = group.querySelector('[data-refill-factory-name]');
+      heading.textContent = factory ? title(factory) : buildingId;
+      heading.id = id + '-factory-' + peers[0]; group.setAttribute('aria-labelledby', heading.id);
+      group.querySelector('[data-refill-order-hint]').hidden = peers.length < 2;
+      const products = group.querySelector('[data-refill-products]');
+      for (const [rank, index] of peers.entries()) products.append(renderRule(factory, index, peers, rank));
+      list.append(group);
+    }
+    function renderRule(factory, index, peers, rank) {
+      const rule = rules[index];
+      const productName = items.get(rule.productId) ?? rule.productId;
+      const row = component('ui-refill-rule');
+      row.dataset.ruleIndex = index;
+      row.setAttribute('aria-label', productName);
+      if (peers.length > 1) {
+        const priority = row.querySelector('[data-refill-rank]');
+        priority.id = id + '-rank-' + index; priority.textContent = '优先级 ' + (rank + 1);
+        const handle = row.querySelector('[data-refill-handle]');
+        handle.hidden = false; handle.setAttribute('aria-label', '拖动排序：' + productName);
+        handle.setAttribute('aria-describedby', priority.id); handle.title = '拖动排序，或按上下方向键移动';
+        const move = (to, direction) => {
+          if (!editable() || to < 0 || to >= peers.length || to === rank) return;
+          const next = [...configGet(spec.key)], ordered = peers.map(i => next[i]);
+          ordered.splice(rank, 1); ordered.splice(to, 0, next[index]);
+          peers.forEach((slot, i) => { next[slot] = ordered[i]; });
+          configSet(spec.key, next); paint();
+          const moved = rowAt(peers[to]);
+          const focus = direction
+            ? moved.querySelector('[data-refill-move="' + direction + '"]:enabled') ?? moved.querySelector('[data-refill-move]:enabled')
+            : moved.querySelector('[data-refill-handle]');
+          focus.focus({preventScroll:true}); status.textContent = productName + '已移至优先级 ' + (to + 1);
+        };
+        handle.onpointerdown = event => drag.start(event, handle, row, peers.map(rowAt), move, true);
+        handle.onkeydown = event => {
+          if (event.altKey || event.ctrlKey || event.metaKey || !['ArrowUp','ArrowDown'].includes(event.key)) return;
+          event.preventDefault(); drag.cancel(); move(rank + (event.key === 'ArrowUp' ? -1 : 1));
+        };
+        for (const button of row.querySelectorAll('[data-refill-move]')) {
+          const direction = Number(button.dataset.refillMove), to = rank + direction;
+          button.hidden = false; button.disabled = to < 0 || to >= peers.length;
+          button.setAttribute('aria-describedby', priority.id);
+          button.onclick = () => { drag.cancel(); move(to, direction); };
+        }
+      }
+      const change = patch => configSet(spec.key, configGet(spec.key).map((r, i) => i === index ? { ...r, ...patch } : r));
+      const product = row.querySelector('select'); fillProducts(product, availableProducts(factory, rule.productId));
+      if (![...product.options].some(o => o.value === rule.productId)) product.add(new Option(items.get(rule.productId) ?? rule.productId, rule.productId));
+      product.value = rule.productId;
+      product.onchange = () => {
+        change({ productId:product.value }); paint(); rowAt(index).querySelector('select').focus();
+      };
+      for (const input of row.querySelectorAll('[data-quantity]')) {
+        const key = input.dataset.quantity;
+        input.value = rule[key] ?? '';
+        input.oninput = () => change({ [key]: input.value === '' ? null : input.valueAsNumber });
+      }
+      row.querySelector('[data-refill-remove]').onclick = () => {
+        configSet(spec.key, configGet(spec.key).filter((r, i) => i !== index)); paint(); factoryPicker.focus();
+      };
+      return row;
+    }
+  }
+  factoryPicker.onchange = () => updateAdd();
+  add.onclick = () => {
+    if (!factoryPicker.value || !itemPicker.value) return;
+    configSet(spec.key, [...configGet(spec.key), {buildingId:factoryPicker.value, productId:itemPicker.value, trigger:0, target:null}]);
+    paint();
+    if (factoryPicker.value) itemPicker.focus();
+    else rowAt(configGet(spec.key).length - 1).querySelector('select').focus();
+  };
+  paint(); return root;
+}
+
 function configSortableOrder(spec, id) {
   const root = el('div', 'config-dispatch-order'); root.id = id;
   root.setAttribute('role', 'group'); root.setAttribute('aria-label', spec.label);
@@ -1277,24 +1409,14 @@ function configSortableOrder(spec, id) {
   const add = factory ? el('div', 'config-add') : null;
   const labels = new Map(spec.options ?? (configEditor.data.catalog?.[spec.catalog] ?? []).map(item => [item.value, item.label]));
   const owner = configEditor.owner;
-  let drag = null;
   const editable = () => owner === current && configEditor.owner === owner && (!configEditor.busy || factory && configEditor.saving) && !configEditor.loading
     && root.isConnected && root.getClientRects().length > 0;
+  const drag = configOrderDrag(editable, () => configGet(spec.key));
   const commit = (values, focusValue) => {
     configSet(spec.key, values);
     paint(focusValue);
     if (factory) void configFlush();
   };
-  const clearDrop = () => { for (const row of list.children) delete row.dataset.drop; };
-  const cancelDrag = () => {
-    const previous = drag; drag = null; clearDrop();
-    window.removeEventListener('blur', cancelDrag);
-    document.removeEventListener('keydown', escapeDrag);
-    if (!previous) return;
-    delete previous.row.dataset.dragging;
-    if (previous.handle.hasPointerCapture(previous.pointerId)) previous.handle.releasePointerCapture(previous.pointerId);
-  };
-  const escapeDrag = event => { if (event.key === 'Escape' && drag) { event.preventDefault(); cancelDrag(); } };
   const move = (value, to) => {
     if (!editable()) return;
     const values = [...configGet(spec.key)], from = values.indexOf(value);
@@ -1303,39 +1425,8 @@ function configSortableOrder(spec, id) {
     commit(values, value);
     status.textContent = (labels.get(value) || value) + '已移至第' + (to + 1) + '位';
   };
-  const startDrag = (event, value, row, handle) => {
-    if (event.button !== 0 || event.isPrimary === false || handle.disabled || !editable()) return;
-    cancelDrag();
-    drag = { value, row, handle, pointerId: event.pointerId, startY: event.clientY, moved: false,
-      order: JSON.stringify(configGet(spec.key)), to: configGet(spec.key).indexOf(value) };
-    handle.focus({ preventScroll: true });
-    handle.setPointerCapture(event.pointerId);
-    window.addEventListener('blur', cancelDrag); document.addEventListener('keydown', escapeDrag);
-    handle.onpointermove = event => {
-      if (!drag || event.pointerId !== drag.pointerId) return;
-      if (!editable() || JSON.stringify(configGet(spec.key)) !== drag.order) { cancelDrag(); return; }
-      if (!drag.moved && Math.abs(event.clientY - drag.startY) < 5) return;
-      drag.moved = true; row.dataset.dragging = 'true';
-      const others = [...list.children].filter(item => item !== row);
-      const before = others.findIndex(item => { const rect = item.getBoundingClientRect(); return event.clientY < rect.top + rect.height / 2; });
-      drag.to = before < 0 ? others.length : before;
-      clearDrop();
-      if (others[drag.to]) others[drag.to].dataset.drop = 'before';
-      else if (others.length) others.at(-1).dataset.drop = 'after';
-      if (event.clientY < 48) window.scrollBy(0, -16);
-      else if (event.clientY > window.innerHeight - 48) window.scrollBy(0, 16);
-    };
-    handle.onpointerup = event => {
-      if (!drag || event.pointerId !== drag.pointerId) return;
-      const completed = drag;
-      const valid = editable() && JSON.stringify(configGet(spec.key)) === completed.order;
-      cancelDrag();
-      if (valid && completed.moved) move(value, completed.to);
-    };
-    handle.onpointercancel = handle.onlostpointercapture = cancelDrag;
-  };
   function paint(focusValue) {
-    cancelDrag(); clear(list);
+    drag.cancel(); clear(list);
     const values = configGet(spec.key);
     values.forEach((value, index) => {
       const row = el('div', (factory ? 'config-demand-row' : 'config-dispatch-row') + ' config-dispatch-sortable');
@@ -1345,11 +1436,11 @@ function configSortableOrder(spec, id) {
       const label = labels.get(value) || value;
       const handle = configButton('⠿', () => {}); handle.classList.add('config-dispatch-handle');
       handle.setAttribute('aria-label', '拖动排序：' + label); handle.title = '拖动排序，或按上下方向键移动';
-      handle.onpointerdown = event => startDrag(event, value, row, handle);
+      handle.onpointerdown = event => drag.start(event, handle, row, [...list.children], to => move(value, to));
       handle.onkeydown = event => {
         if (event.altKey || event.ctrlKey || event.metaKey) return;
         const to = event.key === 'ArrowUp' ? index - 1 : event.key === 'ArrowDown' ? index + 1 : null;
-        if (to !== null) { event.preventDefault(); cancelDrag(); move(value, to); }
+        if (to !== null) { event.preventDefault(); drag.cancel(); move(value, to); }
       };
       const actions = el('div', 'config-order-tools');
       if (factory) {
@@ -1363,7 +1454,7 @@ function configSortableOrder(spec, id) {
         speed.append(check, el('span', '', '工厂加速')); actions.append(speed);
       }
       for (const [offset, text] of [[-1, '上移'], [1, '下移']]) {
-        const button = configButton(text, () => { cancelDrag(); move(value, index + offset); });
+        const button = configButton(text, () => { drag.cancel(); move(value, index + offset); });
         button.disabled = index + offset < 0 || index + offset >= values.length;
         button.setAttribute('aria-label', label + text); actions.append(button);
       }
@@ -1390,6 +1481,76 @@ function configSortableOrder(spec, id) {
   if (add) root.append(add);
   paint();
   return root;
+}
+
+// Capture only the handle. Keep form controls and the row DOM intact until drop.
+function configOrderDrag(editable, readOrder) {
+  let stop;
+  const cancel = () => stop?.();
+  function start(event, handle, row, rows, move, withinGroup = false) {
+    if (event.button !== 0 || event.isPrimary === false || handle.disabled || !editable()) return;
+    cancel();
+    const pointer = event.pointerId, startY = event.clientY, order = JSON.stringify(readOrder());
+    const others = rows.filter(item => item !== row);
+    const valid = () => editable() && JSON.stringify(readOrder()) === order;
+    let x = event.clientX, y = startY, moved = false, marker, frame = 0;
+    function position() {
+      if (withinGroup) {
+        const first = rows[0].getBoundingClientRect(), last = rows.at(-1).getBoundingClientRect();
+        if (x < first.left || x > first.right || y < first.top || y > last.bottom) return -1;
+      }
+      const index = others.findIndex(item => { const box = item.getBoundingClientRect(); return y < box.top + box.height / 2; });
+      return index < 0 ? others.length : index;
+    }
+    function preview() {
+      if (marker) delete marker.dataset.drop;
+      const to = position();
+      marker = to < 0 ? null : others[to] ?? others.at(-1);
+      if (marker) marker.dataset.drop = others[to] ? 'before' : 'after';
+    }
+    function scroll() {
+      frame = 0;
+      if (!valid()) { cancel(); return; }
+      if (!marker) return;
+      const dy = y < 48 ? -12 : y > window.innerHeight - 48 ? 12 : 0;
+      if (!dy) return;
+      const before = window.scrollY;
+      window.scrollBy(0, dy);
+      if (window.scrollY !== before) { preview(); frame = window.requestAnimationFrame(scroll); }
+    }
+    const escape = e => { if (e.key === 'Escape') { e.preventDefault(); cancel(); } };
+    function finish() {
+      stop = null;
+      if (frame) window.cancelAnimationFrame(frame);
+      if (marker) delete marker.dataset.drop;
+      delete row.dataset.dragging;
+      window.removeEventListener('blur', finish); document.removeEventListener('keydown', escape);
+      document.removeEventListener('lostpointercapture', lost);
+      if (handle.hasPointerCapture(pointer)) handle.releasePointerCapture(pointer);
+    }
+    const lost = e => { if (stop === finish && e.pointerId === pointer && (e.target === handle || !handle.isConnected)) finish(); };
+    stop = finish;
+    handle.focus({ preventScroll: true }); handle.setPointerCapture(pointer);
+    window.addEventListener('blur', finish); document.addEventListener('keydown', escape);
+    document.addEventListener('lostpointercapture', lost);
+    handle.onpointermove = e => {
+      if (stop !== finish || e.pointerId !== pointer) return;
+      if (!valid()) { finish(); return; }
+      if (!moved && Math.abs(e.clientY - startY) < 5) return;
+      moved = true; row.dataset.dragging = 'true'; x = e.clientX; y = e.clientY;
+      preview(); if (!frame) scroll();
+    };
+    handle.onpointerup = e => {
+      if (stop !== finish || e.pointerId !== pointer) return;
+      x = e.clientX ?? x; y = e.clientY ?? y;
+      const to = moved && valid() ? position() : -1;
+      finish(); if (to >= 0) move(to);
+    };
+    handle.onpointercancel = handle.onlostpointercapture = e => {
+      if (stop === finish && (!e || e.pointerId === pointer)) finish();
+    };
+  }
+  return { start, cancel };
 }
 
 function configLineupPicker(spec, id) {

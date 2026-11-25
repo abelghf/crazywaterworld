@@ -1,4 +1,7 @@
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import { loadProtocol } from '../src/proto.mjs';
 import { defaultSettings } from '../src/automation-settings.mjs';
 import { createActionGuard } from '../src/automation-policy.mjs';
@@ -111,6 +114,124 @@ await test('库存消耗后重排游戏等待项，先复核库存和开工状�
   assert.deepEqual(refill.actions.map(s=>s.body.productId),['产品甲']);
   assert((await run(refill)).results[0].ok);
   assert(!plan().actions.some(s=>s.queueReplan));
+});
+
+await test('强制补库按实际库存触发，撤单、加速后跨轮独占本厂，入库达标再恢复', async () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'cw-factory-refill-'));
+  const previous = process.env.CW_DATA_DIR;
+  process.env.CW_DATA_DIR = directory;
+  try {
+    for (const strategy of ['smart','nativeSimulation']) {
+      const {client, config, player, settings, state} = fixture();
+      const building = state.building, buildingId = building.buildingId;
+      const rule = {buildingId, productId:'产品甲', trigger:1, target:4};
+      Object.assign(settings.factory, {strategy, demandFirst:false, keepStock:1, simulatedTargets:['产品乙'], refillRules:[rule]});
+      settings.resources.keepAccelerators = 3;
+      building.type = '材料厂'; building.product = [];
+      const survey = () => ({now:now(), serverNow:now(), stock:state.stock, have:id => state.stock.get(id) ?? 0,
+        stockKnown:true, stockCap:50, factorySlots:6, player, buildings:[building], factories:[building],
+        orders:[], weekOrder:new Map(), orderOfTheDay:{}, notes:[]});
+      const plan = () => planWorld(survey(), {config, settings, trackRefills:true, enabled:kind => kind === 'startProduce'});
+      const run = plan => runWorld(client, protocol, plan, {config, player, settings, allowMutate:true});
+      const queue = building.factory.factoryQ, done = building.factory.finishedProducts;
+      queue.push({idx:0, productId:'产品乙', finishTime:now()+110}, {idx:1, productId:'产品乙'}, {idx:2, productId:'产品甲'}, {idx:3, productId:'产品乙'});
+      state.stock.set('加速器',5); state.stock.set('产品甲',1);
+      const expected = ['CancelFactoryProduceRequest','CancelFactoryProduceRequest','SpeedUpFactoryProduceRequest'];
+      assert.deepEqual(plan().actions.map(s => s.request), expected.slice(0,2), '默认只撤下等待中的其他产品');
+      settings.factory.refillSpeedUp = true;
+      const first = plan();
+      assert.deepEqual(first.actions.map(s => s.request), expected);
+      assert.deepEqual(first.actions.map(s => s.body.index), [3,1,0]);
+      const sendStart = client.sendWatch.bind(client), writes = [];
+      client.sendWatch = async (name,body,options) => {
+        try { options.beforeSend?.(); }
+        catch (error) { throw Object.assign(new Error(error.message, {cause:error}), {notSent:true}); }
+        writes.push(name);
+        if (name === 'StartFactoryProduceRequest') return sendStart(name,body,options);
+        assert.equal(body.buildingId,buildingId);
+        const index = queue.findIndex(j => j.idx === body.index);
+        if (name === 'SpeedUpFactoryProduceRequest') {
+          assert.deepEqual(body.speedUp,{type:2,useNum:2}); state.stock.set('加速器',3);
+          done.push({id:queue[index].productId,num:1});
+        } else assert(!queue[index].finishTime);
+        queue.splice(index,1);
+        if (!queue[0]?.finishTime && queue[0]) queue[0].finishTime = now()+60;
+        return {seq:writes.length};
+      };
+      state.stock.set('产品甲',4);
+      assert((await run(first)).results.every(e => e.skipped)); assert.deepEqual(writes,[]);
+      state.stock.set('产品甲',1);
+      queue[3].finishTime = now()+200;
+      assert((await run({actions:first.actions.slice(0,1)})).results[0].skipped);
+      delete queue[3].finishTime;
+      settings.factory.refillRules = [];
+      assert((await run(first)).results.every(e => e.skipped)); assert.deepEqual(writes,[]);
+      settings.factory.refillRules = [rule];
+      settings.factory.refillSpeedUp = false;
+      const interrupted = await run(first);
+      assert(interrupted.results.at(-1).skipped); assert.deepEqual(writes,expected.slice(0,2));
+      assert.equal(queue[0].productId,'产品乙'); assert.equal(state.stock.get('加速器'),5);
+      const accelerate = {actions:[first.actions.at(-1)]};
+      settings.factory.refillSpeedUp = true;
+      const sendBeforeToggle = client.sendWatch;
+      client.sendWatch = (name,body,options) => {
+        settings.factory.refillSpeedUp = false;
+        return sendBeforeToggle(name,body,options);
+      };
+      assert.match((await run(accelerate)).results[0].error, /设置或生产格已变化/, '发送前关闭时撤回旧加速计划');
+      assert.deepEqual(writes,expected.slice(0,2)); assert.equal(state.stock.get('加速器'),5);
+      client.sendWatch = sendBeforeToggle;
+      settings.factory.refillSpeedUp = true;
+      assert((await run(accelerate)).results[0].ok); assert.deepEqual(writes,expected);
+      state.stock.set('产品甲',2); // above trigger, one target item already in production
+      const refill = plan(); assert.deepEqual(refill.actions.map(s => s.body.productId),['产品甲']);
+      assert((await run(refill)).results.every(e => e.ok));
+      assert.equal(plan().actions.length,0);
+      queue.length = 0; done.push({id:'产品甲',num:2});
+      assert.equal(plan().actions.length,0,'待收达到目标时仍不能排其他物品');
+      done.length = 0; state.stock.set('产品甲',4);
+      assert(plan().actions.some(s => !s.refillRule && s.body.productId === '产品乙'));
+      state.stock.set('产品甲',2);
+      assert(!plan().actions.some(s => s.refillRule),'入库达标后要再次降至触发值才接管');
+
+      settings.factory.refillRules = [rule, {buildingId, productId:'产品乙', trigger:0, target:3}];
+      state.stock.set('产品甲',1); state.stock.set('产品乙',0);
+      const firstShortage = plan();
+      assert.deepEqual(firstShortage.actions.map(s => s.body.productId), Array(3).fill('产品甲'));
+      queue.push({idx:0,productId:'产品乙',finishTime:now()+120},{idx:1,productId:'产品乙'});
+      const cancel = plan().actions.find(s => s.request === 'CancelFactoryProduceRequest');
+      const sendBeforeChange = client.sendWatch;
+      client.sendWatch = (...args) => {
+        settings.factory.refillRules = settings.factory.refillRules.toReversed();
+        return sendBeforeChange(...args);
+      };
+      assert.match((await run({actions:[cancel]})).results[0].error, /设置或生产格已变化/, '发出撤单前改为优先乙，不撤下乙的队列');
+      assert.equal(queue.length,2);
+      client.sendWatch = sendBeforeChange;
+      settings.factory.refillRules = settings.factory.refillRules.toReversed(); queue.length = 0;
+      state.stock.set('产品乙',1); state.stock.set('产品甲',4);
+      const secondShortage = plan();
+      assert.deepEqual(secondShortage.actions.map(s => s.body.productId), ['产品乙','产品乙'], '等待期间库存略有回升仍补至目标');
+      state.stock.set('产品甲',0);
+      assert((await run(secondShortage)).results.every(e => e.skipped), '甲再次缺货时不可执行低优先级乙的旧计划');
+      const urgent = plan();
+      assert.deepEqual(urgent.actions.map(s => s.body.productId), Array(4).fill('产品甲'), '高优先级物品重新触发即接管工厂');
+      state.stock.set('产品甲',4);
+      assert.deepEqual(plan().actions.map(s => s.body.productId), ['产品乙','产品乙'], '甲达标后继续补库存仍高于触发值的乙');
+      state.stock.set('产品甲',0); plan();
+      settings.factory.refillRules = settings.factory.refillRules.toReversed();
+      assert((await run(urgent)).results.every(e => e.skipped), '调整优先级后停止旧排产计划');
+      assert((await run(secondShortage)).results.every(e => e.ok));
+      assert.equal(plan().actions.length, 0, '第二种物品在产时保留队列，等实际入库');
+      queue.length = 0; state.stock.set('产品乙',3);
+      assert.deepEqual(plan().actions.map(s => s.body.productId), Array(4).fill('产品甲'), '按新优先级先补齐乙，再继续甲');
+      state.stock.set('产品甲',4);
+      assert(!plan().actions.some(s => s.refillRule));
+    }
+  } finally {
+    if (previous === undefined) delete process.env.CW_DATA_DIR; else process.env.CW_DATA_DIR = previous;
+    fs.rmSync(directory,{recursive:true,force:true});
+  }
 });
 
 await test('原生开关优先当前产物，关闭后按相同角色与工厂恢复原目标', async () => {

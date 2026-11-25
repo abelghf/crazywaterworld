@@ -152,6 +152,29 @@
 .config-order-tools .config-option:hover { background:transparent }
 .config-add { display:flex; gap:8px; align-items:center; padding:8px 0 4px }
 .config-add select { flex:1; min-width:0; width:auto }
+[data-refill-products] { container:refill-products / inline-size }
+.config-refill-line { display:grid; grid-template-columns:minmax(0,1.1fr) minmax(20rem,1.3fr) auto; align-items:center; gap:8px 14px }
+.config-refill-product [data-slot=native-select-wrapper] { width:12rem; flex:0 1 12rem }
+.config-refill-fields { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:12px }
+.config-refill-fields label { display:grid; grid-template-columns:auto minmax(0,1fr); align-items:center; gap:6px }
+.config-refill-fields [data-slot=input] { width:100% }
+@container refill-products (width < 45rem) {
+  .config-refill-line { grid-template-columns:minmax(0,1fr) auto }
+  .config-refill-product { grid-column:1 / -1 }
+}
+@container refill-products (width < 32rem) {
+  .config-refill-line { grid-template-columns:minmax(0,1fr) }
+  .config-refill-fields label { grid-template-columns:minmax(0,1fr); gap:3px }
+}
+.config-refill-add { display:flex; align-items:center; flex-wrap:wrap; gap:8px; padding:12px 16px }
+[data-refill-rules]:not(:empty) + .config-refill-add { border-top:1px solid var(--border) }
+.config-refill-add > [data-slot=native-select-wrapper] { flex:0 1 14rem }
+@media (max-width:639px) {
+  .config-refill-add { display:grid; grid-template-columns:minmax(0,1fr) auto; padding:10px 12px }
+  .config-refill-add > [data-slot=native-select-wrapper] { grid-column:1 }
+  .config-refill-add button { grid-column:2; grid-row:1 / span 2 }
+  .config-refill-add:has([hidden]) button { grid-row:1 }
+}
 .config-trial-lineup { display:grid; grid-template-columns:minmax(max-content,1fr) minmax(0,420px); align-items:center; column-gap:8px; padding:2px 0 }
 .config-trial-lineup select { min-width:0; text-overflow:ellipsis }
 .config-fleet-lineup { display:grid; grid-template-columns:max-content minmax(0,300px) max-content; align-items:center; gap:8px; padding:2px 0 }

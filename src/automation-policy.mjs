@@ -119,7 +119,7 @@ export function factoryItemSpeedEnabled(factory, productId) {
 }
 
 export function worldActionAllowed(settings, step, config) {
-  if (!settings) return !step.queueReplan && !step.materialRule;
+  if (!settings) return !step.refillRule && !step.queueReplan && !step.materialRule;
   if (!worldPreferenceEnabled(settings, step.kind)) return false;
   if (step.kind === 'denyOrder') {
     if (step.materialRule === 'blockedMaterials') return step.requirements.some(item => settings.resident.blockedMaterials.includes(item.id));
@@ -133,6 +133,11 @@ export function worldActionAllowed(settings, step, config) {
   const type = typeof id === 'string' ? (config?.tables?.BuildingCfg?.data ?? []).map(row => row.buildingType).sort((a, b) => b.length - a.length).find(t => id.endsWith(t)) : null;
   if (['build', 'upgrade', 'weekFactory'].includes(step.kind) && settings.building.disabledTypes.some(value => value === id || value === type)) return false;
   if (['startProduce', 'speedUpProduce'].includes(step.kind) && settings.factory.disabledTypes.some(value => value === id || value === type)) return false;
+  if (step.refillRule) {
+    if (step.request === 'SpeedUpFactoryProduceRequest' && !settings.factory.refillSpeedUp) return false;
+    return settings.factory.produce && !!settings.factory.refillRules?.some(r => r.buildingId === id
+      && r.productId === step.refillRule.productId && r.trigger === step.refillRule.trigger && r.target === step.refillRule.target);
+  }
   if (step.queueReplan) return settings.factory.produce && settings.factory.demandFirst && settings.factory.strategy !== 'nativeSimulation'
     && JSON.stringify(settings.factory.demandPriority) === step.verify.priority;
 

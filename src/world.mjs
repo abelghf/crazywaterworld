@@ -26,7 +26,8 @@ import { residentMaterialRule } from './resident-materials.mjs';
 import { readWeekOrder } from './activities.mjs';
 import { RESOURCE, displayMaterial } from './config.mjs';
 import { captureFarmMaterialState, farmInventory, settleFarmMaterialState } from './farm-planting.mjs';
-import { runFactoryProductionBatch, confirmFactoryProductionBeforeHarvest, prepareQueueReplan } from './factory-production.mjs';
+import { runFactoryProductionBatch, confirmFactoryProductionBeforeHarvest, prepareFactoryInterruption } from './factory-production.mjs';
+import { selectFactoryRefill, refillGoal, refillHistoryFor, refillRecipe, planFactoryRefill, readyRefillUnits } from './factory-refill.mjs';
 import { readOrderReservedStock } from './order-reservations.mjs';
 import { activityProductionEnabled } from './activity-automation.mjs';
 import { createProductionEligibility, factoryRecipeAvailability, factoryRecipeCosts, insertionRecipeReady } from './production-eligibility.mjs';
@@ -687,6 +688,8 @@ export function planWorld(survey, {
   extraDemand = [],
   reserveFactoryInputs = false,
   factoryWaitHistory,
+  refillHistory,
+  trackRefills = false,
   checkShortFeeds = true,
 } = {}) {
   const { now, have } = survey;
@@ -1238,8 +1241,32 @@ export function planWorld(survey, {
     : [...detailedNeeds.values()].some(need => (need.productionBySource[demandPriority[i]] ?? 0) > 0));
   const fullForInsertion = id => survey.stockCap > 0 && survey.stockKnown !== false
     && warehouseCount(id) + (incoming.get(id) ?? 0) >= survey.stockCap;
+  const refillProducts = new Map();
+  if (enabled('startProduce') && settings?.factory.produce && settings.factory.refillRules?.length) {
+    refillHistory ??= refillHistoryFor(survey.player);
+    for (const b of survey.factories) {
+      if (!(b.level > 0) || blockedFactory(b) || isNative(b)) continue;
+      const id = b.buildingId;
+      const rules = settings.factory.refillRules.filter(rule => rule.buildingId === id);
+      if (!rules.length) continue;
+      if (survey.stockKnown === false || !(survey.stockCap > 0)) {
+        if (!rules.some(r => refillRecipe(config, b, r, survey.festivals, survey.serverNow ?? now))) continue;
+        refillProducts.set(id, null);
+        factoryReasons.set(b.buildingId, '等待确认补库物品库存'); continue;
+      }
+      const selected = selectFactoryRefill(rules, b, {config, festivals:survey.festivals, now:survey.serverNow ?? now,
+        owned:warehouseCount, cap:survey.stockCap, history:refillHistory, record:trackRefills});
+      if (!selected) continue;
+      const {rule, recipe} = selected;
+      refillProducts.set(id, rule.productId);
+      factoryReasons.set(b.buildingId, '优先补' + name(rule.productId) + '至 ' + refillGoal(rule, survey.stockCap) + ' 件');
+      actions.push(...planFactoryRefill(b, rule, recipe, { survey, owned:warehouseCount, incoming, free, reserve, credit,
+        useAccelerators:settings.factory.refillSpeedUp, factoryName:buildingName(b), productName:name(rule.productId) }));
+    }
+  }
+  const refilling = new Set(refillProducts.keys());
   let facilities = survey.factories.filter(b => {
-    if (!(b.level > 0) || blockedFactory(b)) return false;
+    if (!(b.level > 0) || blockedFactory(b) || refilling.has(b.buildingId)) return false;
     const entry = survey.factoryInsertions?.[b.buildingId];
     if (!entry) return true;
     const time = survey.serverNow ?? now;
@@ -1250,8 +1277,7 @@ export function planWorld(survey, {
     ? waitingQueueChanges({
       facilities: facilities.filter(b => !isNative(b) && !survey.factoryInsertions?.[b.buildingId]),
       queues: dispatch.queues, claims: queueClaims, priority: demandPriority, recipes: produceRows, timing, now: survey.serverNow ?? now,
-      stockUnits: id => stockTarget - warehouseCount(id) - survey.factories.reduce((total, b) =>
-        total + (b.factory.finishedProducts ?? []).reduce((n, item) => item.id === id ? n + Number(item.num) : n, 0), 0), stockRank,
+      stockUnits: id => stockTarget - warehouseCount(id) - readyRefillUnits(survey.factories, id), stockRank,
       newRank: row => roomForRecipe(row) > 0 && (row.costItem ?? []).every(([id,n]) => recipeFree(row,id) >= n)
         ? recipeRank(row) : Infinity,
     }) : new Map();
@@ -1605,7 +1631,7 @@ export function planWorld(survey, {
         room: row => Math.min(roomForRecipe(row), orderNeedsProduction(row.itemId) ? Infinity : Math.max(0,stockTarget-projectedStock(row.itemId))),
         defaultHeads() {
           const baseline = planWorld(survey, { config, allowSpeedUp, allowReroll, minOrderExp, maxUpgrades,
-            enabled, settings, blockedCollectionTypes, usage, extraDemand, factoryWaitHistory:new Map(factoryWaitHistory), checkShortFeeds:false });
+            enabled, settings, blockedCollectionTypes, usage, extraDemand, factoryWaitHistory:new Map(factoryWaitHistory), refillHistory, checkShortFeeds:false });
           const heads = new Map();
           for (const step of baseline.actions) if (step.request === 'StartFactoryProduceRequest' && !heads.has(step.body.buildingId))
             heads.set(step.body.buildingId,step.body.productId);
@@ -1758,6 +1784,7 @@ export function planWorld(survey, {
     for (const b of survey.factories) {
       if (settings && (!enabled('speedUpProduce') || blockedFactory(b))) continue;
       for (const job of b.factory.factoryQ ?? []) {
+        if (refilling.has(b.buildingId) && refillProducts.get(b.buildingId) !== job.productId) continue;
         if (!job.productId || !Number.isSafeInteger(job.idx ?? 0) || (job.idx ?? 0) < 0
           || !Number.isSafeInteger(job.finishTime) || job.finishTime <= serverNow) continue;
         const queued = speedQuota.get(job.productId);
@@ -1797,7 +1824,7 @@ export function planWorld(survey, {
     if (left === speeders) notes.push(`${SPEED_UP_ITEM} 有 ${speeders} 个，但没有等待中的建造或生产`);
   }
 
-  return { actions, notes, factoryReasons, queueChanges, cargoLoadLimits, upgradeChecks, upgradeReasons: upgradeChecks.map(upgradeReason), orderDecisions, allowReroll, minOrderExp,
+  return { actions, notes, factoryReasons, refilling, queueChanges, cargoLoadLimits, upgradeChecks, upgradeReasons: upgradeChecks.map(upgradeReason), orderDecisions, allowReroll, minOrderExp,
     demands: detailedNeeds ? [...detailedNeeds].map(([id, need]) => ({ id, ...need })) : [], reserved: [...reserved].filter(([, n]) => n > 0) };
 }
 
@@ -2235,7 +2262,7 @@ export async function runWorld(client, protocol, plan, {
         const candidate = plan.actions[next];
         // A stale stock target can reject a whole batch at preflight. Settle
         // demand jobs before validating optional refill jobs from the same factory.
-        if (candidate.request !== step.request || candidate.response || candidate.body.buildingId !== step.body.buildingId
+        if (candidate.request !== step.request || candidate.response || candidate.body.buildingId !== step.body.buildingId || candidate.refillRule !== step.refillRule
           || candidate.demandDriven !== step.demandDriven) break;
         batch.push(candidate);
       }
@@ -2286,6 +2313,7 @@ export async function runWorld(client, protocol, plan, {
       if (step.queueReplan) client.on?.('message',observeQueue);
       try {
         checkDemandPlan(step);
+        if (step.refillRule && step.request === 'StartFactoryProduceRequest') throw new AutomationSkip('当前协议无法核对优先补库排产');
         // The official client waits for a business Response for planting. Keep
         // Prompt attribution until that reply/timeout, not a short silent window.
         const response = step.request === 'FarmPlantRequest' ? 'OkResponse' : step.response;
@@ -2335,13 +2363,14 @@ export async function runWorld(client, protocol, plan, {
           checks.set(step.body.buildingId,{until:Date.now()+300000,pending:true});
         }
         let waterSnapshot, checkSpeedTime, interruption;
-        if (step.queueReplan) {
-          interruption = await prepareQueueReplan(client, protocol, step, { player,
+        if (step.refillRule || step.queueReplan) {
+          interruption = await prepareFactoryInterruption(client, protocol, step, { player, config,
+            getSettings: () => getSettings?.() ?? settings,
             enabled: () => !queueChanged && enabled(step.kind) && worldActionAllowed(getSettings?.() ?? settings, step, config) });
           waterSnapshot = interruption.water;
         }
-        if (step.verify && (step.kind === 'speedUpProduce' || step.request === 'FarmSpeedUpRequest')) {
-          waterSnapshot = normalize(await client.request('OnWaterRequest', {}, 'OnWaterResponse'));
+        if (step.verify && (step.request === 'SpeedUpFactoryProduceRequest' || step.request === 'FarmSpeedUpRequest')) {
+          waterSnapshot ??= normalize(await client.request('OnWaterRequest', {}, 'OnWaterResponse'));
           const building = waterSnapshot.building?.find(b => b.buildingId === step.body.buildingId);
           const farm = step.request === 'FarmSpeedUpRequest';
           const jobs = building?.factory?.factoryQ?.filter(row => (row.idx ?? 0) === step.body.index);

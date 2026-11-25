@@ -73,6 +73,16 @@ test('只对相关工厂推送唤醒，推送风暴合并并保持最短一秒',
   assert.equal(f.state.wakes,1); assert.equal(f.scheduler.version(),1); assert.equal(f.scheduler.nextAt(),1_001_000);
   f.scheduler.dispose();
 });
+test('满队列也按补库间隔核对库存，目标物品推送提前唤醒串行检查', () => {
+  const f = fixture();
+  f.settings.factory.refillRules = [{buildingId:'1材料厂',productId:'淡水',trigger:0,target:null}];
+  f.scheduler.checked([factory([job(0,2000)])],{slots:1});
+  assert.equal(f.scheduler.nextAt(),1_030_000);
+  const push = itemId => f.client.emit('message',{name:'SCUpdateItem',body:{items:[{itemId,num:0}]}});
+  push('其他物品'); assert.equal(f.state.wakes,0);
+  push('淡水'); assert.equal(f.scheduler.nextAt(),1_001_000);
+  f.scheduler.dispose();
+});
 test('最终读取前自身推送可消化，读取过程中的新推送不得丢失', () => {
   const f=fixture(); f.scheduler.checked([factory([job(0,1100)])],{slots:1});
   f.push([factory([job(0,1090)])]); const version=f.scheduler.version();
