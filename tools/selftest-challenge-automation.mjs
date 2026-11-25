@@ -24,6 +24,27 @@ let count = 0, ledgerId = 0;
 const ledger = () => createUsageLedger('simulated', { file: path.join(root, 'usage-' + ++ledgerId + '.json') });
 const test = async (name, fn) => { await fn(); count++; console.log('通过：' + name); };
 
+function enablePirateHuntAndSweeps(f, type) {
+  f.settings.pirate.enabled = f.settings.pirateHunt.enabled = f.settings.schedule.pirate = true;
+  Object.assign(f.settings.pirateSweep, { types: [String(type)], ['times' + type]: -1 });
+  f.player.vip = { vipLevel: 0 };
+  f.config.tables.PirateParamCfg = { data: [{ paramName: '每日野怪扫荡次数', paramValue: 2 }] };
+  f.config.tables.VipLevelCfg = { data: [{ level: 0, effects: [] }] };
+  let used = 0;
+  const request = f.client.request;
+  f.client.request = async (name, body, response) => {
+    if (name === 'PirateSweepRequest') {
+      f.client.writes.push({ name, body });
+      used++;
+      return { reward: { asset: [{ id: '木材', num: 1 }] } };
+    }
+    if (name === 'MonthCardRequest') return { cardItem: [] };
+    const data = await request(name, body, response);
+    if (name === 'AllPirateRequest') data.sweepTimes = used;
+    return data;
+  };
+}
+
 function fixture() {
   const settings = defaultSettings(), client = new EventEmitter(), state = createChallengeRun();
   client.connected = true;
@@ -485,29 +506,34 @@ try {
     await round();
     assert.deepEqual(f.client.writes.map(write => write.body.uid), [202]);
   });
+  await test('同开首杀与扫荡时先挑战，战果延迟或重新启动时保留次数，舰队忙时直接扫荡', async () => {
+    for (const mode of ['win', 'wait', 'busy', 'lose']) {
+      const f = pirateAdvanceFixture({ mode }), l = ledger();
+      enablePirateHuntAndSweeps(f, 1);
+      f.state.level = 1;
+      f.config.tables['1_SeasonTaskCfg'].data[0].maxPirateLevel = 2;
+      if (mode === 'busy') f.fleet.state = 2;
+      const round = () => runLoop(f.client, protocol, { config: f.config, player: f.player, rounds: 1,
+        allowMutate: true, getSettings: () => f.settings, isEnabled: key => key === 'pirate', usageLedger: l });
+      await round();
+      if (mode === 'wait') {
+        await round();
+        assert.deepEqual(f.client.writes.map(w => w.name), ['ChallengePirateRequest']);
+        f.state.level = 2;
+        await round();
+      }
+      const cleared = mode === 'busy' || mode === 'lose' ? 201 : 202;
+      const expected = mode === 'busy' ? [] : [['ChallengePirateRequest', 202]];
+      expected.push(['PirateSweepRequest', cleared], ['PirateSweepRequest', cleared]);
+      assert.deepEqual(f.client.writes.map(w => [w.name, w.body.uid]), expected, mode);
+    }
+  });
   await test('首杀到顶或连败停止后，挂机仍扫荡所选种类的最高已首杀等级', async () => {
     for (const stop of ['到顶', '连败']) {
       const f = pirateAdvanceFixture({ types: [1, 2, 3] }), state = createChallengeRun(), l = ledger();
-      f.settings.pirate.enabled = f.settings.pirateHunt.enabled = f.settings.schedule.pirate = true;
-      Object.assign(f.settings.pirateSweep,{types:['3'],times3:-1});
+      enablePirateHuntAndSweeps(f, 3);
       f.state.levels[3] = 1;
       f.config.tables['1_SeasonTaskCfg'].data[0].maxPirateLevel = stop === '到顶' ? 1 : 3;
-      f.player.vip = { vipLevel: 0 };
-      f.config.tables.PirateParamCfg = { data: [{ paramName: '每日野怪扫荡次数', paramValue: 2 }] };
-      f.config.tables.VipLevelCfg = { data: [{ level: 0, effects: [] }] };
-      let sweeps = 0;
-      const request = f.client.request;
-      f.client.request = async (name, body, response) => {
-        if (name === 'PirateSweepRequest') {
-          assert.equal(body.uid, 401);
-          sweeps++;
-          return { reward: { asset: [{ id: '木材', num: 1 }] } };
-        }
-        if (name === 'MonthCardRequest') return { cardItem: [] };
-        const data = await request(name, body, response);
-        if (name === 'AllPirateRequest') data.sweepTimes = sweeps;
-        return data;
-      };
       const round = () => runChallengeRound(f.client, f.config, { player: f.player, state,
         getSettings: () => f.settings, ledger: l, mode: 'pirate' });
       f.state.mode = stop === '到顶' ? 'win' : 'lose';
@@ -517,8 +543,8 @@ try {
       const battles = f.client.writes.length;
       await runLoop(f.client, protocol, { config: f.config, player: f.player, rounds: 1, allowMutate: true,
         getSettings: () => f.settings, isEnabled: key => key === 'pirate', usageLedger: l, challengeRun: state });
-      assert.equal(sweeps, 2);
-      assert.equal(f.client.writes.length, battles);
+      assert.deepEqual(f.client.writes.slice(battles).map(w => [w.name, w.body.uid]),
+        [['PirateSweepRequest', 401], ['PirateSweepRequest', 401]]);
     }
   });
   await test('海盗自动派遣进入挂机串行队列，每轮最多一次，不需手动启动', async () => {

@@ -1,6 +1,7 @@
 import { runStages } from './stages.mjs';
 import { runTrialStages } from './trials.mjs';
 import { pirateAutoDay, runPirateAdvance } from './pirate-advance.mjs';
+import { pirateHuntEnabled } from './pirates.mjs';
 import { checkFleetSettlement } from './fleet-settlement.mjs';
 
 // 断线重连沿用本次进度。重开挂机时主线和试炼重新计数，海盗先检查当日轮次。
@@ -76,10 +77,7 @@ export async function runChallengeRound(client, config, { player, getSettings, s
         () => isTrialBusy(raidId), options => runTrialStages(client, player, config, raidId, { ...options, signal, wait, maxFailures: 1, maxWins: 1 }));
     }
   }
-  const pirateEnabled = () => {
-    const settings = getSettings();
-    return settings?.pirate?.enabled && settings.pirateHunt.enabled;
-  };
+  const pirateEnabled = () => pirateHuntEnabled(getSettings());
   if (mode !== 'progression' && pirateEnabled() && current()) {
     if (isPirateBusy()) { report({ key: 'pirateAuto', label: '海盗首杀', skipped: true, reason: '手动首杀推进中，本轮跳过' }); return; }
     try {

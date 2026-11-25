@@ -2835,7 +2835,7 @@ export function createConsole({ host = '127.0.0.1', port = 17321, onLog, recover
             return {...output({actions:[],notes:['任务顺序：'+settings.fleetDispatch.priority.map(k=>dispatchLabels[k]).join(' → '),'意向仅表示配置允许；派遣前仍核对目标和费用，正在执行的任务不抢占。']},{fleets:table.length},'舰队调度'),viewOnly:true,dispatch:{fleets:table.map(f=>({name:f.buildingId,reason:[f.reason,...f.reserved.map(r=>'预留给'+r),'允许顺序：'+(f.intents.map(i=>i.label).join(' → ')||'无'),'当前目标：'+(f.targetGrid??'主城')].filter(Boolean).join('；')}))}};
           }
           if(category==='pirateSweep'){
-            const state=await readPirateSweeps(client,config,session.player,settings,usageFor(session).keyRecords()),notes=[];
+            const state=await readPirateSweeps(client,config,session.player,settings,usageFor(session)),notes=[];
             if(state.left!==null)notes.push('今日剩余 '+state.left+'/'+state.limit+' 次（三种海盗共用）');
             for(const row of state.allocations)notes.push(row.name+' · 挂机已用 '+row.used+' 次，'+(row.times===-1?'使用剩余次数':'每日设定 '+row.times+' 次'));
             if(state.reason)notes.push(state.reason);if(!settings.schedule.pirate)notes.push('每日免费扫荡已关闭');

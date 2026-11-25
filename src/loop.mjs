@@ -11,6 +11,7 @@ import { runResourceFields } from './resource-field-automation.mjs';
 import { runHeroRaidAutomation } from './hero-raid-automation.mjs';
 import { merchantMonitorSeconds, watchMerchant } from './merchant-monitor.mjs';
 import {runPirateSweeps} from './pirate-sweeps.mjs';
+import { pirateHuntEnabled } from './pirates.mjs';
 import { runLeagueChallenge } from './league-challenge.mjs';
 import { recoverLeagueOrder } from './league-order.mjs';
 import {claimGuildTitleReward} from './guild-title-rewards.mjs';
@@ -603,6 +604,19 @@ export async function runLoop(client, protocol, {
       prepareDispatch: () => refreshCityWarReservations(client, protocol, config, player, getSettings),
       wait: (ms, _value, { signal } = {}) => sleep(ms, signal),
       signal: typeof stop.throwIfAborted === 'function' ? stop : undefined };
+    async function checkPirateSweeps() {
+      if (!isEnabled || !getSettings() || !enabled('pirate')) return;
+      try {
+        await runPirateSweeps(client, config, player, {
+          getSettings, ledger: usageLedger, enabled: () => enabled('pirate'), scheduler: rewards,
+          report(entry) {
+            summary.dailies.results.push(entry);
+            if (!entry.skipped) summary.dailies.planned++;
+            stepLog('dailies')({ ...entry, title: entry.label, taskKey: 'pirate' });
+          },
+        });
+      } catch (error) { phaseFailure('dailies', '海盗日常扫荡', error, 'pirate'); }
+    }
     async function checkDispatch() {
       if (!scheduler.active()) return;
       dispatchSettingsPending = false;
@@ -618,7 +632,7 @@ export async function runLoop(client, protocol, {
       // 城战时间窗先核实；其余任务按配置检查，空闲且无预留的舰队可共享。
       if(getSettings()?.cityWar.reserveDuringWar)await checkCityWar();
       for (const task of dispatchOrder(getSettings())) {
-        if (task === 'pirateHunt' && !pirateChecked) {
+        if (task === 'pirateHunt' && !pirateChecked && pirateHuntEnabled(getSettings())) {
           pirateChecked = true;
           await runChallengeRound(client, config, { ...challengeOptions, mode: 'pirate', report: serviceReport('world', '海盗首杀') });
         }
@@ -957,10 +971,8 @@ export async function runLoop(client, protocol, {
         } catch (error) { phaseFailure('dailies', '折扣商店', error, 'shop'); }
       }
       yield;
-      if(isEnabled&&settings&&enabled('pirate')){
-        try{await runPirateSweeps(client,config,player,{getSettings,ledger:usageLedger,enabled:()=>enabled('pirate'),scheduler:rewards,report:entry=>{summary.dailies.results.push(entry);if(!entry.skipped)summary.dailies.planned++;stepLog('dailies')({...entry,title:entry.label,taskKey:'pirate'});}});}
-        catch(error){const entry={title:'海盗日常扫荡',taskKey:'pirate',ok:false,error:error.message};summary.dailies.results.push(entry);stepLog('dailies')(entry);}
-      }
+      const sweepAfterDispatch = !pirateChecked && pirateHuntEnabled(getSettings());
+      if (!sweepAfterDispatch) await checkPirateSweeps();
       if (settings?.schedule?.leagueChallenge && enabled('leagueChallenge')) {
         const taskKey = 'leagueChallenge';
         try {
@@ -1450,6 +1462,7 @@ export async function runLoop(client, protocol, {
       await checkExtended();
       yield;
       await checkDispatch();
+      if (sweepAfterDispatch) await checkPirateSweeps();
     }
     await scheduler.runSteps(mainSteps(), {
       nextAt: () => Math.min(mainScanNext(), worldOnlineNext(), meritNext()),

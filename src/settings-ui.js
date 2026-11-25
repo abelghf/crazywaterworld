@@ -367,7 +367,7 @@ const configGroups = [
     configField('museum.factorMode', '探宝倍数模式', 'choice', { parent: 'museum.enabled', options: [['materials', '材料筛选模式'], ['recommended', '按推荐英雄选择']], help: '按推荐英雄选择时，优先选择符合地图推荐条件的英雄，分别设置满队、不足满队和无推荐英雄时的处理方式。探险时长按游戏地图配置计算。' }),
     configField('museum.factor', '常规探宝倍数', 'choice', { parent: 'museum.enabled', when: d => d.museum.factorMode === 'materials', numeric: true, options: museumFactorOptions, help: '未解锁时按当前最高可用倍数执行，保留已选设置。' }),
     configField('museum.fullRecommendedFactor', '推荐英雄满队倍数', 'choice', { parent: 'museum.enabled', when: d => d.museum.factorMode === 'recommended', numeric: true, options: museumFactorOptions, help: '推荐英雄足以组成完整队伍时使用；未解锁时按当前最高可用倍数执行。' }),
-    configField('museum.partialRecommendedFactor', '推荐英雄不足满队倍数', 'choice', { parent: 'museum.enabled', when: d => d.museum.factorMode === 'recommended', numeric: true, options: museumFactorOptions, help: '有推荐英雄但不足一队时使用，其余位置由可用英雄补齐；未解锁时按当前最高可用倍数执行。' }),
+    configField('museum.partialRecommendedFactor', '推荐英雄不足满队倍数', 'choice', { parent: 'museum.enabled', when: d => d.museum.factorMode === 'recommended', numeric: true, options: museumFactorOptions, help: '推荐英雄不足一队时，空位优先用低品质英雄补齐。同品质优先选本体与专武合计星级较低的英雄。倍数未解锁时按当前最高可用倍数执行。' }),
     configField('museum.noRecommendedFallback', '无推荐英雄时兜底', 'switch', { parent: 'museum.enabled', when: d => d.museum.factorMode === 'recommended', help: '没有可用推荐英雄时，按兜底倍率派遣其他可用英雄；关闭则跳过该地图的新派遣。' }),
     configField('museum.noRecommendedFactor', '无推荐英雄兜底倍率', 'choice', { parent: 'museum.noRecommendedFallback', when: d => d.museum.factorMode === 'recommended' && d.museum.noRecommendedFallback, numeric: true, options: museumFactorOptions, help: '未解锁时按当前最高可用倍数执行，保留已选设置。' }),
     configField('museum.maxDispatches', '每轮最多派遣队伍', 'number', { parent: 'museum.enabled', unit: '队', help: '0 表示不限，仍需有空闲队伍、英雄和足够材料。' }),
@@ -463,7 +463,7 @@ const configGroups = [
   ] },
   { id: 'pirate-hunt', title: '海盗', category: 'world', fields: [
     configField('pirate.enabled','开启挂机'),
-    configField('schedule.pirate','每日免费扫荡'),
+    configField('schedule.pirate','每日免费扫荡','switch',{help:'同时开启自动挑战时，先检查首杀。已派出舰队的种类等战果确认后再扫荡。没有可派舰队时，按已首杀的最高等级扫荡。'}),
     configField('pirateSweep.types','免费扫荡目标','multi',{options:[['1','海盗先锋'],['2','海盗精锐'],['3','海盗头目']],selectAll:true,empty:'未选择扫荡目标',help:'三类共享每日免费次数。固定次数按先锋、精锐、头目的顺序分配，每类扫荡已首杀的最高等级。'}),
     ...['海盗先锋','海盗精锐','海盗头目'].map((name,index)=>configField('pirateSweep.times'+(index+1),name+'每日扫荡次数','number',{
       unit:'次',when:d=>d.pirateSweep.types.includes(String(index+1)),help:'填正整数指定每日次数，0 表示跳过，-1 表示使用固定次数分配后的余额。多个种类填 -1 时优先扫荡今天刷得较少的种类。',
