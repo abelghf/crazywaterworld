@@ -767,7 +767,7 @@ roundTrip(Buffer.from('RequestResponse'.repeat(200)), 'text');
   const noPirates = DAILY_DRIVERS[1010].evaluate({ task: { id: 1010, progress: 0, targetProgress: 5 }, probe: () => ({ pirates: [] }), items: new Map(), ruby: 0, now: 0, config });
   assert.equal(noPirates.status, 'waiting', 'daily task panel delegates free pirate sweeps to the independent service');
   assert.equal(noPirates.actions?.length ?? 0, 0, 'legacy daily task driver must not send unfiltered pirate sweeps');
-  assert.match(noPirates.reason, /游戏剩余次数/);
+  assert.match(noPirates.reason, /海盗.*每日免费扫荡/);
   assert.equal(noPirates.actions, undefined);
 
   const stage = DAILY_DRIVERS[1003].evaluate({ task: { id: 1003, progress: 0, targetProgress: 1 }, probe: () => null, items: new Map(), ruby: 0, now: 0, config, player: { mainlineStage: 41, level: 11 } });

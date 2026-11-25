@@ -83,7 +83,9 @@ export async function runWorldBoss(client,config,player,{getSettings,ledger,enab
    await client.request('ChallengeWorldBossRequest',{bossId:fresh.boss.bossId,fleetBuildingIds:ids},'OkResponse');
    for(const child of Object.values(dispatchKeys))ledger.updateKeyDetails(child,{...ledger.keyRecords()[child].details,dispatchAccepted:true});
    const [counter,own]=await Promise.all([read(client,'CounterInfo'),read(client,'MyFleets')]);
-   const confirmed=dailyCount(counter.counters,now(client))>0||own.fleets?.some(fleet=>ids.includes(fleet.buildingId)&&([2,3].includes(fleet.state))&&(fleet.targetGridIdx===fresh.boss.gridIdx||fleet.curGridIdx===fresh.boss.gridIdx));
+   const checkedAt=now(client);
+   if(day(checkedAt)===day(fresh.checkedAt))fresh.count=dailyCount(counter.counters,checkedAt);
+   const confirmed=fresh.count>0||own.fleets?.some(fleet=>ids.includes(fleet.buildingId)&&([2,3].includes(fleet.state))&&(fleet.targetGridIdx===fresh.boss.gridIdx||fleet.curGridIdx===fresh.boss.gridIdx));
    if(!confirmed)throw Error('首战请求已发送，但每日计数或舰队目标尚未确认');
    ledger.confirm(ticket);reconcileBossFleets(ledger,own.fleets,exactAutomationId(player.worldId));report({label:label+' · '+ids.join('、'),ok:true,status:'confirmed',reason:'服务器已确认首战派遣；各队战果、返航和阵容恢复后续核对'});
   }catch(error){if(error.prompt&&error.request==='ChallengeWorldBossRequest')sent=false;report({label,ok:false,status:error.prompt?'rejected':'unknown',error:error.message});}

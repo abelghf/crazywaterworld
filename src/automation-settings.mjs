@@ -335,10 +335,10 @@ export function hasExtraWork(settings) {
   return !!settings && ((settings.loop.world && (settings.museum.runEnabled !== false && ['enabled', 'upgrade', 'revenue', 'achievements', 'display', 'unlockCases'].some(key => settings.museum[key]) || settings.events.enabled || settings.pet.enabled || (settings.gather.enabled !== false && settings.gather.diving && settings.gather.keyOpen))) || (settings.loop.heroes && settings.heroes.enabled)
     || (settings.progression?.enabled && (settings.progression.mainline || settings.progression.trials)) || (settings.pirate?.enabled && (settings.schedule.pirate || settings.pirateHunt.enabled)));
 }
-export function hasBaseWork(settings) {
+export function hasBaseWork(settings, { includeGold = true } = {}) {
   return !!settings && ((settings.loop.world && (settings.museum.runEnabled !== false && ['enabled', 'upgrade', 'revenue', 'achievements', 'display', 'unlockCases'].some(key => settings.museum[key]) || settings.events.enabled ||
     settings.pet.enabled || (settings.gather.enabled !== false && settings.gather.diving && settings.gather.keyOpen))) ||
-    (settings.loop.dailies && settings.gold.enabled));
+    (includeGold && settings.loop.dailies && settings.gold.enabled));
 }
 export function settingsUiRules() {
   return { moduleControls: idleAutomationControls, controlFields: idleControlFields, controlGroups: Object.fromEntries(automationControls.flatMap(c=>c.fields.map(path=>[path,c.idleGroup??c.group]))), mappedTasks: [...Object.keys(nativeFields), ...retiredAutomationTasks], numbers: Object.fromEntries(Object.entries(constraints).filter(([, rule]) => rule.kind === 'number').map(([key, rule]) => [key, { min: rule.min, max: rule.max }])) };
