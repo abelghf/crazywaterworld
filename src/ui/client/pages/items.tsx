@@ -1,7 +1,22 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import {
+  ArrowDownUp,
+  Award,
+  RefreshCw,
+  Search,
+  ShieldHalf,
+  SlidersHorizontal,
+} from "lucide-react";
+import {
+  type CSSProperties,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { createRoot } from "react-dom/client";
 import { useStore } from "zustand";
 import { Button } from "../../button";
+import { Card } from "../../card";
 import { Input } from "../../input";
 import {
   type AutoStatus,
@@ -77,19 +92,124 @@ function Grade({ letter }: { letter: string }) {
   );
 }
 
-function attrText(attr: ItemAttr) {
-  return `${attr.name} ${attr.display}`;
+function ItemStars({ count }: { count: number }) {
+  const label = `${count} 星`;
+  if (count <= 0) return <span>{label}</span>;
+
+  return (
+    <span className={styles.stars} role="img" aria-label={label} title={label}>
+      {Number.isInteger(count) && count <= 5
+        ? "★".repeat(count)
+        : `★ × ${count}`}
+    </span>
+  );
 }
 
-// 两行摘要：随机属性优先（带评级），其次基础属性。
-function summary(row: ItemRow) {
-  const parts = [
-    ...row.attrs.map(
-      (attr) => `${attrText(attr)}${attr.letter ? ` ${attr.letter}` : ""}`,
-    ),
-    ...row.baseAttrs.map(attrText),
-  ];
-  return [parts.slice(0, 2).join(" · "), parts.slice(2, 5).join(" · ")];
+function InventoryHeading({ status }: { status: string }) {
+  return (
+    <div className={styles.heading}>
+      <h2>装备与徽章仓库</h2>
+      <p className={styles.caption} role="status">
+        {status}
+      </p>
+    </div>
+  );
+}
+
+function qualityLabel(quality: string) {
+  return QUALITY_LABEL[quality] ? `${QUALITY_LABEL[quality]}色` : quality;
+}
+
+function qualityStyle(quality: string) {
+  return { "--quality": QUALITY_COLOR[quality] ?? "#7a808a" } as CSSProperties;
+}
+
+function ItemIcon({ row }: { row: ItemRow }) {
+  return (
+    <span className={styles.tile} aria-hidden="true">
+      {row.icon ? (
+        <img alt="" src={row.icon} loading="lazy" />
+      ) : row.kind === "badge" ? (
+        <Award />
+      ) : (
+        <ShieldHalf />
+      )}
+    </span>
+  );
+}
+
+function ItemIdentity({ row }: { row: ItemRow }) {
+  return (
+    <span className={styles.identity} style={qualityStyle(row.quality)}>
+      <ItemIcon row={row} />
+      <span className={styles.main}>
+        <span className={styles.title}>{row.name}</span>
+        <span className={styles.sub}>
+          <ItemStars count={row.star} />
+          {row.quality && (
+            <span className={styles.quality}>{qualityLabel(row.quality)}</span>
+          )}
+          <span>
+            {[
+              row.kind === "badge" ? "徽章" : row.type,
+              row.career,
+              `Lv.${row.level}`,
+            ]
+              .filter(Boolean)
+              .join(" · ")}
+          </span>
+          {row.wornBy && <span>已装备 · {row.wornBy}</span>}
+        </span>
+      </span>
+    </span>
+  );
+}
+
+function InventoryItem({
+  row,
+  attributeName,
+  onOpen,
+}: {
+  row: ItemRow;
+  attributeName: string;
+  onOpen: () => void;
+}) {
+  const preview =
+    (attributeName
+      ? (row.attrs.find((attr) => attr.name === attributeName) ??
+        row.baseAttrs.find((attr) => attr.name === attributeName))
+      : row.attrs.find((attr) => attr.rating === row.rating)) ??
+    row.attrs[0] ??
+    row.baseAttrs[0];
+  return (
+    <button
+      type="button"
+      className={styles.item}
+      style={qualityStyle(row.quality)}
+      aria-haspopup="dialog"
+      onClick={onOpen}
+    >
+      <ItemIcon row={row} />
+      <span className={styles.itemHeading}>
+        <span className={styles.title}>{row.name}</span>
+        <Grade letter={row.ratingLetter} />
+      </span>
+      <span className={styles.sub}>
+        <ItemStars count={row.star} />
+        {row.quality && (
+          <span className={styles.quality}>{qualityLabel(row.quality)}</span>
+        )}
+        <span>Lv.{row.level}</span>
+        {row.wornBy && <span>已装备 · {row.wornBy}</span>}
+      </span>
+      {preview && (
+        <span className={styles.preview}>
+          <span>{preview.name}</span>
+          <strong>{preview.display}</strong>
+        </span>
+      )}
+    </button>
+  );
 }
 
 function AttrList({ attrs }: { attrs: ItemAttr[] }) {
@@ -404,35 +524,46 @@ function RerollDialog({
       aria-labelledby="items-reroll-title"
       onClose={onClose}
     >
-      <h3 id="items-reroll-title">洗炼 · {current.name}</h3>
+      <h3 id="items-reroll-title">
+        {current.rerollable
+          ? "装备洗炼"
+          : current.kind === "badge"
+            ? "徽章详情"
+            : "装备详情"}
+      </h3>
+      <ItemIdentity row={current} />
       <p className={styles.status}>
         {[
-          current.kind === "badge" ? "徽章" : current.type,
-          current.career,
-          QUALITY_LABEL[current.quality] ?? current.quality,
-          `★${current.star}`,
-          `Lv ${current.level}`,
-          current.wornBy ? `已装备：${current.wornBy}` : "未装备",
+          current.wornBy ? "" : "未装备",
           `词条位 ${current.slots}`,
-          REROLL_MATERIALS.map((name) => `${name} ${counts[name] ?? 0}`).join(
-            " · ",
-          ),
+          current.rerollable &&
+            REROLL_MATERIALS.map((name) => `${name} ${counts[name] ?? 0}`).join(
+              " · ",
+            ),
         ]
           .filter(Boolean)
           .join(" · ")}
       </p>
       <div className={styles.columns}>
         <div>
-          <h4>当前属性</h4>
+          <h4>{current.rerollable ? "当前属性" : "随机属性"}</h4>
           <AttrList attrs={current.attrs} />
         </div>
         <div>
-          <h4>洗炼结果</h4>
-          <AttrList attrs={current.pending} />
+          <h4>{current.rerollable ? "洗炼结果" : "基础属性"}</h4>
+          <AttrList
+            attrs={current.rerollable ? current.pending : current.baseAttrs}
+          />
         </div>
       </div>
       {current.rerollable ? (
         <>
+          {current.baseAttrs.length > 0 && (
+            <details className={styles.baseDetails}>
+              <summary>基础属性</summary>
+              <AttrList attrs={current.baseAttrs} />
+            </details>
+          )}
           <div className={styles.row}>
             <Button
               variant="outline"
@@ -481,11 +612,7 @@ function RerollDialog({
             onFinished={onRefresh}
           />
         </>
-      ) : (
-        <p className={styles.status}>
-          这件装备没有洗炼功能（只有橙装和红装能洗炼）。
-        </p>
-      )}
+      ) : null}
       <form method="dialog">
         <Button type="submit">关闭</Button>
       </form>
@@ -591,7 +718,7 @@ function ItemsPanel({ account }: { account: string }) {
     return [...filtered].sort(compare[sort]);
   }, [rows, kind, quality, star, minRating, type, career, attr, query, sort]);
 
-  const target = rows.find((row) => row.uid === detail) ?? null;
+  const target = rows.find((row) => row.kind + row.uid === detail) ?? null;
   const filterCount = [
     quality,
     star,
@@ -610,10 +737,40 @@ function ItemsPanel({ account }: { account: string }) {
   };
 
   const visible = shown.slice(0, rendered);
+  const clearFilters = () => {
+    setQuality("");
+    setStar("");
+    setMinRating(0);
+    setType("");
+    setCareer("");
+    setAttr("");
+  };
+  const filtered = filterCount > 0 || kind !== "all" || Boolean(query.trim());
   return (
     <div className={styles.page}>
+      <div className={styles.headingBar}>
+        <InventoryHeading
+          status={
+            error ||
+            (loading
+              ? "正在读取仓库…"
+              : filtered
+                ? `显示 ${shown.length} 件，共 ${rows.length} 件物品`
+                : `共 ${rows.length} 件物品`)
+          }
+        />
+        <button
+          type="button"
+          className={styles.refresh}
+          disabled={loading}
+          onClick={() => setReload((n) => n + 1)}
+        >
+          <RefreshCw size={15} aria-hidden="true" />
+          刷新
+        </button>
+      </div>
       <div className={styles.bar}>
-        <div className={styles.kinds}>
+        <fieldset className={styles.kinds} aria-label="物品分类">
           {(
             [
               ["all", "全部"],
@@ -621,26 +778,31 @@ function ItemsPanel({ account }: { account: string }) {
               ["badge", "徽章"],
             ] as const
           ).map(([value, label]) => (
-            <Button
+            <button
               key={value}
-              size="sm"
-              variant={kind === value ? "default" : "outline"}
+              type="button"
+              className={styles.segment}
               aria-pressed={kind === value}
               onClick={() => setKind(value)}
             >
               {label}
-            </Button>
+            </button>
           ))}
-        </div>
-        <Input
-          className="max-w-40"
-          placeholder="搜索名称 / ID"
-          value={query}
-          onChange={(event) => setQuery(event.target.value)}
-        />
-        <label className={styles.status}>
-          排序{" "}
+        </fieldset>
+        <label className={styles.search}>
+          <Search size={16} aria-hidden="true" />
+          <input
+            type="search"
+            aria-label="搜索名称或 ID"
+            placeholder="名称或 ID"
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+          />
+        </label>
+        <label className={styles.sort}>
+          <ArrowDownUp size={15} aria-hidden="true" />
           <select
+            aria-label="排序"
             value={sort}
             onChange={(event) => setSort(event.target.value as typeof sort)}
           >
@@ -651,28 +813,26 @@ function ItemsPanel({ account }: { account: string }) {
             ))}
           </select>
         </label>
-        <Button
-          variant="outline"
+        <button
+          type="button"
+          className={styles.filterToggle}
           aria-expanded={openFilters}
+          aria-controls="items-filters"
+          data-active={filterCount > 0}
           onClick={() => setOpenFilters(!openFilters)}
         >
-          筛选{filterCount ? `（${filterCount}）` : ""}
-        </Button>
-        <Button
-          variant="outline"
-          disabled={loading}
-          onClick={() => setReload((n) => n + 1)}
-        >
-          刷新
-        </Button>
+          <SlidersHorizontal size={15} aria-hidden="true" />
+          筛选{filterCount > 0 && <span>{filterCount}</span>}
+        </button>
       </div>
 
       {openFilters && (
-        <div className={styles.filters}>
-          <div className={styles.row}>
+        <div className={styles.filters} id="items-filters">
+          <div className={styles.facets}>
             <label>
               品质{" "}
               <select
+                aria-label="品质"
                 value={quality}
                 onChange={(event) => setQuality(event.target.value)}
               >
@@ -687,6 +847,7 @@ function ItemsPanel({ account }: { account: string }) {
             <label>
               星级{" "}
               <select
+                aria-label="星级"
                 value={star}
                 onChange={(event) => setStar(event.target.value)}
               >
@@ -701,6 +862,7 @@ function ItemsPanel({ account }: { account: string }) {
             <label>
               评级{" "}
               <select
+                aria-label="评级"
                 value={String(minRating)}
                 onChange={(event) => setMinRating(Number(event.target.value))}
               >
@@ -711,12 +873,11 @@ function ItemsPanel({ account }: { account: string }) {
                 ))}
               </select>
             </label>
-          </div>
-          <div className={styles.row}>
             {facets.types.length > 0 && (
               <label>
                 部位{" "}
                 <select
+                  aria-label="部位"
                   value={type}
                   onChange={(event) => setType(event.target.value)}
                 >
@@ -733,6 +894,7 @@ function ItemsPanel({ account }: { account: string }) {
               <label>
                 职业{" "}
                 <select
+                  aria-label="职业"
                   value={career}
                   onChange={(event) => setCareer(event.target.value)}
                 >
@@ -745,23 +907,19 @@ function ItemsPanel({ account }: { account: string }) {
                 </select>
               </label>
             )}
-            <Button
-              variant="outline"
-              onClick={() => {
-                setQuality("");
-                setStar("");
-                setMinRating(0);
-                setType("");
-                setCareer("");
-                setAttr("");
-              }}
+            <button
+              type="button"
+              className={styles.clear}
+              disabled={!filterCount}
+              onClick={clearFilters}
             >
-              清空
-            </Button>
+              清空筛选
+            </button>
           </div>
           <div className={styles.chips}>
             <Button
               size="sm"
+              aria-pressed={attr === ""}
               variant={attr === "" ? "default" : "outline"}
               onClick={() => setAttr("")}
             >
@@ -771,6 +929,7 @@ function ItemsPanel({ account }: { account: string }) {
               <Button
                 key={name}
                 size="sm"
+                aria-pressed={attr === name}
                 variant={attr === name ? "default" : "outline"}
                 onClick={() => setAttr(attr === name ? "" : name)}
               >
@@ -781,77 +940,46 @@ function ItemsPanel({ account }: { account: string }) {
         </div>
       )}
 
-      <p className={styles.status}>
-        {error ||
-          `共 ${rows.length} 件 · 显示 ${shown.length}${loading ? " · 读取中…" : ""}`}
-      </p>
-
-      <div className={styles.list} ref={listRef} onScroll={onScroll}>
-        {visible.map((row) => {
-          const [first, second] = summary(row);
-          return (
-            <button
-              key={row.kind + row.uid}
-              type="button"
-              className={styles.item}
-              onClick={() => setDetail(row.uid)}
-            >
-              <span
-                className={styles.tile}
-                style={{ background: QUALITY_COLOR[row.quality] ?? "#7a7a7a" }}
-              >
-                {row.icon ? (
-                  <img alt="" src={row.icon} />
-                ) : row.kind === "badge" ? (
-                  (row.career || "徽").slice(0, 1)
-                ) : (
-                  row.type.slice(0, 1)
-                )}
-              </span>
-              <span className={styles.main}>
-                <span
-                  className={styles.title}
-                  style={{ color: QUALITY_COLOR[row.quality] }}
-                >
-                  {row.name}
-                </span>
-                <span className={styles.sub}>
-                  {[
-                    row.kind === "badge" ? "徽章" : row.type,
-                    row.career,
-                    QUALITY_LABEL[row.quality] ?? row.quality,
-                    `Lv${row.level}`,
-                    row.wornBy ? `已装备：${row.wornBy}` : "",
-                  ]
-                    .filter(Boolean)
-                    .join(" · ")}
-                </span>
-                {first && <span className={styles.line}>{first}</span>}
-                {second && <span className={styles.line}>{second}</span>}
-              </span>
-              <span className={styles.side}>
-                <span className={styles.stars}>
-                  {row.star > 0 ? "★".repeat(row.star) : ""}
-                </span>
-                <Grade letter={row.ratingLetter} />
-              </span>
-            </button>
-          );
-        })}
+      <div
+        className={styles.list}
+        ref={listRef}
+        onScroll={onScroll}
+        aria-busy={loading}
+      >
+        {visible.map((row) => (
+          <InventoryItem
+            key={row.kind + row.uid}
+            row={row}
+            attributeName={attr}
+            onOpen={() => setDetail(row.kind + row.uid)}
+          />
+        ))}
         {rendered < shown.length && (
           <Button
+            className={styles.more}
             variant="outline"
             onClick={() => setRendered((n) => n + PAGE_SIZE * 2)}
           >
             显示更多（还有 {shown.length - rendered} 件）
           </Button>
         )}
-        {!shown.length && !loading && (
-          <p className={styles.empty}>
-            {rows.length
-              ? "没有符合筛选条件的装备。"
-              : "连接当前账号后可读取装备。"}
-          </p>
+        {!shown.length && !loading && !error && (
+          <div className={styles.empty}>
+            {rows.length ? "没有符合条件的物品" : "仓库里还没有装备或徽章"}
+            {rows.length > 0 && (
+              <button
+                type="button"
+                className={styles.clear}
+                onClick={() => {
+                  clearFilters();
+                  setQuery("");
+                  setKind("all");
+                }}
+              >
+                显示全部物品
+              </button>
+            )}
+          </div>
         )}
       </div>
 
@@ -865,7 +993,9 @@ function ItemsPanel({ account }: { account: string }) {
           onClose={() => setDetail("")}
           onChanged={(next) =>
             setRows((list) =>
-              list.map((row) => (row.uid === next.uid ? next : row)),
+              list.map((row) =>
+                row.kind === next.kind && row.uid === next.uid ? next : row,
+              ),
             )
           }
           onMaterials={setMaterials}
@@ -891,9 +1021,17 @@ function ItemsPage() {
       : "连接当前账号后可查看装备。";
   });
   if (!active) return null;
-  if (!account || hint)
-    return <p className={styles.empty}>{hint || "请先选择账号。"}</p>;
-  return <ItemsPanel key={account} account={account} />;
+  return (
+    <Card className="rounded-2xl p-4 sm:p-6">
+      {!account || hint ? (
+        <div className={styles.page}>
+          <InventoryHeading status={hint || "请先选择账号。"} />
+        </div>
+      ) : (
+        <ItemsPanel key={account} account={account} />
+      )}
+    </Card>
+  );
 }
 
 export function mountItems(host: HTMLElement) {
