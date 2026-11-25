@@ -10,7 +10,7 @@ export function merchantPresetSettings(defaults, version = 'current') {
     eventFree: { ...common, autoSpeedUp: true, speedUpMode: 'eventFree', speedUpMaxPerLeg: 4,
       estimateDiscountPercent: current ? 7 : 10, dailyPointerLimit: current ? 100 : legacy ? 45 : 10 },
     sprint: { ...common, autoSpeedUp: true, speedUpMode: legacy ? 'goal' : 'targetFirst', speedUpMaxPerLeg: 4,
-      dailyPointerLimit: legacy ? 45 : 100, periodPointerLimit: legacy ? 139 : -1 },
+      dailyPointerLimit: legacy ? 45 : 100, periodPointerLimit: legacy ? 139 : current ? 220 : -1 },
   };
 }
 

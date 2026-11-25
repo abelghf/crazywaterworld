@@ -881,8 +881,7 @@ function renderSeaMerchantSettings(box) {
     const card = el('div', 'merchant-preset');
     card.dataset.active = String(preset.active);
     card.append(el('h3', 'merchant-preset-title', preset.label),
-      el('p', 'merchant-preset-description', preset.description),
-      el('p', 'merchant-preset-forecast', preset.forecast));
+      el('p', 'merchant-preset-description', preset.description));
     const footer = el('div', 'merchant-preset-footer');
     const budget = el('div', 'merchant-preset-budget');
     const budgetText = preset.totalPointers === null ? '按实领' : preset.totalPointers === -1 ? '按可用库存' : preset.totalPointers + ' 根';
@@ -902,10 +901,7 @@ function renderSeaMerchantSettings(box) {
     choices.appendChild(card);
   }
   presets.appendChild(choices);
-  if (choices.children.length) {
-    presets.appendChild(el('p', 'dim merchant-model-note', '从 1 万商会币、1 级船起跑，假设升船钻石充足。用第 4005 期 16 个港口报价轮次抽样生成 24 组四天行情，每步按 103 秒计算。实际收益还受情报共享速度和同盟抢货影响。'));
-    section.appendChild(presets);
-  }
+  if (choices.children.length) section.appendChild(presets);
   const manual = el('details', 'merchant-manual-settings');
   manual.appendChild(el('summary', '', '手动调整活动设置'));
   manual.open = merchantManualOwner === account || !choices.children.length;

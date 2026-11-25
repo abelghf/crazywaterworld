@@ -203,7 +203,7 @@ try {
     const all = ok(await api('settings')).settings;
     const other = ok(await api('merchant/settings', undefined, 'trade-b'));
     assert.deepEqual(before.presets.map(p => p.id), ['free', 'eventFree', 'sprint']);
-    assert.deepEqual(before.presets.map(p => p.totalPointers), [0, null, -1]);
+    assert.deepEqual(before.presets.map(p => p.totalPointers), [0, null, 220]);
     assert.equal((await api('merchant/settings', change(before, 'preset', 'unknown'))).status, 400);
     const middle = ok(await api('merchant/settings', change(before, 'preset', 'eventFree')));
     assert.deepEqual(middle.presets.filter(p => p.active).map(p => p.id), ['eventFree']);
@@ -220,7 +220,7 @@ try {
     const m = sprint.settings.merchant;
     assert(m.enabled && m.autoUpgrade && m.autoSpeedUp && m.autoShareIntel);
     assert.deepEqual([m.speedUpMode, m.speedUpMaxPerLeg, m.dailyPointerLimit, m.profitLimit], ['targetFirst', 4, 100, 0]);
-    assert.equal(m.periodPointerLimit, -1);
+    assert.equal(m.periodPointerLimit, 220);
     assert.equal(m.knownPortChains, true);
     assert.equal(m.minPurchaseReturnPercent, 5);
     assert.equal(m.autoBuyPointers, false);
