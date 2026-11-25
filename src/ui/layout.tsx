@@ -200,6 +200,7 @@ export function templates() {
           <details className="account-card-menu col-start-2 row-span-2 row-start-1">
             <summary aria-label="更多账号操作"><MoreHorizontal aria-hidden="true" /></summary>
             <div className="account-menu-content">
+              <Button type="button" variant="ghost" size="sm" className="h-7 w-full justify-start px-2.5" data-account-action="exclusive" title="暂停同账号其他角色并托管此角色" hidden>切换并托管</Button>
               <Button type="button" variant="ghost" size="sm" className="h-7 w-full justify-start px-2.5" data-account-action="rename">修改备注</Button>
               <Button type="button" variant="ghost" size="sm" className="h-7 w-full justify-start px-2.5" data-account-action="export">导出账号</Button>
               <Button type="button" variant="ghost" size="sm" className="h-7 w-full justify-start px-2.5 text-destructive" data-account-action="remove">移除账号</Button>

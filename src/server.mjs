@@ -140,7 +140,7 @@ import { captureManualProductionMaterialState, refreshOrderMaterialSpends } from
 import { createStageTask } from './stages.mjs';
 import { createChallengeRun } from './challenge-automation.mjs';
 import { runAction } from './actions.mjs';
-import { accountId, loadStore, saveStore, loginProfiles, matchingProfile, upsertAccount, removeAccount, setActive, pickAccount, describeAccount, revealAccount, rememberSeen, DATA_DIR } from './accounts.mjs';
+import { accountId, loadStore, saveStore, loginProfiles, matchingProfile, worldProfileId, upsertAccount, removeAccount, setActive, pickAccount, describeAccount, revealAccount, rememberSeen, DATA_DIR } from './accounts.mjs';
 import { ACCOUNT_BACKUP_MAX_BYTES, exportAccountBackup, previewAccountImport, importAccountBackup } from './account-backup.mjs';
 import { startCapture, stopCapture, captureState, inspectCaptureRecovery, recoverCapture, DEFAULT_PROXY_PORT } from './capture.mjs';
 import { createPhoneLogin, loadDeviceProfile, saveDeviceProfile, DEVICE_PROFILE_PATH } from './phone-login.mjs';
@@ -222,6 +222,13 @@ export function createConsole({ host = '127.0.0.1', port = 17321, onLog, recover
   // 密码只用于当次请求；待保存凭证和待选账号只放在内存，十分钟后清理。
   const pendingPhoneLogins = new Map();
   const phonePreviewClients = new Set();
+  let captureRoleDraft = null;
+  function clearCaptureRoleDraft() {
+    if (!captureRoleDraft) return;
+    captureRoleDraft.controller.abort();
+    clearTimeout(captureRoleDraft.timer);
+    captureRoleDraft = null;
+  }
   const smsSendAt = new Map();
   const smsPending = new Set();
   let phoneLoginBusy = false;
@@ -312,19 +319,16 @@ export function createConsole({ host = '127.0.0.1', port = 17321, onLog, recover
     return pending;
   }
 
-  async function saveAlipayRole(pending, choice) {
-    // 排队期间扫码可能被取消、过期或刷新，落盘前重新检查本次选择。
-    if (requireAlipayRoles(pending.id) !== pending || pending.reading || !pending.entry.choices.includes(choice)) {
-      throw new Error('角色列表已变化，请重新选择角色');
-    }
+  async function saveAlipayRoles(pending, selections) {
+    const validateSelection = () => {
+      if (requireAlipayRoles(pending.id) !== pending || pending.reading
+        || selections.some(({ choice }) => !pending.entry.choices.includes(choice))) {
+        throw new Error('角色列表已变化或扫码已结束，请重新扫码');
+      }
+    };
+    validateSelection();
     pending.entry.credential = alipayLogin.takeCredential(pending.id);
-    const result = await saveSelectedRole(pending.entry, choice, { sourceLabel: '支付宝扫码', stopExisting: true,
-      validateSelection() {
-        if (requireAlipayRoles(pending.id) !== pending || pending.reading || !pending.entry.choices.includes(choice)) {
-          throw new Error('角色列表已变化或扫码已结束，请重新扫码');
-        }
-      },
-    });
+    const result = await saveSelectedRoles(selections, { sourceLabel: '支付宝扫码', stopExisting: true, validateSelection });
     pending.entry.credential = null;
     pending.entry.choices = [];
     cancelledAlipayLoginId = pending.id;
@@ -398,19 +402,16 @@ export function createConsole({ host = '127.0.0.1', port = 17321, onLog, recover
     return pending;
   }
 
-  async function saveWechatRole(pending, choice) {
-    // 排队期间扫码可能被取消、过期或刷新，落盘前重新检查本次选择。
-    if (requireWechatRoles(pending.id) !== pending || pending.reading || !pending.entry.choices.includes(choice)) {
-      throw new Error('角色列表已变化，请重新选择角色');
-    }
+  async function saveWechatRoles(pending, selections) {
+    const validateSelection = () => {
+      if (requireWechatRoles(pending.id) !== pending || pending.reading
+        || selections.some(({ choice }) => !pending.entry.choices.includes(choice))) {
+        throw new Error('角色列表已变化或扫码已结束，请重新扫码');
+      }
+    };
+    validateSelection();
     pending.entry.credential = wechatLogin.takeCredential(pending.id);
-    const result = await saveSelectedRole(pending.entry, choice, { sourceLabel: '微信扫码', stopExisting: true,
-      validateSelection() {
-        if (requireWechatRoles(pending.id) !== pending || pending.reading || !pending.entry.choices.includes(choice)) {
-          throw new Error('角色列表已变化或扫码已结束，请重新扫码');
-        }
-      },
-    });
+    const result = await saveSelectedRoles(selections, { sourceLabel: '微信扫码', stopExisting: true, validateSelection });
     pending.entry.credential = null;
     pending.entry.choices = [];
     cancelledWechatLoginId = pending.id;
@@ -426,7 +427,8 @@ export function createConsole({ host = '127.0.0.1', port = 17321, onLog, recover
     if (closing) throw new Error('控制台已关闭');
     signal?.throwIfAborted();
     const profiles = loginProfiles(loadStore(), credential);
-    const session = profiles.map(profile => sessions.get(profile.id)).find(s => s && !s.paused);
+    const candidates = profiles.map(profile => sessions.get(profile.id)).filter(s => s && !s.paused);
+    const session = candidates.find(s => s.client?.connected) ?? candidates.find(s => s.connecting);
     if (session?.connecting) {
       await session.connecting.catch(() => {});
       return readPhoneWorlds(credential, { signal });
@@ -483,7 +485,7 @@ export function createConsole({ host = '127.0.0.1', port = 17321, onLog, recover
 
   // 旧采集记录的 worldId=0 表示最近登录。添加其他角色前，先绑定旧记录的真实入口。
   function pinLegacyWorld(store, entry) {
-    const legacy = loginProfiles(store, entry.credential).find(profile => !Number(profile.login.worldId));
+    const legacy = loginProfiles(store, entry.credential).find(profile => !toNumber(profile.login.worldId));
     if (!legacy) return;
     const choices = entry.choices;
     const seen = legacy.lastSeen;
@@ -500,10 +502,13 @@ export function createConsole({ host = '127.0.0.1', port = 17321, onLog, recover
   function roleChoices(entry, store) {
     pinLegacyWorld(store, entry);
     const idOfAccount = accountId(entry.credential);
+    const hasProfiles = loginProfiles(store, entry.credential).length > 0;
     return entry.choices.map(choice => {
       const existing = matchingProfile(store, entry.credential, choice.worldId);
       return {
         id: choice.id, accountId: idOfAccount, userName: entry.userName,
+        profileId: existing?.id ?? (hasProfiles
+          ? worldProfileId({ ...entry.credential, login: { ...entry.credential.login, worldId: choice.worldId } }) : idOfAccount),
         nickname: choice.role.nickname || '未命名角色', level: choice.role.level ?? null, power: choice.role.power ?? null,
         worldId: choice.worldId, worldName: choice.worldName,
         roleWorldId: choice.role.worldId || choice.worldId, roleWorldName: choice.role.worldName || choice.worldName,
@@ -532,7 +537,22 @@ export function createConsole({ host = '127.0.0.1', port = 17321, onLog, recover
       linkedAccountCount: pending.linkedAccountCount, expiresAt: pending.createdAt + PHONE_PENDING_MS };
   }
 
-  async function saveSelectedRole(entry, choice, { sourceLabel = 'APP 登录', stopExisting = false, validateSelection = () => {} } = {}) {
+  function selectedLoginRoles(payload, entries) {
+    const available = entries.filter(entry => !entry.roleError).flatMap(entry => entry.choices.map(choice => ({ entry, choice })));
+    const ids = payload.choiceIds !== undefined ? payload.choiceIds : (payload.choiceId ? [payload.choiceId] : available.length === 1 ? [available[0].choice.id] : []);
+    if (payload.worldId !== undefined || (payload.choiceIds !== undefined && payload.choiceId !== undefined)
+      || !Array.isArray(ids) || !ids.length || ids.length > available.length || new Set(ids).size !== ids.length) {
+      throw new Error('请选择列表中的区服和角色后再保存');
+    }
+    const byId = new Map(available.map(item => [item.choice.id, item]));
+    return ids.map(id => {
+      const item = byId.get(id);
+      if (!item) throw new Error('请选择列表中的区服和角色后再保存');
+      return item;
+    });
+  }
+
+  async function prepareSelectedRole(entry, choice, { sourceLabel, stopExisting, validateSelection, interrupted }) {
     const session = selectedSession(entry, choice);
     if (session?.connectionDrain) await session.connectionDrain;
     if (closing) throw new Error('控制台已关闭');
@@ -545,6 +565,7 @@ export function createConsole({ host = '127.0.0.1', port = 17321, onLog, recover
       : toNumber(session?.player?.worldId) === roleWorldId
         && toNumber(session?.player?.bornWorldId || previous?.login?.worldId) === choice.worldId;
     if (session && (stopExisting || !sameRole || session.loginBlocked || session.loginRecoveryJob)) {
+      if (session.loop.running) interrupted.add(session);
       const reason = stopExisting ? `${sourceLabel}已重新登录，正在更新连接`
         : sameRole ? '账号凭证已更新，正在恢复连接' : '已选择其他角色，停止旧角色任务';
       requireProductionSync(session);
@@ -556,39 +577,61 @@ export function createConsole({ host = '127.0.0.1', port = 17321, onLog, recover
       for (const task of session.trials.values()) task.stop(reason);
       await closeSessionConnection(session, { includeWorld: true });
     }
-    if (closing) throw new Error('控制台已关闭');
-    validateSelection();
-    const store = loadStore();
+  }
+
+  function storeSelectedRole(store, { entry, choice }) {
     pinLegacyWorld(store, entry);
     const existing = matchingProfile(store, entry.credential, choice.worldId);
     const credential = { ...entry.credential, login: { ...entry.credential.login, worldId: choice.worldId },
-      loginFrameHex: Number(entry.credential.login.worldId) === choice.worldId ? entry.credential.loginFrameHex : null };
+      loginFrameHex: toNumber(entry.credential.login.worldId) === choice.worldId ? entry.credential.loginFrameHex : null };
     const fallbackLabel = ['alipay', 'wechat', 'douyin'].includes(entry.credential.source) ? '未命名角色' : entry.userName;
     const label = existing?.label && existing.label !== existing.lastSeen?.nickname ? existing.label : choice.role.nickname || fallbackLabel;
     const { account, created } = upsertAccount(store, credential, { label });
-    account.roleId = selectedRoleId;
+    account.roleId = uidText(choice.role.id);
     account.automation = { ...account.automation, autoStart: autoStartEnabled(account), loginBlocked: false, loginRecovery: null };
-    rememberSeen(account, { ...choice.role, nickname: choice.role.nickname || '未命名角色', worldId: roleWorldId });
-    setActive(store, account.id);
-    saveStore(store);
-    rememberLogAccounts(store.accounts);
-    emit(null, 'info', `${sourceLabel}${created ? '已新增' : '已更新'}账号 ${describeAccount(account).title}，已选择 ${choice.worldName} ${choice.role.nickname || '未命名角色'}`);
-    const savedSession = sessionFor(account.id);
-    savedSession.loginBlocked = false;
-    savedSession.loginRecovery = null;
-    void startAutomaticLoop(savedSession);
-    return {
-      ok: true,
-      account: { ...describeAccount(account, { active: true, hasSiblingRoles: loginProfiles(store, account).length > 1 }), status: accountStatus(savedSession) },
-      selectedRole: { nickname: choice.role.nickname || '未命名角色', worldId: choice.worldId, worldName: choice.worldName,
-        roleWorldId, roleWorldName: choice.role.worldName || choice.worldName },
-    };
+    rememberSeen(account, { ...choice.role, nickname: choice.role.nickname || '未命名角色', worldId: choice.role.worldId || choice.worldId });
+    return { account, choice, created };
   }
 
-  async function savePhoneRole(pending, entry, choice) {
-    const result = await saveSelectedRole(entry, choice);
-    pendingPhoneLogins.delete(pending.id);
-    return result;
+  async function saveSelectedRoles(selections, { sourceLabel = 'APP 登录', stopExisting = false, validateSelection }) {
+    // Lock existing role queues in a stable order. Check expiry again immediately before the single store write.
+    const queues = [...new Set(selections.map(({ entry, choice }) => selectedSession(entry, choice)))]
+      .filter(session => session && !session.paused).sort((a, b) => a.id.localeCompare(b.id));
+    const interrupted = new Set();
+    async function save() {
+      for (const { entry, choice } of selections) {
+        await prepareSelectedRole(entry, choice, { sourceLabel, stopExisting, validateSelection, interrupted });
+      }
+      if (closing) throw new Error('控制台已关闭');
+      validateSelection();
+      const store = loadStore();
+      const saved = selections.map(selection => storeSelectedRole(store, selection));
+      setActive(store, saved[0].account.id);
+      saveStore(store);
+      rememberLogAccounts(store.accounts);
+      const results = saved.map(({ account, choice, created }) => {
+        const session = sessionFor(account.id);
+        session.loginBlocked = false;
+        session.loginRecovery = null;
+        void startAutomaticLoop(session);
+        emit(null, 'info', sourceLabel + (created ? '已新增' : '已更新') + '角色 ' + describeAccount(account).title);
+        return {
+          account: { ...describeAccount(account, { active: account.id === store.activeId, hasSiblingRoles: loginProfiles(store, account).length > 1 }), status: accountStatus(session) },
+          selectedRole: { nickname: choice.role.nickname || '未命名角色', worldId: choice.worldId, worldName: choice.worldName,
+            roleWorldId: choice.role.worldId || choice.worldId, roleWorldName: choice.role.worldName || choice.worldName },
+        };
+      });
+      return { ok: true, ...results[0], accounts: results.map(row => row.account), selectedRoles: results.map(row => row.selectedRole) };
+    }
+    const lock = index => index === queues.length ? save() : enqueue(queues[index], () => lock(index + 1));
+    try {
+      return await lock(0);
+    } catch (error) {
+      // A cancelled preview can expire while existing connections drain.
+      // Resume only roles that still have a saved intent to run.
+      for (const session of interrupted) void startAutomaticLoop(session);
+      throw error;
+    }
   }
   let logId = 0;
   const logAccountLabels = new Map();
@@ -2189,18 +2232,25 @@ export function createConsole({ host = '127.0.0.1', port = 17321, onLog, recover
   }
 
   // 抓到登录包就落库；顺手连一次把昵称/等级/区服回填，账号列表才看得到人话。
-  async function addCapturedAccount({ url, body, rawFrameHex }, platform) {
+  async function addCapturedAccount({ url, body, rawFrameHex }, platform, draft = null) {
     if (platform === 'douyin' && !['openId', 'token', 'sign', 'timestamp'].every(key => body?.eworldParams?.[key])) {
       throw new Error('抖音游戏登录报文缺少凭证字段');
     }
     const credential = { url, login: body, loginFrameHex: rawFrameHex, source: platform === 'douyin' ? 'douyin-mitm' : 'mitm', capturedAt: new Date().toISOString() };
+    if (draft) {
+      if (captureRoleDraft !== draft || closing) return;
+      draft.entry = { credential, userName: platform === 'douyin' ? '电脑抖音' : '电脑微信', choices: [] };
+      draft.timer = setTimeout(() => { if (captureRoleDraft === draft) clearCaptureRoleDraft(); }, PHONE_PENDING_MS);
+      draft.timer.unref?.();
+      return;
+    }
     let store = loadStore();
-    const unpinned = loginProfiles(store, credential).find(row => !Number(row.login.worldId));
-    if (Number(body.worldId) && unpinned?.lastSeen) {
+    const unpinned = loginProfiles(store, credential).find(row => !toNumber(row.login.worldId));
+    if (toNumber(body.worldId) && unpinned?.lastSeen) {
       const worlds = await readPhoneWorlds(credential);
       store = loadStore();
       pinLegacyWorld(store, { credential, choices: worlds.recentWorlds.filter(row => uidText(row.role?.id)), player: worlds.player });
-      if (store.accounts.some(row => row.id === unpinned.id && !Number(row.login.worldId))) {
+      if (store.accounts.some(row => row.id === unpinned.id && !toNumber(row.login.worldId))) {
         throw new Error('未能确认旧角色的登录区服，请打开对应卡片的区服管理，加载区服并核对角色');
       }
     }
@@ -3262,15 +3312,10 @@ export function createConsole({ host = '127.0.0.1', port = 17321, onLog, recover
         const pending = requireAlipayRoles(payload.id);
         if (pending.reading) throw new Error('正在读取区服和角色，请稍候');
         if (pending.entry.roleError) throw new Error('角色列表读取失败，请重试后再保存');
-        const choices = pending.entry.choices;
-        const choice = payload.choiceId ? choices.find(item => item.id === String(payload.choiceId))
-          : choices.length === 1 ? choices[0] : null;
-        if (!choice || payload.worldId !== undefined) throw new Error('请选择列表中的区服和角色后再保存');
+        const selections = selectedLoginRoles(payload, [pending.entry]);
         alipaySaving = true;
         try {
-          const session = selectedSession(pending.entry, choice);
-          const save = () => saveAlipayRole(pending, choice);
-          const result = session && !session.paused ? await enqueue(session, save) : await save();
+          const result = await saveAlipayRoles(pending, selections);
           // 凭证已落盘，临时浏览器清理失败也应返回已保存的账号。
           try { await alipayLogin.cancel(payload.id); } catch {}
           json(result);
@@ -3326,15 +3371,10 @@ export function createConsole({ host = '127.0.0.1', port = 17321, onLog, recover
         const pending = requireWechatRoles(payload.id);
         if (pending.reading) throw new Error('正在读取区服和角色，请稍候');
         if (pending.entry.roleError) throw new Error('角色列表读取失败，请重试后再保存');
-        const choices = pending.entry.choices;
-        const choice = payload.choiceId ? choices.find(item => item.id === String(payload.choiceId))
-          : choices.length === 1 ? choices[0] : null;
-        if (!choice || payload.worldId !== undefined) throw new Error('请选择列表中的区服和角色后再保存');
+        const selections = selectedLoginRoles(payload, [pending.entry]);
         wechatSaving = true;
         try {
-          const session = selectedSession(pending.entry, choice);
-          const save = () => saveWechatRole(pending, choice);
-          const result = session && !session.paused ? await enqueue(session, save) : await save();
+          const result = await saveWechatRoles(pending, selections);
           // 凭证已落盘，临时授权会话清理失败也应返回已保存的账号。
           try { await wechatLogin.cancel(payload.id); } catch {}
           json(result);
@@ -3452,22 +3492,16 @@ export function createConsole({ host = '127.0.0.1', port = 17321, onLog, recover
         const pending = pendingPhoneLogins.get(String(payload.id ?? ''));
         if (!pending) throw new Error('登录结果已过期，请重新登录');
         if (pending.busy) throw new Error('正在处理此登录结果，请稍候');
-        const available = pending.entries.flatMap(entry => entry.choices.map(choice => ({ entry, choice })));
-        const selected = payload.choiceId
-          ? available.find(item => item.choice.id === String(payload.choiceId))
-          : available.length === 1 ? available[0] : null;
-        if (!selected) throw new Error('请选择列表中的区服和角色后再保存');
+        const selections = selectedLoginRoles(payload, pending.entries);
         pending.busy = true;
         try {
-          const session = selectedSession(selected.entry, selected.choice);
-          const save = () => {
-            if (closing) throw new Error('控制台已关闭');
+          const result = await saveSelectedRoles(selections, { validateSelection() {
             if (pendingPhoneLogins.get(pending.id) !== pending || Date.now() - pending.createdAt >= PHONE_PENDING_MS) {
               throw new Error('登录结果已过期，请重新登录');
             }
-            return savePhoneRole(pending, selected.entry, selected.choice);
-          };
-          json(session && !session.paused ? await enqueue(session, save) : await save());
+          } });
+          pendingPhoneLogins.delete(pending.id);
+          json(result);
         } finally {
           pending.busy = false;
         }
@@ -3484,7 +3518,8 @@ export function createConsole({ host = '127.0.0.1', port = 17321, onLog, recover
       if (route === 'POST /api/accounts/pause') {
         const { account, session } = scoped_(parsed);
         const payload = jsonBody();
-        const { paused, start = false } = payload;
+        const { paused, start = false, exclusive = false } = payload;
+        if (typeof exclusive !== 'boolean' || (exclusive && !start)) throw new Error('切换托管需要开始目标角色');
         if (typeof paused !== 'boolean') throw new Error('请选择暂停或恢复');
         if (typeof start !== 'boolean' || (start && paused)) throw new Error('开始托管需要先恢复账号');
         if (start) needConfirm(payload);
@@ -3497,7 +3532,7 @@ export function createConsole({ host = '127.0.0.1', port = 17321, onLog, recover
         const identity = accountId(account);
         const revision = session.hostingPauseRevision;
         const previous = hostingChanges.get(identity);
-        const change = (previous ?? Promise.resolve()).catch(() => {}).then(() => changeHosting(session, account, false, start, revision));
+        const change = (previous ?? Promise.resolve()).catch(() => {}).then(() => changeHosting(session, account, false, start, revision, exclusive));
         hostingChanges.set(identity, change);
         try { await change; }
         finally { if (hostingChanges.get(identity) === change) hostingChanges.delete(identity); }
@@ -3526,7 +3561,32 @@ export function createConsole({ host = '127.0.0.1', port = 17321, onLog, recover
 
       // ---- 从电脑微信采集登录 ----
       if (route === 'GET /api/capture') {
-        json({ ...captureController.captureState(), qr: qrInfo() });
+        json({ ...captureController.captureState(), qr: qrInfo(), rolePreviewId: captureRoleDraft?.entry ? captureRoleDraft.id : null });
+        return;
+      }
+      if (['POST /api/capture/roles', 'POST /api/capture/save-roles', 'POST /api/capture/cancel-roles'].includes(route)) {
+        const payload = jsonBody();
+        needConfirm(payload);
+        const draft = captureRoleDraft;
+        if (!draft?.entry || draft.id !== payload.id) throw new Error('角色选择已过期，请重新读取账号');
+        if (route.endsWith('/cancel-roles')) { clearCaptureRoleDraft(); json({ ok: true }); return; }
+        if (draft.busy) throw new Error('正在处理所选角色，请稍候');
+        draft.busy = true;
+        try {
+          const validateSelection = () => {
+            if (closing || captureRoleDraft !== draft) throw new Error('角色选择已结束，请重新读取账号');
+          };
+          if (route.endsWith('/roles')) {
+            await readPhoneRoles(draft.entry, { signal: draft.controller.signal });
+            validateSelection();
+            json({ choices: roleChoices(draft.entry, loadStore()), roleError: draft.entry.roleError });
+          } else {
+            const selections = selectedLoginRoles(payload, [draft.entry]);
+            const result = await saveSelectedRoles(selections, { sourceLabel: draft.entry.userName, validateSelection });
+            clearCaptureRoleDraft();
+            json(result);
+          }
+        } finally { draft.busy = false; }
         return;
       }
       if (route === 'GET /api/capture/qrcode') {
@@ -3546,17 +3606,21 @@ export function createConsole({ host = '127.0.0.1', port = 17321, onLog, recover
         const platform = payload.platform ?? 'wechat';
         if (!['wechat', 'douyin'].includes(platform)) throw new Error('未知的采集渠道');
         emit(null, 'info', `开始抓包：本地 CA 与系统代理（127.0.0.1:${DEFAULT_PROXY_PORT}）都是当前用户范围，抓到即自动还原`);
+        clearCaptureRoleDraft();
+        const draft = payload.selectRoles === true ? { id: randomUUID(), controller: new AbortController() } : null;
+        captureRoleDraft = draft;
         await captureController.startCapture({
           port: DEFAULT_PROXY_PORT,
           platform,
           onLog: (line) => emit(null, /失败|超时/.test(line) ? 'error' : 'info', line),
-          onLogin: record => addCapturedAccount(record, platform),
+          onLogin: record => addCapturedAccount(record, platform, draft),
         });
         json({ ...captureController.captureState(), qr: qrInfo() });
         return;
       }
       if (route === 'POST /api/capture/stop') {
         needConfirm(jsonBody());
+        clearCaptureRoleDraft();
         await captureController.stopCapture('用户点了停止');
         json({ ...captureController.captureState(), qr: qrInfo() });
         return;
@@ -4758,21 +4822,25 @@ export function createConsole({ host = '127.0.0.1', port = 17321, onLog, recover
           })) });
           return;
         }
-        const choice = choices.find(world => world.worldId === payload.worldId);
-        if (!choice) throw new Error('请选择该账号已有角色的登录区服');
-        const existing = matchingProfile(store, owner, choice.worldId);
-        if (existing && Number(existing.login.worldId)) {
-          saveStore(store);
-          json({ id: existing.id });
-          return;
+        const requested = payload.worldIds !== undefined ? payload.worldIds : [payload.worldId];
+        if (!Array.isArray(requested) || !requested.length || requested.length > choices.length
+          || (payload.worldIds !== undefined && payload.worldId !== undefined) || new Set(requested).size !== requested.length) {
+          throw new Error('请选择该账号已有角色的登录区服');
         }
-        const { account: saved } = upsertAccount(store, {
-          ...owner, login: { ...owner.login, worldId: choice.worldId }, loginFrameHex: null,
-        }, { label: choice.role.nickname, refreshCredentials: false });
-        saved.roleId = uidText(choice.role.id);
-        rememberSeen(saved, choice.role);
+        const ids = requested.map(worldId => {
+          const choice = choices.find(world => world.worldId === worldId);
+          if (!choice) throw new Error('请选择该账号已有角色的登录区服');
+          const existing = matchingProfile(store, owner, worldId);
+          if (existing && toNumber(existing.login.worldId)) return existing.id;
+          const { account: saved } = upsertAccount(store, {
+            ...owner, login: { ...owner.login, worldId }, loginFrameHex: null,
+          }, { label: choice.role.nickname, refreshCredentials: false });
+          saved.roleId = uidText(choice.role.id);
+          rememberSeen(saved, choice.role);
+          return saved.id;
+        });
         saveStore(store);
-        json({ id: saved.id });
+        json({ id: ids[0], ids });
         return;
       }
       // 进服自己开一条短连接，所以不会打扰控制台这边正在跑的会话。
@@ -4782,8 +4850,8 @@ export function createConsole({ host = '127.0.0.1', port = 17321, onLog, recover
         const { account, session } = scoped_(parsed);
         if (!payload.worldId) throw new Error('要指定 worldId');
         if (session.paused) throw new Error('账号已暂停，请先恢复托管');
-        if (loginProfiles(loadStore(), account).length > 1 && Number(payload.worldId) !== Number(account.login.worldId)) {
-          throw new Error('该账号已按角色托管，请在目标角色卡片切换托管');
+        if (loginProfiles(loadStore(), account).length > 1 && Number(payload.worldId) !== toNumber(account.login.worldId)) {
+          throw new Error('该账号已按角色托管，请在目标角色卡片操作');
         }
         const client = new GameClient({ url: account.url, protocol: currentProtocol() });
         session.worldClient = client;
@@ -5281,7 +5349,7 @@ export function createConsole({ host = '127.0.0.1', port = 17321, onLog, recover
     emit(session, 'state', '账号已暂停，可以自行上号', { pauseChanged: true });
   }
 
-  async function changeHosting(session, account, paused, start, revision) {
+  async function changeHosting(session, account, paused, start, revision, exclusive = false) {
     if (session.connectionDrain) await session.connectionDrain;
     const checkTarget = () => {
       if (closing || sessions.get(session.id) !== session || !loadStore().accounts.some(row => row.id === account.id)) {
@@ -5297,7 +5365,7 @@ export function createConsole({ host = '127.0.0.1', port = 17321, onLog, recover
     if (!session.paused && loginRecoveryActive(session) && (!start || session.loop.running)) return;
     const siblings = loginProfiles(loadStore(), account).filter(row => row.id !== account.id);
     if (start && siblings.length && !session.loop.running) validateLoopStart(session);
-    for (const sibling of siblings) {
+    for (const sibling of exclusive ? siblings : []) {
       if (revision !== session.hostingPauseRevision) return;
       const old = sessionFor(sibling.id);
       if (!old.paused) await pauseHosting(old);
@@ -5770,6 +5838,7 @@ export function createConsole({ host = '127.0.0.1', port = 17321, onLog, recover
       for (const client of phonePreviewClients) client.stop();
       phonePreviewClients.clear();
       pendingPhoneLogins.clear();
+      clearCaptureRoleDraft();
       await resources?.stop();
       for (const stream of streams) stream.destroy();
       streams.clear();
