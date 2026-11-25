@@ -4,7 +4,7 @@ import {
   beginOrderMaterialSpend, cancelOrderMaterialSpend, confirmOrderMaterialOperation,
   confirmOrderMaterialSpends, refreshOrderMaterialSpends
 } from './order-reservations.mjs';
-import { MERCHANT_DEFAULTS, merchantActionSeconds, merchantFinalCargoStart, merchantGoalSalePrice, merchantPointerSeconds, merchantSpeedMode, merchantTiming, planMerchant } from './merchant-planner.mjs';
+import { MERCHANT_DEFAULTS, merchantActionSeconds, merchantFinalCargoStart, merchantGoalSalePrice, merchantPointerSeconds, merchantSpeedMode, merchantSpeedSalePrices, merchantTiming, planMerchant } from './merchant-planner.mjs';
 import { buyMerchantPointers, reconcileMerchantAction } from './merchant-strategy.mjs';
 import { estimateMerchantRace, merchantCompetitorArrivals } from './merchant-race.mjs';
 import { watchMerchant } from './merchant-monitor.mjs';
@@ -23,7 +23,7 @@ const stampSettings = ctx => {
     settings.autoSpeedUp, settings.keepPointers, settings.estimateDiscountPercent, settings.fullCargoRoutes, settings.liquidationMinutes,
     settings.quoteMaxAgeSeconds, settings.speedUpMode, settings.guardLastPointer, settings.speedUpMaxPerLeg, full.loop?.everySeconds, ctx.everyMs,
     settings.dailyPointerLimit, settings.periodPointerLimit, settings.refreshWindowMinutes, settings.autoBuyPointers, settings.pointerDailyDiamondLimit, settings.profitLimit,
-    settings.minExpectedProfit, settings.liquidationMinutes, settings.maxLossPercent, settings.refreshWaitSeconds,
+    settings.minExpectedProfit, settings.knownPortChains, settings.minPurchaseReturnPercent, settings.maxLossPercent, settings.refreshWaitSeconds,
     settings.firstDepartureMode, settings.firstDepartureTime, ctx.merchantCadenceSeconds
   ]);
 };
@@ -106,7 +106,11 @@ export function planMerchantSpeed(config, event, state, radar, stock, settings, 
     event.endTime - time > (settings.liquidationMinutes ?? MERCHANT_DEFAULTS.liquidationMinutes) * 60;
   if (savingPointers && (!state.player?.goods?.length || cargo.moveEndTime + state.player.goods.length * actionSeconds < deadline))
     return none('满舱航线可自然到港成交，保留指针用于收尾');
-  const mode = savingPointers ? 'deadline' : merchantSpeedMode(settings.speedUpMode);
+  const lastTradingDay = event.endTime <= timing.tradeStartTime + 86400;
+  const priorityCargo = settings.speedUpMode === 'targetFirst' && !options.exploration && !options.plannedOpening &&
+    Array.isArray(state.player.goods) && state.player.goods.some(batch => batch && batch.cityId !== cargo.moveToCityId) &&
+    (lastTradingDay || table(config, 'TradeShipCfg').some(ship => ship.upMoney > state.player.profit));
+  const mode = savingPointers ? 'deadline' : priorityCargo ? 'full' : merchantSpeedMode(settings.speedUpMode);
   const goalMode = mode === 'goal';
   const perPointer = merchantPointerSeconds(config);
   const guard = !savingPointers && settings.guardLastPointer === true && perPointer && cargo.moveEndTime - time <= perPointer;
@@ -158,6 +162,9 @@ export function planMerchantSpeed(config, event, state, radar, stock, settings, 
     || new Set(goods.map(row => row.pid)).size !== goods.length)
     return wait('船舶或持货批次未确认，不使用指针');
   const knownQuotes = new Map(knownMarket?.goods.map(good => [good.goodsId, good.price]) ?? []);
+  const shortage = goalMode && settings.knownPortChains && cargo.moveEndTime < deadline
+    ? merchantSpeedSalePrices(config, event, radar, [...(options.marketHistory ?? []), ...(options.markets ?? [])], time, cargo.cityId, cargo.moveToCityId,
+      { quoteMaxAgeSeconds: maxAge, estimateDiscountPercent: discount }) : null;
   let usedCapacity = 0;
   const gains = [];
   for (const good of goods) {
@@ -170,7 +177,9 @@ export function planMerchantSpeed(config, event, state, radar, stock, settings, 
     const knownPrice = knownQuotes.get(good.goodsId);
     // 亲自观察到的低价作为保守上限；即使到港已跨报价有效期，也不恢复为较高基准价。
     // 历史高价不抬高估值，所有目的港价格都仍是带风险折扣的估算。
-    const price = merchantGoalSalePrice(cfg, ports[0], knownPrice, discount);
+    const basePrice = merchantGoalSalePrice(cfg, ports[0], knownPrice, discount);
+    const price = shortage?.goodsId === good.goodsId ? Math.min(shortage.price,
+      knownPrice === undefined ? Infinity : Math.floor(knownPrice * (100 - discount) / 100)) : basePrice;
     const gain = Math.floor(Math.max(0, price - good.buyPrice) * good.num * (1 + ship.profitMargin / 10000));
     if (!natural(gain)) return wait('批次利润计算异常，保留指针');
     if (gain > 0) gains.push(gain);
@@ -208,7 +217,8 @@ export function planMerchantSpeed(config, event, state, radar, stock, settings, 
     const savedSeconds = cargo.moveEndTime - afterEndTime;
     const reason = arrivalPolicy === 'race' ? '预计比最早的可见同港同盟船早 ' + (firstArrival - afterEndTime) + ' 秒到港'
       : arrivalPolicy === 'guard' ? '最后一根防抢，直接到港'
-      : arrivalPolicy === 'finalCargo' ? '最后一船加速到港，收盘前按实价卖货' : '全程加速，按剩余航时尽快到港';
+      : arrivalPolicy === 'finalCargo' ? '最后一船加速到港，收盘前按实价卖货'
+      : priorityCargo ? (lastTradingDay ? '末日冲刺，载货船优先到港成交' : '优先到港回款，尽早解锁满级船') : '全程加速，按剩余航时尽快到港';
     const expected = { request: 'TradeSpeedRequest', period: event.period, city: cargo.cityId,
       destination: cargo.moveToCityId, moveStartTime: cargo.moveStartTime, beforeEndTime: cargo.moveEndTime,
       afterEndTime, useNum, accelerationReason: arrivalPolicy, savedSeconds };

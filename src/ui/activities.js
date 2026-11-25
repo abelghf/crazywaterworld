@@ -885,7 +885,8 @@ function renderSeaMerchantSettings(box) {
       el('p', 'merchant-preset-forecast', preset.forecast));
     const footer = el('div', 'merchant-preset-footer');
     const budget = el('div', 'merchant-preset-budget');
-    budget.append(el('span', '', '总针数上限'), el('strong', '', preset.totalPointers === null ? '按实领' : preset.totalPointers + ' 根'));
+    const budgetText = preset.totalPointers === null ? '按实领' : preset.totalPointers === -1 ? '按可用库存' : preset.totalPointers + ' 根';
+    budget.append(el('span', '', '总针数上限'), el('strong', '', budgetText));
     const action = preset.active ? '使用中' : '套用方案';
     const button = el('button', 'merchant-preset-apply', action);
     button.type = 'button';
@@ -902,7 +903,7 @@ function renderSeaMerchantSettings(box) {
   }
   presets.appendChild(choices);
   if (choices.children.length) {
-    presets.appendChild(el('p', 'dim merchant-model-note', '模拟从 1 万商会币、1 级船开始，假设升船用的 4,100 钻石及方案内指南针均可及时使用，平均买卖价差 30%，本金充足时装载约 75% 舱位。实际收益随行情和联盟库存变化。'));
+    presets.appendChild(el('p', 'dim merchant-model-note', '从 1 万商会币、1 级船起跑，假设升船钻石充足。用第 4005 期 16 个港口报价轮次抽样生成 24 组四天行情，每步按 103 秒计算。实际收益还受情报共享速度和同盟抢货影响。'));
     section.appendChild(presets);
   }
   const manual = el('details', 'merchant-manual-settings');

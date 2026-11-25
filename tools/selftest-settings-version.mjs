@@ -826,6 +826,8 @@ try {
       expected.merchant.speedUpMode = 'deadline';
       expected.merchant.fullCargoRoutes = value ?? defaultSettings().merchant.fullCargoRoutes;
       expected.merchant.periodPointerLimit = document.settings.merchant.periodPointerLimit ?? -1;
+      expected.merchant.knownPortChains = true;
+      expected.merchant.minPurchaseReturnPercent = 0;
       expected.guildShip.checkEverySeconds = 60;
       expected.afk = { claimIntervalHours: 0 };
       expected.seasonMerit = { enabled: false, targetRank: 0, leadMinutes: 0 };
@@ -930,7 +932,7 @@ try {
     assert.throws(() => validateSettings(settings), error => !!error.fields['alliance.memberIds']);
   });
   test('版本1升级后重复迁移保持一致，保留有效的用户值', () => {
-    assert.equal(SETTINGS_SCHEMA_VERSION, 68);
+    assert.equal(SETTINGS_SCHEMA_VERSION, 70);
     const settings = legacySettings();
     settings.factory.checkEverySeconds = 270;
     settings.resources.diamondDailyLimit = 1234;

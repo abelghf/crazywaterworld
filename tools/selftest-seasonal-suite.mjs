@@ -1156,12 +1156,9 @@ await test('预设走商在途遵守零针或库存加速，冲刺达标后仍�
       assert.equal(f.state.stock['海商王加速'], 8);
       continue;
     }
-    assert.equal(f.sent('TradeSpeedRequest')[0].body.useNum, 1, '多跑相同的一程只用一根');
-    await run();
-    assert.equal(f.sent('TradeSpeedRequest').length, 1, '剩余航时自然走完');
-    const cargo = f.state.trade.cargo;
-    f.client.serverClockOffsetMs = cargo.moveEndTime * 1000 - Date.now();
-    Object.assign(cargo, { cityId: cargo.moveToCityId, moveToCityId: 0, moveEndTime: 0 });
+    assert.deepEqual(f.sent('TradeSpeedRequest').map(r => r.body.useNum), [4], '优先回款，用库存针直接到港');
+    assert.equal(f.state.trade.cargo.cityId, 20);
+    assert.equal(f.state.trade.cargo.moveToCityId, 0);
     f.state.trade.player.profit = 50_000_000;
     f.state.trade.cargo.cargoLv = 5;
     await run();
@@ -1172,7 +1169,7 @@ await test('预设走商在途遵守零针或库存加速，冲刺达标后仍�
     assert.equal(f.sent('TradeMoveRequest').length, 2);
     await run();
     assert.equal(f.sent('TradeSpeedRequest').length, 1);
-    assert.equal(f.state.stock['海商王加速'], 7);
+    assert.equal(f.state.stock['海商王加速'], 4);
   }
 });
 await test('仅用本期免费针按实领记账，扣除付费、手动消耗和未确认用针，重启及换期保持隔离', async () => {
@@ -1234,10 +1231,10 @@ await test('仅用本期免费针可在途中使用新领的针，背包旧针�
   assert.equal(f.state.stock['海商王加速'], 9);
   assert.equal(f.sent('TradeBuySpeedItemRequest').length, 0);
 });
-await test('末日 21:15 从空船购货冲过目标，用成交所需的三根后停针', async () => {
+await test('手动选择省针追赶时，末日 21:15 从空船购货，用成交所需的三根后停针', async () => {
   const f = setup(), close = f.now + 10 * 3600, at = close - 45 * 60;
   const run = () => f.run(merchantActivity, 'merchantTrade');
-  Object.assign(f.settings.merchant, merchantPresets.find(p => p.id === 'sprint').settings.merchant);
+  Object.assign(f.settings.merchant, merchantPresets.find(p => p.id === 'sprint').settings.merchant, { speedUpMode: 'goal' });
   f.client.tradeWindow.endTime = close + 2 * 3600;
   f.client.serverClockOffsetMs = at * 1000 - Date.now();
   f.state.trade.player.profit = 50_000_000 - 500;

@@ -71,6 +71,8 @@ const configZeroHints={
 };
 const merchantActivityFields = [
     configField('merchant.enabled','开启自动挂机'),
+    configField('merchant.knownPortChains','比较下一程已知销路','switch',{help:'灵活配货时，按到港可用本金、舱位和当日紧缺情报比较下一程。到港后重新核价。'}),
+    configField('merchant.minPurchaseReturnPercent','日间采购最低预计回报','number',{unit:'%',help:'以本港实际进价为分母，优先按风险折后的售价筛选。没有合适组合时，已知紧缺且折后可保本的货可按参考价补货。0 沿用原薄利规则。'}),
     configField('schedule.merchantTrade','按整船收益自动走商','switch',{help:'按实时买价、舱位、资金和库存配货，到港重读实价。没有成员共享时可在总览补录港口情报。本港可盈利的持货仍可出售。'}),
     configField('merchant.fullCargoRoutes','满舱双向特产航线','switch',{help:'默认关闭，按预计净收益灵活配货和选港。开启后，日间只跑两港特产互为紧缺货的航线，按折扣、每格价差和品质补满再出发。库存不足时等刷新，本金不足以装满时留港。空余航次时间用于对准刷新，指针留到活动收尾或收盘救航。隔夜航次按现货和本金尽量装满，次日开市先清舱。'}),
     configField('merchant.autoShareIntel','到港自动共享情报','switch',{help:'默认关闭，手动开启后随已开启的走商及所属分组执行。确认到港后共享本港尚未共享的紧缺情报，已有共享直接跳过；每日紧缺更新后重新检查，不按每次价格刷新重复发送。回读确认后才记为已共享，未知结果保留防重记录，失败不阻塞买卖；达到利润上限仍可共享当前港口。'}),
@@ -84,7 +86,7 @@ const merchantActivityFields = [
     configField('merchant.liquidationMinutes','活动结束前清仓窗口','number',{unit:'分钟',help:'默认120分钟，0关闭提前清仓。窗口内优先处理持货；无论此值多少，都不采购无法在交易截止前卖出的货物。'}),
     configField('merchant.maxLossPercent','清仓最大亏损率','number',{unit:'%',help:'普通清仓默认 0，不自动亏损卖出。平时可按原价卖出，为收益更高的现货腾出本金和舱位。填正数后，清仓期可按每批买价接受所设比例内的亏损。隔夜船货在次日开市按实价全部卖出，即使亏损超过此比例。'}),
     configField('merchant.autoSpeedUp','允许使用指南针加速','switch',{help:'按账号保存，跨期生效。关闭时按自然航程走商。开启后按所选策略、用量上限和保留数量用针，达到 5000 万或更低的自设利润上限后停止用针。'}),
-    configField('merchant.speedUpMode','跑船与加速策略','choice',{options:[['deadline','稳定模式：平时省针，最后一船加速卖货'],['refresh','刷新窗口加速'],['arrival','刷新窗口加速：每刷新最多一程'],['race','同港抢先（领先时省针）'],['full','全程加速'],['goal','冲刺目标：前期省针，收尾追赶'],['eventFree','仅用本期免费针']],help:'仅用本期免费针模式按实领额度加速，钻石补购始终关闭。冲刺目标模式按本船折后利润估算剩余自然航次。前期能多跑一程或多卖货时才用针。最后两个交易日按利润缺口、库存和各日额度安排加速，有时间买货并在收盘前卖出时可继续出航。同等预计进度优先少用针。稳定模式在最后一个交易日收盘前的一段航程内（当前为两小时），按每日和每程剩余额度及可用库存核算。能一次到港且收盘前来得及逐批卖完时才用针。余针暂时不够就先自然航行，到点复查。其他交易日若次日仍能卖货会留针。同港抢先比较可见同盟船的预计到港时间。落后或并列时，用刚好能超过最早一艘的根数。全程加速按剩余航时尽快到港，针不足时可部分加速。这两种模式按到港时间决定用针。刷新窗口模式会比较同盟船到港顺序与历史库存。能提前买到更赚钱的组合时才为抢货用针，到港重新核价。每刷新最多一程模式还会限制出航次数。'}),
+    configField('merchant.speedUpMode','跑船与加速策略','choice',{options:[['deadline','稳定模式：平时省针，最后一船加速卖货'],['refresh','刷新窗口加速'],['arrival','刷新窗口加速：每刷新最多一程'],['race','同港抢先（领先时省针）'],['full','全程加速'],['goal','前期省针，收尾追赶'],['targetFirst','5,000 万达标优先'],['eventFree','仅用本期免费针']],help:'仅用本期免费针模式按实领额度加速，钻石补购始终关闭。达标优先模式在解锁满级船前和最后一个交易日加速有可售货物的航次，其他时间按目标缺口安排用针。前期省针模式按本船折后利润估算剩余自然航次。前期能多跑一程或多卖货时才用针。最后两个交易日按利润缺口、库存和各日额度安排加速，有时间买货并在收盘前卖出时可继续出航。同等预计进度优先少用针。稳定模式在最后一个交易日收盘前的一段航程内（当前为两小时），按每日和每程剩余额度及可用库存核算。能一次到港且收盘前来得及逐批卖完时才用针。余针暂时不够就先自然航行，到点复查。其他交易日若次日仍能卖货会留针。同港抢先比较可见同盟船的预计到港时间。落后或并列时，用刚好能超过最早一艘的根数。全程加速按剩余航时尽快到港，针不足时可部分加速。这两种模式按到港时间决定用针。刷新窗口模式会比较同盟船到港顺序与历史库存。能提前买到更赚钱的组合时才为抢货用针，到港重新核价。每刷新最多一程模式还会限制出航次数。'}),
     configField('merchant.guardLastPointer','最后一根防抢','switch',{ parent: 'merchant.autoSpeedUp',when:d=>d.merchant?.autoSpeedUp,help:'默认关闭。开启后，每程进入一根指南针可直接到港的时间（当前 30 分钟），即使领先或未见同港船也尝试用一根。仍遵守保留量和用量上限，补购须单独开启。'}),
     configField('merchant.refreshWindowMinutes','刷新后加速窗口','number',{ parent: 'merchant.speedUpMode',unit:'分钟',when:d=>['refresh','arrival'].includes(d.merchant.speedUpMode),help:'仅在真实配置刷新时刻之后的此窗口内加速，窗口外等待；交易截止前仍可补救。'}),
     configField('merchant.dailyPointerLimit','每日指针使用上限','number',{ parent: 'merchant.autoSpeedUp',unit:'根',when:d=>d.merchant.autoSpeedUp,help:'默认28，0 禁止使用；跨重启保留已用和未确认用量。'}),

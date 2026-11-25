@@ -68,6 +68,31 @@ function fixture(at = now) {
 async function test(name, run) { await run(); passed++; console.log('通过：' + name); }
 
 try {
+  await test('达标优先从首日加速载货回款，满级后按缺口用针，末日追赶并在五千万停针', async () => {
+    const f = fixture();
+    f.event.endTime = now + 3 * 86400;
+    const cfg = structuredClone(config);
+    cfg.tables.TradeShipCfg.data.push({ lv: 5, capacity: 81000, profitMargin: 1500, upMoney: 1000000 });
+    const settings = { ...f.settings.merchant, speedUpMode: 'targetFirst', periodPointerLimit: -1, keepPointers: 0 };
+    const plan = (options = {}) => planMerchantSpeed(cfg, f.event, f.state, f.radar, f.stock, settings, now, options);
+    assert.equal(plan().accelerationReason, 'full');
+    assert.notEqual(plan({ exploration: true }).kind, 'speed');
+    assert.notEqual(plan({ plannedOpening: f.state.cargo.moveEndTime + 1 }).kind, 'speed');
+    assert.notEqual(plan({ dailyUsed: 28 }).kind, 'speed');
+    f.state.player.profit = 1000000;
+    assert.notEqual(plan().accelerationReason, 'full');
+    f.event.endTime = now + 4 * 3600;
+    assert.equal(plan().accelerationReason, 'full');
+    const holding = f.state.player.goods;
+    f.state.player.goods = [];
+    assert.notEqual(plan().kind, 'speed');
+    f.state.player.goods = holding;
+    f.stock.set(pointer, 0);
+    assert.notEqual(plan().kind, 'speed');
+    f.stock.set(pointer, 4);
+    f.state.player.profit = 50000000;
+    assert.equal(plan().kind, 'none');
+  });
   await test('已确认的隔夜航程自然到港可赶上开市时，即使全速模式也保留库存', async () => {
     const f = fixture(), c = f.state.cargo, opening = now + 12 * 3600 + 45 * 60;
     f.event.endTime = opening + 86400;
