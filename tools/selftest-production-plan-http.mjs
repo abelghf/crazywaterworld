@@ -23,6 +23,7 @@ const config = {
   OrderDailyRewardCfg: [6, 12, 18, 24, 30, 40, 45].map(reqNum => ({ reqNum })),
   GameParamCfg: [{ paramName: '初始人口', paramValue: 3 }, { paramName: '初始人口上限', paramValue: 100 }, { paramName: '产品存量初始上限', paramValue: 50 }],
   CargoUnlockCfg: [{ index: 1, playerLevel: 9 }],
+  GuildOrderNumCfg: [{ season: 1, playerLevel: 1, maxNum: 10 }],
   ModuleOpenCfg: [{ moduleId: '联盟情报', playerLevel: 18 }, { moduleId: '联盟商船', playerLevel: 18 }],
   HeroRaidOrderCfg: [{ raidId: 1, orderId: 2, unlockDay: 1, orderList: [['面包', 1]] }],
 };
@@ -31,11 +32,11 @@ fs.writeFileSync(process.env.CW_CONFIG_PACK, JSON.stringify(Object.entries(confi
 const { GameClient } = await import('../src/client.mjs');
 const { saveStore, loadStore } = await import('../src/accounts.mjs');
 const { createConsole } = await import('../src/server.mjs');
-const { defaultSettings, saveAutomationSettings } = await import('../src/automation-settings.mjs');
+const { createUsageLedger, defaultSettings, saveAutomationSettings } = await import('../src/automation-settings.mjs');
 const { watchHeroRaidPushes } = await import('../src/hero-raid-automation.mjs');
 const { captureSpendOperation } = await import('../src/spend-evidence.mjs');
 const { beginOrderMaterialSpend, pendingOrderMaterialSpends } = await import('../src/order-reservations.mjs');
-const requests = ['OnWater', 'AllItem', 'AllResource', 'GameEffect', 'MonthCard', 'AllHero', 'WeekInfo', 'WeekOrderInfo', 'CargoShips', 'GuildOrder', 'RadarInfo'];
+const requests = ['OnWater', 'AllItem', 'AllResource', 'GameEffect', 'MonthCard', 'AllHero', 'WeekInfo', 'WeekOrderInfo', 'CargoShips', 'GuildOrder', 'CounterInfo', 'RadarInfo'];
 const protocol = createDeclaredProtocol([...requests.flatMap(name => [name + 'Request', name + 'Response']),
   'StartFactoryProduceRequest', 'CancelFactoryProduceRequest', 'SetFactoryAutoProduceRequest', 'CancelFactoryAutoProduceRequest',
   'SpeedUpFactoryProduceRequest', 'FarmSpeedUpRequest', 'GainFactoryProduceRequest', 'GainFactoryProduceResponse']);
@@ -96,6 +97,7 @@ async function fixture(gameProtocol = protocol) {
     CargoShipsRequest: { ship: [{ index: 1, status: 0, orderItem: [{ asset: { id: '面包', num: 1 } }] },
       { index: 2, status: 0, orderItem: [{ asset: { id: '面包', num: 1 } }, { filled: true, asset: { id: '面包', num: 99 } }] }] },
     GuildOrderRequest: { order: { requirements: [{ id: '面包', num: 1 }], nextRefreshTime: now + 3600 } },
+    CounterInfoRequest: { counters: [] },
     RadarInfoRequest: { radarInfo: { events: [{ uid: 1, eventId: 40001, state: 1, refugee: { requirements: [{ id: '面包', num: 1 }] } }] } },
   } };
   states.set(id, state);
@@ -480,6 +482,45 @@ try {
       assert.deepEqual(f.state.sends, []);
       assert(f.state.requests.every(name => requests.some(prefix => name === prefix + 'Request')));
       assert.equal(f.state.logins, 1);
+    } finally { await f.close(); }
+  });
+  await test('募兵材料齐全时按当天次数排产，达到上限后材料可供其他订单使用', async () => {
+    const f = await fixture();
+    try {
+      const replies = f.state.responses;
+      replies.GuildOrderRequest.order.requirements = [{ id: '面包', num: 20 }];
+      const counter = { type: 'DAILY_FINISH_GUILD_ORDER', num: 9 };
+      replies.CounterInfoRequest.counters.push(counter);
+      await f.api('connect', {});
+      await updateSettings(f, s => { s.factory.demandPriority = ['guildRecruit', 'resident']; });
+      const read = () => f.api('world/production-plan');
+      const recruit = plan => plan.orders.find(o => o.source === 'guildRecruit');
+      const ready = await read();
+      assert.equal(recruit(ready).completionAt, ready.snapshotTime);
+      counter.num = 10;
+      f.session().client.emit('message', { name: 'SCCounterUpdate', body: { info: counter } });
+      for (const strategy of ['smart', 'nativeSimulation']) {
+        if (strategy === 'nativeSimulation') await updateSettings(f, s => { s.factory.strategy = strategy; });
+        const plan = await read(), order = recruit(plan);
+        assert(plan.productionRevision > ready.productionRevision);
+        assert.equal(order.skipped, true);
+        assert.equal(order.completionAt, null);
+        assert.match(order.reason, /完成 10 次，达到本赛季上限 10/);
+        assert(!plan.forecast.completions.some(o => o.id === order.id));
+        assert(plan.orders.filter(o => o.source === 'resident').every(o => o.completionAt === plan.snapshotTime));
+      }
+      counter.num = 1;
+      await updateSettings(f, s => { s.alliance.recruitDailyLimit = 2; });
+      const ledger = createUsageLedger(f.id);
+      ledger.confirm(ledger.reserve({ guildRecruit: 2 }));
+      assert.match(recruit(await read()).reason, /设置的今日募兵上限 2/);
+      await updateSettings(f, s => { s.alliance.recruitDailyLimit = 0; });
+      assert.equal(recruit(await read()).skipped, false);
+      replies.CounterInfoRequest = {};
+      const unknown = await read();
+      assert.equal(recruit(unknown).metadata.recruitBlock.label, '募兵次数待确认');
+      assert.equal(recruit(unknown).completionAt, null);
+      assert(unknown.forecast.completions.some(o => o.id.startsWith('resident:')));
     } finally { await f.close(); }
   });
   await test('十五座工厂与农田同时原生接管时，按订单给出备齐时间或材料缺口', async () => {

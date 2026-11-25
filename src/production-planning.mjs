@@ -161,6 +161,10 @@ export function buildProductionModel(snapshot, config, settings, { pendingMateri
   const onHand = new Map(inventory.map(item => [item.itemId, item.quantity]));
   const available = id => onHand.get(id) ?? 0;
   const activeOrderRows = orderRows.filter(order => {
+    if (order.metadata?.recruitBlock) {
+      skippedOrders.set(order.id, [order.metadata.recruitBlock]);
+      return false;
+    }
     const rule = order.source === 'resident' && residentMaterialRule(settings.resident, order.requirements, cropRelatedIds,
       (snapshot.inventoryKnown ?? snapshot.complete) ? available : null);
     if (rule) {

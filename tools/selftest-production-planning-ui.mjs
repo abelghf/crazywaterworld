@@ -221,6 +221,11 @@ await test('各需求保留状态与备齐时间，跳过的需求不计入完�
   ]);
   env.render({ orders: [skipped] });
   assert.match(env.node('production-plan-result').textContent, /本次需求均已跳过/);
+  const recruitBlock = { label: '今日募兵已达上限', reason: '今日联盟募兵已完成 10 次，达到本赛季上限 10' };
+  env.render({ snapshotTime: now, orders: [{ label: '联盟募兵', skipped: true, metadata: { recruitBlock },
+    reason: recruitBlock.reason, requirements: [{ id: '粗铁', num: 9 }] }] });
+  assert.deepEqual(env.tables.at(-1).rows[0].map(cell => cell.textContent),
+    ['联盟募兵', '粗铁 ×9' + recruitBlock.reason, '今日募兵已达上限']);
 });
 
 function descendants(node) {

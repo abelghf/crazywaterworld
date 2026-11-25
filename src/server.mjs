@@ -136,6 +136,7 @@ import { materialTreeRecipes, planProduction } from './production-planning.mjs';
 import { forecastProductionDay } from './production-day.mjs';
 import { factoryInsertions } from './factory-insert-store.mjs';
 import { productionDemandChanged } from './factory-replanning.mjs';
+import { guildOrderCounterChanged } from './guild-orders.mjs';
 import { advanceFactoryInsertion, prepareFactoryInsertion } from './factory-insertion.mjs';
 import { createProductionTiming, watchProductionTimings } from './production-timing.mjs';
 import { captureManualProductionMaterialState, refreshOrderMaterialSpends } from './order-reservations.mjs';
@@ -1270,7 +1271,7 @@ export function createConsole({ host = '127.0.0.1', port = 17321, onLog, recover
     }
     instance.on('list-player-profiles', rows => noteNames(rows));
     instance.on('message', ({name,body}) => {
-      if (session.client === instance && (productionDemandChanged(name,body)
+      if (session.client === instance && (productionDemandChanged(name,body) || guildOrderCounterChanged(name, body)
         || name === 'SCUpdateWaterBuilding' && body?.building?.some(b => b.factory || b.farm))) {
         session.productionRevision = (session.productionRevision ?? 0) + 1;
       }
@@ -4689,7 +4690,7 @@ export function createConsole({ host = '127.0.0.1', port = 17321, onLog, recover
             await refreshOrderMaterialSpends(client, player, { enabled, request: 'PetFeedRequest' });
             const productionRevision = session.productionRevision ?? 0;
             const snapshot = await readProductionSnapshot(client, protocolFor(client), config, player, settings,
-              { enabled, observedDurations: timing.snapshot() });
+              { enabled, observedDurations: timing.snapshot(), ledger: usageFor(session) });
             if (!enabled()) throw new Error('账号或排产设置已变化，请重新计算');
             if (loadConfigSafe() !== config) throw new Error('游戏配置已更新，请重新计算');
             snapshot.timing.observedDurations = timing.snapshot();

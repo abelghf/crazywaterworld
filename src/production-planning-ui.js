@@ -53,7 +53,7 @@ function productionPlanSummary(data) {
     if (data.pending) return note('模拟原生 · 等待已有材料扣款确认。');
     return note('模拟原生 · ' + (data.missingReads?.length ? data.missingReads.join('；') : '本轮没有可立即开工的任务。'));
   }
-  if (orders.length && orders.every(order => order.skipped)) return note('本次需求均已跳过，请检查下方的工厂条件。');
+  if (orders.length && orders.every(order => order.skipped)) return note('本次需求均已跳过，原因见下表。');
   if (data.status === 'optimal' && Array.isArray(data.orders) && !orders.length) {
     return note(data.timeline?.some(job => job.kind === 'restock')
       ? '当前按水位备货，每种加工品目标 ' + data.stockTarget + ' 件。' : '当前没有需要备料的需求。');
@@ -119,7 +119,7 @@ function planDemandRow(order, index, recipes, snapshotTime) {
   materials.appendChild(planMaterialList(order.requirements || [], recipes, 'production-plan-products-' + index));
   if (order.reason) materials.appendChild(el('p', 'plan-demand-reason', order.reason));
   let status;
-  if (order.skipped) status = chip('waiting', '已跳过');
+  if (order.skipped) status = chip('waiting', order.metadata?.recruitBlock?.label || '已跳过');
   else if (!Number.isFinite(order.completionAt) || order.reason) status = chip('unknown', order.waitingForSupply ? order.statusLabel : '时间待定');
   else if (order.completionAt === snapshotTime) status = chip('ready', '现在可备齐');
   else status = el('span', 'plan-demand-eta', productionPlanTime(order.completionAt));
