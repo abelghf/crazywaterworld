@@ -657,7 +657,7 @@ export async function runLoop(client, protocol, {
     let pirateChecked = false;
     const challengeOptions = { player, getSettings, state: challengeRun, ledger: usageLedger, executeBattle,
       enabled: () => !stop.aborted && runtimeActive() && client.connected !== false, isStageBusy, isTrialBusy, isPirateBusy,
-      prepareDispatch: () => refreshCityWarReservations(client, protocol, config, player, getSettings),
+      prepareDispatch: () => refreshCityWarReservations(client, protocol, config, player, getSettings, usageLedger),
       wait: (ms, _value, { signal } = {}) => sleep(ms, signal),
       signal: typeof stop.throwIfAborted === 'function' ? stop : undefined };
     async function checkPirateSweeps() {

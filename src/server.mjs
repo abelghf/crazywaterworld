@@ -1227,7 +1227,7 @@ export function createConsole({ host = '127.0.0.1', port = 17321, onLog, recover
   async function refreshFleetReservations(session) {
     if (!session.loop.running) return;
     await refreshCityWarReservations(session.client, protocolFor(session.client), loadConfigSafe(), session.player,
-      () => session.preferences);
+      () => session.preferences, usageFor(session));
   }
   function actionGuard(session, client, config) {
     const generation = session.generation;
@@ -2896,7 +2896,7 @@ export function createConsole({ host = '127.0.0.1', port = 17321, onLog, recover
             const own=await client.request('MyFleetsRequest',{},'MyFleetsResponse');
             if(!Array.isArray(own.fleets))throw Error('舰队状态未同步');
             const table=fleetDispatchView(client,settings,usageFor(session),own.fleets,exactAutomationId(session.player.worldId));
-            return {...output({actions:[],notes:['任务顺序：'+settings.fleetDispatch.priority.map(k=>dispatchLabels[k]).join(' → '),'意向仅表示配置允许；派遣前仍核对目标和费用，正在执行的任务不抢占。']},{fleets:table.length},'舰队调度'),viewOnly:true,dispatch:{fleets:table.map(f=>({name:f.buildingId,reason:[f.reason,...f.reserved.map(r=>'预留给'+r),'允许顺序：'+(f.intents.map(i=>i.label).join(' → ')||'无'),'当前目标：'+(f.targetGrid??'主城')].filter(Boolean).join('；')}))}};
+            return {...output({actions:[],notes:['任务顺序：'+settings.fleetDispatch.priority.map(k=>dispatchLabels[k]).join(' → '),'意向仅表示配置允许；派遣前仍核对目标和费用，正在执行的任务不抢占。']},{fleets:table.length},'舰队调度'),viewOnly:true,dispatch:{fleets:table.map(f=>({name:f.buildingId,reason:[f.reason,...f.reservationNotes,'允许顺序：'+(f.intents.map(i=>i.label).join(' → ')||'无'),'当前目标：'+(f.targetGrid??'主城')].filter(Boolean).join('；')}))}};
           }
           if(category==='pirateSweep'){
             const state=await readPirateSweeps(client,config,session.player,settings,usageFor(session)),notes=[];
