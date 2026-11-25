@@ -94,7 +94,8 @@ import { readAfkUpgrade } from './afk-upgrade.mjs';
 import { newbieView } from './collections.mjs';
 import { normalize } from './worlds.mjs';
 import { pirateTracker, pirateHuntOptions, startPirateHunt } from './pirates.mjs';
-import { activityEntries, activityView, runActivity, runWeekOrder } from './activities.mjs';
+import { activityEntries, activityView, runActivity, runWeekOrder, runWeekChip } from './activities.mjs';
+import { updateChipFactoryScore } from './week-chip.mjs';
 import { activityCatalogPushNames, readActivityCatalog, rememberActivityCatalog, rememberActivityPush } from './activity-catalog.mjs';
 import { displayMaterial, getConfig } from './config.mjs';
 import { readHeroGrowthPlan, heroStepLabel, runHeroPlan, formatHeroPlan } from './heroes.mjs';
@@ -1386,6 +1387,7 @@ export function createConsole({ host = '127.0.0.1', port = 17321, onLog, recover
         for (const stream of streams) if (stream.allAccounts || stream.account === session.id) writeStream(stream, `event: guild-aid-changed\ndata: ${JSON.stringify({ account: session.id })}\n\n`);
       }
       if (session.client === instance && session.player) {
+        if (name === 'ChipChestOpenResponse' || name === 'ChipChestGotScoreResponse') updateChipFactoryScore(session.player, name, body);
         if (name === 'SCJoinGuild') session.player.guildId = body.guildId;
         if (name === 'SCLeaveGuild') session.player.guildId = 0;
       }
@@ -4295,7 +4297,7 @@ export function createConsole({ host = '127.0.0.1', port = 17321, onLog, recover
         const { account, session } = scoped_(parsed);
         json(await progressionJob(session, account, route, null, async (client, enabled) => {
           const config = loadConfigSafe();
-          const view = await activityView(client, client.festivals, config, session.player);
+          const view = await activityView(client, client.festivals, config, session.player, session.id);
           view.newbie = newbieView(client);
           if (view.order?.materials.length && !view.order.finished && enabled()) {
             const typeOf = makeTypeResolver(config);
@@ -4328,6 +4330,20 @@ export function createConsole({ host = '127.0.0.1', port = 17321, onLog, recover
           return Object.assign(view, activityCatalogView(session, activities));
         }, { read: true }));
         return;
+      }
+      if (route === 'POST /api/activities/week-chip/open') {
+        const payload = jsonBody();
+        needConfirm(payload);
+        const { account, session } = scoped_(parsed);
+        const result = await progressionJob(session, account, route + ':' + payload.planKey, '硅晶达标', async (client, enabled) => {
+          try {
+            const opened = await runWeekChip(client, loadConfigSafe(), { activityId: payload.activityId, planKey: payload.planKey,
+              owner: session.id, player: session.player, enabled, ledger: usageFor(session) });
+            emit(session, 'info', opened.message);
+            return opened;
+          } finally { session.activityStatistics = null; }
+        });
+        json(result); return;
       }
       if (route === 'POST /api/activities/run') {
         const payload = jsonBody();

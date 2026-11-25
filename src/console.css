@@ -822,6 +822,14 @@ button.factory-empty:disabled { cursor:wait; opacity:.6 }
 }
 .activity-task { display:grid; grid-template-columns:minmax(0,1fr) auto; column-gap:24px; align-items:center; padding:16px 0; border-top:1px solid var(--border) }
 .activity-task:first-child { border-top:0; padding-top:0 }
+.week-chip-panel { display:grid; gap:8px; padding:16px 0; border-top:1px solid var(--border) }
+.week-chip-panel>button { justify-self:start }
+.week-chip-panel dl { margin:0; display:grid; gap:8px 16px }
+.week-chip-panel dt { color:var(--muted-foreground); font-size:12px }
+.week-chip-panel dd { margin:2px 0 0; font-variant-numeric:tabular-nums }
+.week-chip-metrics { grid-template-columns:repeat(auto-fit,minmax(min(100%,130px),1fr)) }
+.week-chip-metrics dd { font-size:17px; font-weight:600 }
+.week-chip-inventory { grid-template-columns:repeat(auto-fit,minmax(min(100%,84px),1fr)); padding:10px 0; border-block:1px solid var(--border) }
 .activity-task>strong,.activity-task>.dim { grid-column:1 }
 .activity-task>strong { font-weight:500 }
 .activity-task>.dim { margin-top:2px }

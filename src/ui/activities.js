@@ -27,6 +27,7 @@ const savingGuildShipSettings = new Set();
 let activityAutomationData = null, activityAutomationOwner = null, activityAutomationVersion = 0;
 let activityAutomationStatus = '';
 const savingActivityAutomation = new Set();
+const weekChipMessages = new Map();
 
 bindConsoleSlice('activities', { activitiesData, activitiesAccount, activitiesReceivedAt, selectedActivity, merchantSettingsData, merchantSettingsOwner, merchantSettingsStatus, heroRaidSettingsData, heroRaidSettingsOwner, heroRaidSettingsStatus, seaMerchantSettingsData, seaMerchantSettingsOwner, seaMerchantSettingsStatus, guildShipSettingsData, guildShipSettingsOwner, guildShipSettingsStatus, activityAutomationData, activityAutomationOwner, activityAutomationStatus }, state => {
   activitiesData = state.activitiesData;
@@ -319,6 +320,7 @@ function renderActivityDetail() {
     const lottery = activitiesData.lottery;
     box.appendChild(el('p', null, lottery ? '累计抽奖 ' + lottery.times + ' 次 · ' + (lottery.required == null ? '全部档位已领完' : '下一档 ' + lottery.required + ' 次' + (lottery.ready ? '（可领取）' : '')) : activitiesData.lotteryError ? '抽奖进度读取失败，详情见运行日志' : '暂无抽奖进度'));
   }
+  if (row.weekType === 6) renderWeekChip(box, row);
   if (row.taskKeys?.includes('newbieLogin')) {
     const newbie = activitiesData.newbie;
     if (newbie) box.appendChild(el('p', null, '已登录 ' + newbie.loginDays + ' 天 · ' + (newbie.available.length ? '可领第 ' + newbie.available.join('、') + ' 天奖励' : '当前奖励已领完')));
@@ -329,8 +331,93 @@ function renderActivityDetail() {
     if (row.weekType === 5 && task.key === 'weekOrderSubmit') continue;
     renderActivityTask(box, row, task);
   }
-  if (!tasks.length && row.weekType !== 5 && !isHeroRaidActivity(row) && !isSeaMerchantActivity(row) && !isGuildShipActivity(row) && !row.automation) box.appendChild(el('p', 'dim', '当前活动暂未接入单次操作，可在游戏内参与。'));
+  if (!tasks.length && row.weekType !== 5 && row.weekType !== 6 && !isHeroRaidActivity(row) && !isSeaMerchantActivity(row) && !isGuildShipActivity(row) && !row.automation) box.appendChild(el('p', 'dim', '当前活动暂未接入单次操作，可在游戏内参与。'));
   if (row.weekType === 5) renderActivityOrder();
+}
+
+function renderWeekChipStatistics(section, plan) {
+  const stats = plan.statistics;
+  const format = n => n.toLocaleString('zh-CN');
+  const metric = (list, label, value) => {
+    const cell = el('div');
+    cell.append(el('dt', null, label), el('dd', null, value));
+    list.appendChild(cell);
+  };
+  const metrics = el('dl', 'week-chip-metrics');
+  metric(metrics, '已完成轮次', stats.completed + ' / ' + plan.roundLimit);
+  metric(metrics, '当前累计积分', format(plan.total));
+  metric(metrics, '预计本轮积分', format(stats.forecast) + ' / ' + format(stats.cap));
+  section.appendChild(metrics);
+  if (stats.qualified > stats.completed) section.appendChild(el('p', 'dim', '已有 ' + stats.qualified + ' 轮积分达标，领完本轮档位奖励后计入完成轮次。'));
+  const inventory = el('dl', 'week-chip-inventory');
+  inventory.setAttribute('aria-label', '硅晶库存');
+  for (const item of stats.inventory) metric(inventory, item.name, format(item.count) + ' 个');
+  section.appendChild(inventory);
+}
+
+function renderWeekChip(box, row) {
+  const account = activitiesAccount, status = activitiesData.status?.[row.id], plan = status?.chip;
+  const section = el('div', 'week-chip-panel');
+  box.appendChild(section);
+  section.appendChild(el('strong', null, '硅晶加工'));
+  if (!plan) {
+    section.appendChild(el('p', 'dim', status?.chipError || '硅晶积分和库存待同步，请刷新活动。'));
+    return;
+  }
+  const key = account + ':' + row.id;
+  if (plan.statistics) renderWeekChipStatistics(section, plan);
+  section.appendChild(el('p', null, plan.round > plan.roundLimit ? '本期全部轮次已完成。' : '第 ' + plan.round + ' 轮 · ' + plan.score + ' / ' + plan.target + ' 分'));
+  if (plan.blockedReason) section.appendChild(el('p', 'dim', plan.blockedReason));
+  else if (!plan.key && plan.round <= plan.roundLimit) {
+    const shortfall = plan.target - (plan.statistics?.forecast ?? Math.min(plan.target, plan.score + plan.available));
+    const statusText = !plan.gap ? '本轮已达标。' : shortfall > 0 ? '本轮还缺 ' + shortfall + ' 分。' : '开晶方案待同步，请刷新活动。';
+    section.appendChild(el('p', 'dim', statusText));
+  }
+  const claimOnly = !plan.gap && plan.key;
+  const button = smallButton(pendingActivities.has(key) ? '正在处理…' : claimOnly ? '领取本轮达标奖励' : '一键开到 ' + plan.target + ' 分');
+  button.dataset.activityRun = 'weekChipOpen';
+  const unavailable = () => account !== current || activitiesAccount !== account || snapshot.connected !== true ||
+    snapshot.paused || disconnected.has(account) || activitiesData?.catalogOnly || activityLifecycle(row) !== 'active';
+  button.disabled = !plan.key || pendingActivities.has(key) || unavailable();
+  button.onclick = () => {
+    if (button.disabled || unavailable()) return;
+    const details = [];
+    if (!claimOnly) {
+      details.push(el('p', null, plan.items.map(item => item.name + ' ×' + item.count).join('、')));
+      if (plan.gain > plan.gap) details.push(el('p', null, '超出目标 ' + (plan.gain - plan.gap) + ' 分。'));
+    }
+    const kinds = new Set(plan.actions?.map(step => step.kind === 'factoryRewards' ? 'factory' : step.kind));
+    const rewards = ['weekly', 'gift', 'factory'].filter(kind => kinds.has(kind))
+      .map(kind => ({ weekly: '本轮档位奖励', gift: '免费礼包', factory: '芯片厂可领积分奖励' })[kind]);
+    if (rewards.length) details.push(el('p', null, '领取' + rewards.join('、')));
+    openConfirm(claimOnly ? '领取第 ' + plan.round + ' 轮奖励' : '开启第 ' + plan.round + ' 轮硅晶', details, async () => {
+      if (unavailable() || selectedActivity !== row.id || activitiesData?.status?.[row.id]?.chip?.key !== plan.key)
+        throw Error('账号或开晶方案已变化，请重新查看');
+      if (pendingActivities.has(key)) return;
+      pendingActivities.add(key);
+      weekChipMessages.delete(key);
+      renderActivityDetail();
+      try {
+        const result = await call('/api/activities/week-chip/open?account=' + encodeURIComponent(account), {
+          method: 'POST', body: JSON.stringify({ confirm: true, activityId: row.id, planKey: plan.key }),
+        });
+        weekChipMessages.set(key, { round: plan.round, complete: true, text: result.message });
+      } catch (error) {
+        weekChipMessages.set(key, { round: plan.round, text: error.message });
+        throw error;
+      } finally {
+        pendingActivities.delete(key);
+        if (account === current) await refreshActivities();
+      }
+    }, claimOnly ? '确认领取' : '确认开启');
+  };
+  section.appendChild(button);
+  const message = weekChipMessages.get(key);
+  if (message && (message.round === plan.round || (message.complete && message.round + 1 === plan.round))) {
+    const result = el('p', 'dim', message.text);
+    result.setAttribute('role', 'status');
+    section.appendChild(result);
+  }
 }
 
 function renderActivityTask(box, row, task) {

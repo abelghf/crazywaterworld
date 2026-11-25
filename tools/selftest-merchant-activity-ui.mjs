@@ -1533,4 +1533,72 @@ await test('联盟商船配置读取晚到或保存前切号，不覆盖或误�
   assert(!f.state.calls.some(call => call.method === 'POST'));
 });
 
+await test('硅晶达标在周期活动内预览本轮消耗，确认后执行一次，库存不足时禁用', async () => {
+  const f = fixture(), id = 'weekly:6:3001:1';
+  f.activities.activities.push({ ...f.activities.activities[0], id, name: '硅晶达标', weekType: 6, taskKeys: [] });
+  const plan = { score: 7997, target: 8000, round: 2, roundLimit: 5, total: 15997, gap: 3, available: 10, gain: 10, key: 'preview',
+    statistics: { completed: 1, qualified: 1, cap: 8000, forecast: 8000, weekly: 0, gift: 0, factory: null,
+      inventory: ['初级','中级','高级','优质','特级'].map((grade,i) => ({ name: grade+'硅晶', count: i === 1 ? 1 : 0 })) },
+    items: [{ name: '中级硅晶', count: 1 }] };
+  f.activities.status[id] = { chip: plan };
+  const button = () => f.node('activities-list').querySelector('[data-activity-run=weekChipOpen]');
+  const writes = () => f.state.calls.filter(call => call.route === '/api/activities/week-chip/open');
+  await f.api.refresh();
+  f.api.select(id);
+  const stats = f.node('activities-list');
+  assert.match(stats.querySelector('.week-chip-metrics').textContent, /已完成轮次1 \/ 5.*当前累计积分15,997.*预计本轮积分8,000 \/ 8,000/);
+  assert.match(stats.querySelector('.week-chip-inventory').textContent, /初级硅晶0 个中级硅晶1 个高级硅晶0 个优质硅晶0 个特级硅晶0 个/);
+  assert.match(stats.textContent, /第 2 轮 · 7997 \/ 8000 分/);
+  assert.doesNotMatch(stats.textContent, /中级硅晶 ×1|超出目标/);
+  assert.equal(button().disabled, false);
+  button().onclick();
+  assert.equal(writes().length, 0);
+  const modal = f.state.confirmations.at(-1);
+  assert.match(modal.details[0].textContent, /中级硅晶 ×1/);
+  assert.match(modal.details[1].textContent, /超出目标 7 分/);
+  f.context.snapshot.paused = true;
+  await assert.rejects(modal.accept(), /变化/);
+  f.context.snapshot.paused = false;
+  f.state.respond = request => {
+    if (request.route !== '/api/activities/week-chip/open') return;
+    assert.equal(request.account, 'merchant-a');
+    assert.deepEqual(request.body, { confirm: true, activityId: id, planKey: 'preview' });
+    Object.assign(plan, { score: 8007, gap: 0, items: [], key: null });
+    return { message: '本轮加工完成' };
+  };
+  await modal.accept();
+  assert.equal(writes().length, 1);
+  assert.equal(button().disabled, true);
+  assert.match(f.node('activities-list').textContent, /本轮已达标.*本轮加工完成/);
+  Object.assign(plan, { round: 3, score: 7, gap: 7993, available: 15 });
+  Object.assign(plan.statistics, { completed: 2, qualified: 2, forecast: 22 });
+  await f.api.refresh();
+  assert.equal(button().disabled, true);
+  assert.match(f.node('activities-list').textContent, /还缺 7978 分/);
+  Object.assign(plan, { round: 2, total: 8000, score: 0, gap: 8000, available: 7594, gain: 8000, key: 'rebates',
+    actions: [{ kind: 'weekly' }, { kind: 'gift' }, { kind: 'factoryRewards' }], items: [{ name: '中级硅晶', count: 50 }] });
+  Object.assign(plan.statistics, { completed: 1, qualified: 1, forecast: 8000, weekly: 500 });
+  await f.api.refresh();
+  const rebatePanel = stats.querySelector('.week-chip-panel').textContent;
+  assert.match(rebatePanel, /预计本轮积分8,000 \/ 8,000/);
+  assert.doesNotMatch(rebatePanel, /库存可得|周活动返晶|免费礼包|芯片厂|预计积分计入|分批加工|返晶到账|将开启|本轮档位奖励|中级硅晶 ×50|还缺 406/);
+  assert.equal(button().disabled, false);
+  button().onclick();
+  const rebateConfirm = f.state.confirmations.at(-1);
+  assert.equal(rebateConfirm.details[0].textContent, '中级硅晶 ×50');
+  assert.equal(rebateConfirm.details[1].textContent, '领取本轮档位奖励、免费礼包、芯片厂可领积分奖励');
+  Object.assign(plan, { key: null, blockedReason: '当前角色 28 级，51 级可建造芯片厂，建成后可加工硅晶。' });
+  await f.api.refresh();
+  assert.equal(button().disabled, true);
+  assert.match(stats.querySelector('.week-chip-panel').textContent, /28 级，51 级可建造芯片厂/);
+  const confirmations = f.state.confirmations.length;
+  button().onclick();
+  assert.equal(f.state.confirmations.length, confirmations);
+  delete plan.blockedReason;
+  Object.assign(plan, { score: 8000, gap: 0, gain: 0, items: [], key: 'claim' });
+  await f.api.refresh();
+  assert.equal(button().textContent, '领取本轮达标奖励');
+  assert.equal(button().disabled, false);
+});
+
 console.log('活动分组与集中配置专项 ' + passed + '/' + passed + ' 通过');
