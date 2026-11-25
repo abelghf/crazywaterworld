@@ -1000,6 +1000,14 @@ export function createConsole({ host = '127.0.0.1', port = 17321, onLog, recover
     finally { if (session.lineupJob === job) session.lineupJob = null; }
   }
 
+  function manualChallengeSchedule(session, autoProgress) {
+    const resultWasUnknown = autoProgress?.resultUnknown;
+    return work => enqueue(session, () => {
+      if (!resultWasUnknown && autoProgress?.resultUnknown) throw new Error('刚才的挂机战果未确认，请核对进度后再开始挑战');
+      return work();
+    });
+  }
+
   function sessionLineupExecutor(session, client, presetId) {
     const generation = session.generation;
     const execute = createLineupExecutor(client, {
@@ -4870,12 +4878,11 @@ export function createConsole({ host = '127.0.0.1', port = 17321, onLog, recover
         let task = session.trials.get(payload.raidId);
         if (!task) { task = createTrialTask(payload.raidId); session.trials.set(payload.raidId, task); }
         const generation = session.generation;
-        const progression = settingsView(session).settings.progression;
-        if (session.loop.running && progression.enabled && progression.trials && progression.raidIds.includes(String(payload.raidId))) throw new Error('该试炼已随挂机推关，请先暂停挂机再手动开始');
+        const schedule = manualChallengeSchedule(session, session.loop.challengeRun?.trials[payload.raidId]);
         let lastReport = '';
         json(task.start(payload, async () => {
           const client = await ensureConnected(session, account);
-          return { client, player: session.player, config, schedule: work => enqueue(session, work),
+          return { client, player: session.player, config, schedule,
             executeBattle: sessionLineupExecutor(session, client, payload.lineupId ?? ''),
             enabled: () => !session.paused && session.generation === generation && session.client === client && client.connected };
         }, state => {
@@ -5104,14 +5111,13 @@ export function createConsole({ host = '127.0.0.1', port = 17321, onLog, recover
         const { session, account } = scoped_(parsed);
         if (session.paused) throw new Error('账号已暂停，请先恢复托管');
         selectedSavedLineup(settingsView(session).settings, { presetId: payload.lineupId ?? '' });
-        const progression = settingsView(session).settings.progression;
-        if (session.loop.running && progression.enabled && progression.mainline) throw new Error('主线已随挂机推关，请先暂停挂机再手动开始');
+        const schedule = manualChallengeSchedule(session, session.loop.challengeRun?.mainline);
         json(session.stages.start(payload, async () => {
           const client = await ensureConnected(session, account);
           const config = loadConfigSafe();
           let nextCheck = 0;
           let checkedAfkHours;
-          return { client, player: session.player, config, schedule: work => enqueue(session, work),
+          return { client, player: session.player, config, schedule,
             executeBattle: sessionLineupExecutor(session, client, payload.lineupId ?? ''), async beforeBattle(signal) {
             const enabled = key => key === 'afk' && session.loop.tasks.afk && !session.loop.running && !signal.aborted;
             const hours = session.preferences?.afk?.claimIntervalHours;

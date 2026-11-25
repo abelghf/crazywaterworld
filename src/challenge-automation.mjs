@@ -42,6 +42,9 @@ export async function runChallengeRound(client, config, { player, getSettings, s
       const result = await run({ beforeBattle, onBattle, enabled: live, onLineupPhase, executeBattle });
       if (!settled) { progress.reason = result.reason; finish({ skipped: true, reason: result.reason }); }
     } catch (error) {
+      const rejected = error.prompt && error.request === (key === 'stageAuto' ? 'ChallengeStageRequest' : 'TrialRaidChallengeRequest');
+      const unknown = sent && !settled && !error.notSent && !rejected;
+      if (unknown) progress.resultUnknown = true;
       if (error.lineupRestorePending) {
         progress.lineupRestorePending = true;
         if (progress.lineupPhase !== 'conflict') progress.lineupPhase = 'pending';
@@ -50,13 +53,12 @@ export async function runChallengeRound(client, config, { player, getSettings, s
         progress.reason = reason + '；阵容待恢复，恢复后请重新开始挂机';
         return finish({ ok: false, error: progress.reason });
       }
-      const rejected = error.prompt && error.request === (key === 'stageAuto' ? 'ChallengeStageRequest' : 'TrialRaidChallengeRequest');
+      if (busy() && (!sent || error.notSent)) return finish({ skipped: true, reason: '手动挑战进行中，本轮跳过' });
       if (rejected) {
         progress.reason = error.message + '；服务器明确拒绝，本次不计战败，下轮再检查';
         return finish({ skipped: true, reason: progress.reason });
       }
       // 超时和不匹配战报不能当作战败，也不能下一轮盲目重试。
-      const unknown = sent && !settled && !error.notSent;
       if (unknown) progress.halted = true;
       progress.reason = error.message + (unknown ? '；结果未确认，本次挂机停止该挑战' : '');
       finish({ skipped: !live(), ok: false, error: progress.reason });

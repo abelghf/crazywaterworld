@@ -571,7 +571,7 @@ try {
       for (const [, script] of page.matchAll(/<script[^>]*>([\s\S]*?)<\/script>/g)) new Function(script);
     } finally { app.server.closeAllConnections(); await app.close(); }
   });
-  await test('手动主线和试炼使用本次参数，不继承或修改挂机失败上限', async () => {
+  await test('挂机开启时手动主线和试炼可直接接管，结束后保留挂机及其配置', async () => {
     const f = fixture(); f.client.stop = () => { f.client.connected = false; };
     const { createConsole } = await import('../src/server.mjs'), app = createConsole({ port: 0 });
     try {
@@ -583,20 +583,49 @@ try {
         const response = await fetch(url + route + '?account=a', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ confirm: true, ...payload }) });
         const result = await response.json(); assert.equal(response.status, 200, result.error); return result;
       };
+      const saved = await (await fetch(url + '/api/settings?account=a')).json();
+      Object.assign(saved.settings.progression, { enabled: true, mainline: true, trials: true, raidIds: ['1'] });
+      await post('/api/settings', { settings: saved.settings, revision: saved.revision, baseRevision: saved.baseRevision });
+      session.loop.running = true;
       for (const [route, payload] of [['/api/stages', {}], ['/api/trials', { raidId: 1 }]]) {
+        const mainline = route === '/api/stages';
         for (const maxFailures of [undefined, 1]) {
           const started = await post(route + '/start', { ...payload, ...(maxFailures ? { maxFailures } : {}) });
+          assert.equal(started.running, true);
           assert.equal(started.maxFailures, maxFailures ?? 3);
           await post(route + '/stop', payload);
-          const task = route.endsWith('stages') ? session.stages : session.trials.get(1);
+          const task = mainline ? session.stages : session.trials.get(1);
           for (let i = 0; task.view().running && i < 100; i++) await new Promise(resolve => setTimeout(resolve, 10));
           assert.equal(task.view().running, false);
         }
+        Object.assign(f.settings.progression, { mainline, trials: !mainline, raidIds: ['1'] });
+        session.loop.challengeRun = f.state;
+        let markSent, release;
+        const sent = new Promise(resolve => { markSent = resolve; });
+        const reply = new Promise(resolve => { release = resolve; });
+        f.hook = async name => {
+          if (!name.includes('Challenge')) return;
+          markSent();
+          await reply;
+          throw new Error('模拟挂机战报超时');
+        };
+        session.queueTail = f.once();
+        await sent;
+        const writes = f.writes.length;
+        try { assert.equal((await post(route + '/start', payload)).running, true); }
+        finally { release(); }
+        await session.queueTail?.catch(() => {});
+        await new Promise(resolve => setImmediate(resolve));
+        const task = mainline ? session.stages : session.trials.get(1);
+        assert.equal(task.view().running, false);
+        assert.match(task.view().reason, /战果未确认/);
+        assert.equal(f.writes.length, writes, '排队中的手动任务不能重发结果未知的挑战');
+        f.hook = null;
       }
-      assert.equal(session.loop.running, false);
+      assert.equal(session.loop.running, true);
       const settings = await (await fetch(url + '/api/settings?account=a')).json();
       assert.equal(settings.settings.progression.maxFailures, 7);
-      assert.equal(settings.settings.progression.mainline, false);
+      assert.deepEqual(settings.settings.progression, saved.settings.progression);
     } finally { app.server.closeAllConnections(); await app.close(); }
   });
   await test('手动海盗失败上限独立，默认一次战败停止，显式参数可覆盖', async () => {
