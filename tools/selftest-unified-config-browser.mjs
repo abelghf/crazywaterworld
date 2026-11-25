@@ -290,8 +290,15 @@ try {
     assert.equal(await panel.getByLabel('最高折数', { exact: true }).isVisible(), false);
     assert.equal(await panel.getByRole('button', { name: '读取当前货架' }).count(), 0);
     const picker = panel.getByRole('listbox', { name: '可选折扣商品' }), search = panel.getByRole('combobox', { name: '搜索折扣商品' });
+    const assertEditorAlignment = async () => {
+      const controls = panel.locator('.config-discount-picker:visible, .config-discount-item-field > strong:visible, .config-discount-limit input, .config-discount-form button');
+      const tops = await controls.evaluateAll(nodes => nodes.map(node => node.getBoundingClientRect().top));
+      assert.equal(tops.length, 5);
+      assert(Math.max(...tops) - Math.min(...tops) <= 1, '物品、上限输入框和操作按钮应在同一行：' + tops.join(', '));
+    };
     await add.click(); await search.waitFor();
     assert(await search.evaluate(node => node === document.activeElement));
+    await assertEditorAlignment();
     const known = picker.getByRole('group', { name: '已知折扣商品' });
     for (const id of ['原料自选包', '玉米', '耐火砖']) assert.equal(await known.getByRole('option', { name: id }).count(), 1);
     await search.fill('不存在的折扣商品');
@@ -301,6 +308,7 @@ try {
     await search.press('ArrowDown'); await search.press('Enter');
     await panel.locator('summary').filter({ hasText: '材料礼包（礼包B）' }).waitFor();
     assert.equal(await picker.isVisible(), false);
+    await assertEditorAlignment();
     await panel.getByLabel('最高折数').fill('4.5');
     await panel.getByLabel('整份最高钻石价').fill('25');
     const save = panel.getByRole('button', { name: '保存', exact: true });
@@ -366,6 +374,7 @@ try {
     assert.equal(stored().rules.length, 1);
     await page.setViewportSize({ width: 1440, height: 1000 });
     await panel.getByRole('button', { name: '编辑', exact: true }).click();
+    await assertEditorAlignment();
     await panel.getByLabel('最高折数').fill('');
     await save.click(); await saved();
     assert.equal(stored().rules[0].maxPercent, null);
