@@ -73,13 +73,15 @@ function evaluateProtocol(src) {
   );
 
   const entry = [...defined.keys()].find((k) => /^src\/chunks\/bundle\..*\.js$/.test(k));
-  if (!entry) throw new Error('bundle entry module not found');
-  req(entry);
+  if (entry) req(entry);
 
-  if (!collector.outer) throw new Error('outer System.register not found');
-
-  const outerApi = collector.outer.declare(() => {}, { id: '', meta: { url: '' } });
-  outerApi.execute();
+  // WeChat's game.js wraps the Cocos output in a define() entry. APP channel
+  // builds ship the Cocos System.register tree directly, so there is no
+  // bundle.* entry; executing the outer module registers the protocol module.
+  if (collector.outer) {
+    const outerApi = collector.outer.declare(() => {}, { id: '', meta: { url: '' } });
+    outerApi.execute();
+  }
 
   if (!collector.target) throw new Error(`module not captured: ${TARGET}`);
   if (collector.target.deps.length !== 2) {
