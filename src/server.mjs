@@ -1909,7 +1909,7 @@ export function createConsole({ host = '127.0.0.1', port = 17321, onLog, recover
       return { source: latest.kind, packageVersion: latest.packageVersion, modifiedAt: new Date(latest.mtimeMs).toISOString(),
         automaticDownload: false, refreshOnConnect: true,
         pendingConnections: active.filter(session => getProtocolSource(protocolFor(session.client))?.signature !== latest.signature).length,
-        message: '协议来自本机游戏包；新连接自动读取更新后的协议，已有连接保留原快照' };
+        message: '新连接自动读取当前游戏协议，已有连接保留原快照' };
     } catch (error) { return { automaticDownload: false, refreshOnConnect: true, error: error.message }; }
   }
 
