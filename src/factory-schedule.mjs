@@ -2,6 +2,7 @@
 // scheduler at serial execution boundaries; push handlers never send requests.
 import { normalize } from './worlds.mjs';
 import { productionDemandChanged } from './factory-replanning.mjs';
+import { hasResidentMaterialRules } from './resident-materials.mjs';
 const MIN_CHECK_MS = 1000;
 const positiveTime = value => Number.isSafeInteger(value) && value > 0;
 const interval = value => Number.isFinite(Number(value)) ? Math.max(1, Math.min(300, Math.floor(Number(value)))) : 30;
@@ -55,6 +56,7 @@ export function createFactorySchedule(client, {
   let disposed = false, checkedOnce = false, checkedAt = now(), failed = false;
   let buildings = [], slots, progressed = false, version = 0, dirty = false, wakeAt = Infinity;
   let demandVersion = 0;
+  let residentOrderChanged = false;
   let savedOffset = Number(client.serverClockOffsetMs) || 0;
   const signatures = new Map(), knownFactories = new Set();
   const preferences = () => getSettings()?.factory;
@@ -65,6 +67,11 @@ export function createFactorySchedule(client, {
       produce: common && (factory?.produce !== false || factory?.cooperateNative === true) && !!isEnabled('startProduce') };
   };
   const active = () => { const mode = modes(); return mode.collect || mode.produce; };
+  const watchResidentOrders = () => {
+    const settings = getSettings();
+    return !disposed && client.connected !== false && settings?.loop?.world && settings.resident?.enabled
+      && hasResidentMaterialRules(settings.resident) && isEnabled('denyOrder');
+  };
   const typeOf = building => {
     const unlocked = table(getConfig(), 'BuildingUnlockCfg').find(row => row.buildingId === building?.buildingId);
     if (typeof unlocked?.buildingType === 'string' && unlocked.buildingType) return unlocked.buildingType;
@@ -104,7 +111,8 @@ export function createFactorySchedule(client, {
     return mode.produce && factory?.produce && factory.demandFirst && factory.strategy !== 'nativeSimulation'
       ? Math.min(next, checkedAt + interval(factory.checkEverySeconds) * 1000) : next;
   };
-  const nextAt = () => active() ? Math.min(baseDeadline(), wakeAt) : Infinity;
+  const nextAt = () => active() ? Math.min(baseDeadline(), wakeAt)
+    : residentOrderChanged && watchResidentOrders() ? wakeAt : Infinity;
   const wake = (immediate = false) => {
     const next = immediate || !checkedOnce ? now() : Math.max(now(), checkedAt + MIN_CHECK_MS);
     const shouldNotify = !dirty || next < wakeAt;
@@ -114,8 +122,10 @@ export function createFactorySchedule(client, {
   const onMessage = ({ name, body } = {}) => {
     if (disposed) return;
     if (productionDemandChanged(name, body)) {
+      const residentChanged = name === 'SCWorkerOrder' && watchResidentOrders();
+      if (residentChanged) residentOrderChanged = true;
       const factory = preferences();
-      if (modes().produce && factory?.produce && factory.demandFirst && factory.strategy !== 'nativeSimulation') {
+      if (residentChanged || modes().produce && factory?.produce && factory.demandFirst && factory.strategy !== 'nativeSimulation') {
         demandVersion++; version++; wake();
       }
       return;
@@ -130,7 +140,7 @@ export function createFactorySchedule(client, {
     }
     if (changed) { version++; wake(); }
   };
-  const onSettings = () => { if (!disposed) { demandVersion++; version++; wake(true); } };
+  const onSettings = () => { if (!disposed) { residentOrderChanged = watchResidentOrders(); demandVersion++; version++; wake(true); } };
   const onPong = () => {
     if (disposed) return;
     const offset = Number(client.serverClockOffsetMs) || 0;
@@ -138,7 +148,7 @@ export function createFactorySchedule(client, {
   };
   client.on?.('message', onMessage); client.on?.('automationSettingsChanged', onSettings); client.on?.('pong', onPong);
   return {
-    active, nextAt, due: () => active() && nextAt() <= now(),
+    active, nextAt, due: () => nextAt() <= now(),
     version: () => version, demandVersion: () => demandVersion, hasChecked: () => checkedOnce,
     checked(state, { version: readVersion = version, demandVersion: readDemand = demandVersion, replan = false,
       progressed: madeProgress = false, slots: observedSlots } = {}) {
@@ -146,7 +156,7 @@ export function createFactorySchedule(client, {
       buildings = Array.isArray(state) ? structuredClone(state) : [];
       checkedAt = now(); checkedOnce = true; failed = false; progressed = !!madeProgress; slots = observedSlots;
       if (readVersion >= version && readDemand >= demandVersion && !replan) {
-        dirty = false; wakeAt = Infinity; signatures.clear(); knownFactories.clear();
+        residentOrderChanged = false; dirty = false; wakeAt = Infinity; signatures.clear(); knownFactories.clear();
         for (const building of buildings) if (building?.factory && typeof building.buildingId === 'string' && isFactory(building)) {
           signatures.set(building.buildingId, signature(building)); knownFactories.add(building.buildingId);
         }
@@ -159,7 +169,7 @@ export function createFactorySchedule(client, {
     },
     failed() {
       if (disposed) return;
-      checkedAt = now(); checkedOnce = true; failed = true; dirty = false; wakeAt = Infinity;
+      checkedAt = now(); checkedOnce = true; failed = true; residentOrderChanged = false; dirty = false; wakeAt = Infinity;
     },
     dispose() {
       if (disposed) return;

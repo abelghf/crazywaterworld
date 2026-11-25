@@ -52,6 +52,7 @@ import { createFactorySchedule } from './factory-schedule.mjs';
 import { createLoopScheduler } from './loop-scheduler.mjs';
 import { checkSeasonMerit } from './season-merit.mjs';
 import { createActionGuard, nativePreferenceEnabled, needsCargoDemand, exactAutomationId } from './automation-policy.mjs';
+import { hasResidentMaterialRules } from './resident-materials.mjs';
 import { surveyBaseAutomation, planBaseAutomation, observeBaseAutomationPlan, runBaseAutomation, baseDemands } from './base-automation.mjs';
 import { hasBaseWork } from './automation-settings.mjs';
 import { runMuseumDisplay } from './museum-display.mjs';
@@ -556,14 +557,18 @@ export async function runLoop(client, protocol, {
           if (current()) demand = baseDemands(extra, config, currentSettings);
         }
         const orderRead = !survey.notes.some(note => note.startsWith('本轮未能读取商人订单'));
+        const checkMaterialOrders = factoryDue && hasResidentMaterialRules(currentSettings?.resident);
         const allow = kind => {
           if (!current()) return false;
+          if (kind === 'finishOrder' || kind === 'denyOrder') return checkMaterialOrders && enabled(kind);
           if (kind === 'gainFactory') return canFactory('collect');
           if (kind === 'finishUpgrade') return checkUpgrade && enabled('finishUpgrade');
           if (kind === 'upgrade') return checkUpgrade && enabled('upgrade') && orderRead;
           return ['startProduce', 'nativeProduce'].includes(kind) && canFactory('startProduce') && (simulateNative || orderRead);
         };
         const plan = planWorld(survey, { config, enabled: allow, settings: currentSettings, blockedCollectionTypes: getBlockedCollectionTypes?.(), usage: usage(), extraDemand: demand, factoryWaitHistory });
+        // 工厂巡检只处理材料规则换单；奖励筛选留给常规订单检查。
+        plan.actions = plan.actions.filter(step => step.kind !== 'denyOrder' || step.materialRule);
         if (currentSettings?.factory?.cooperateNative && allow('startProduce')) observeNativePlan(survey, plan);
         const freshGuard = runtimeGuard(createActionGuard(client, getSettings, usageLedger, { player, enabled: current }));
         const result = await runWorldRound(client, protocol, plan, { ...harvestOptions, allowMutate, enabled: allow, onStep: stepLog('world'),
@@ -1305,7 +1310,7 @@ export async function runLoop(client, protocol, {
           const extra = await surveyBaseAutomation(client, protocol, config, player, settings, survey, { ledger: usageLedger, enabled: () => !stop.aborted && runtimeActive() && client.connected !== false });
           extraDemand = baseDemands(extra, config, settings);
         }
-        if (factorySchedule.active())
+        if (factorySchedule.active() || factorySchedule.due())
           factorySchedule.checked(survey.factories, { version: factoryReadVersion, demandVersion, slots: survey.factorySlots, progressed: true });
         const plan = planWorld(survey, { config, enabled: allowWorld, factoryWaitHistory,
           settings, blockedCollectionTypes: getBlockedCollectionTypes?.(), usage: usage(), extraDemand,

@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
 import { iconEntry } from '../src/art.mjs';
+import { defaultSettings } from '../src/automation-settings.mjs';
 
 function gate() {
   let resolve;
@@ -146,6 +147,26 @@ export async function testResidentHttp(app) {
   assert.equal(timedView.data.factories[1].autoEnabled, false);
   assert.equal(timedView.data.factories[0].jobs[0].estimatedFinishTime, null, '首项开工时间待同步时不推算完成时间');
   buildings = [];
+  const savedTasks = session.loop.tasks;
+  const preferences = defaultSettings();
+  preferences.loop.world = true;
+  preferences.resident.enabled = preferences.resident.reroll = true;
+  session.preferences = preferences;
+  session.loop.tasks = { ...savedTasks, finishOrder: true, denyOrder: true };
+  try {
+    displayedStock = 0;
+    const waiting = await request('world');
+    assert.equal(waiting.status, 200);
+    assert.deepEqual(waiting.data.orders.map(row => row.decision.status), Array(3).fill('productionSkipped'),
+      '缺料且没有工厂时，页面应按挂机设置显示已跳过排产');
+    displayedStock = 3;
+    const ready = await request('world');
+    assert.equal(ready.status, 200);
+    assert.equal(ready.data.orders[0].decision.status, 'ready');
+  } finally {
+    session.preferences = previousPreferences;
+    session.loop.tasks = savedTasks;
+  }
   weekUnavailable = true;
   displayedStock = 0;
   const manualView = await request('world');

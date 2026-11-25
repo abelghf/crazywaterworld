@@ -22,6 +22,7 @@ import { normalize } from './worlds.mjs';
 import { upgradeReason } from './building-upgrade-log.mjs';
 import { linkOperationResult } from './operation-log.mjs';
 import { residentFilter, residentOrderStockWarning, resourceReserve, worldPreferenceEnabled, worldActionAllowed, factoryItemSpeedEnabled, exactAutomationId, AutomationSkip, createActionGuard } from './automation-policy.mjs';
+import { residentMaterialRule } from './resident-materials.mjs';
 import { readWeekOrder } from './activities.mjs';
 import { RESOURCE, displayMaterial } from './config.mjs';
 import { captureFarmMaterialState, farmInventory, settleFarmMaterialState } from './farm-planting.mjs';
@@ -327,7 +328,7 @@ function rememberResidentOrders(session, orders) {
     if (session.get(index)?.signature !== signature) session.set(index, { key: randomUUID(), signature });
     keys.set(index, session.get(index).key);
   }
-  session.refreshPending=new Set();
+  session.refreshPending=new Set([...keys.keys()].filter(index => session.get(index)?.materialRefresh));
   if(session.manualRefresh){const {ledger,identity}=session.manualRefresh;
     for(const[key,record]of Object.entries(ledger.keyRecords())){
       const detail=record.details;if(detail?.kind!=='manualOrderRefresh'||detail.identity!==identity)continue;
@@ -998,32 +999,53 @@ export function planWorld(survey, {
     const cargoOverlap = Math.max(0, (cargoNeeds.get(id) ?? 0) - (cargoHeld.get(id) ?? 0));
     return Math.max(0, (weeklyHeld.get(id) ?? 0) - cargoOverlap);
   };
+  const countBefore = Math.max(Number(survey.orderOfTheDay?.orderNum ?? 0), Number(usage.counters?.residentOrders ?? 0));
+  const cropIds = survey.cropIds ?? new Set(rowsOf(config, 'FarmlandPlantCfg').map(row => row.id));
+  const residentSteps = [];
   let residentPlanned = 0;
-  for (const order of survey.orders) {
+  // 先给本轮可交的订单分配库存和次数，再用剩余额度决定哪些槽位需要换单。
+  survey.orders.forEach((order, i) => planResident(order, i, true));
+  survey.orders.forEach((order, i) => {
+    if (!orderDecisions[i]) planResident(order, i, false);
+  });
+  // 有材料规则换单时，先交现货、再换单，然后才收货和排产。借用商人预留的单仍在收货后复核。
+  const immediate = new Set(residentSteps.some(step => step.materialRule)
+    ? residentSteps.filter(step => step.materialRule || step.kind === 'finishOrder' && !step.weeklyBorrowed.length) : []);
+  actions.unshift(...immediate);
+  actions.push(...residentSteps.filter(step => !immediate.has(step)));
+  function planResident(order, i, readyOnly) {
     const label = `${order.workerName || '未知居民'}的订单 #${order.index}`;
     const decision = (status, reason, shortages = []) => {
       const harvestNeeds = shortages.filter(item => item.missing > 0)
         .map(({ id, missing }) => ({ id, missing }));
-      orderDecisions.push({ index: order.index, status, reason, shortages, harvestNeeds });
+      orderDecisions[i] = { index: order.index, status, reason, shortages, harvestNeeds };
       if (status !== 'ready' && status !== 'disabled') notes.push(label + ' ' + reason);
     };
     // v74 ignores the previous order's requirements while its slot is refreshing.
-    if (order.refreshTime) { decision('refreshing', '订单刷新中，等待新需求'); continue; }
-    if (order.orderKey === null) { decision('unknown', order.refreshPending?'上次手动换单结果待确认，等待服务器更新':'服务器返回重复的订单槽位，请刷新后再试'); continue; }
-    if (survey.orderCheckError || !order.requirements.length || order.requirements.some(r => !r.id || !(r.num > 0))) {
-      decision('unknown', survey.orderCheckError || '尚未收到完整订单需求');
-      continue;
+    if (order.refreshTime) { decision('refreshing', '订单刷新中，等待新需求'); return; }
+    if (order.orderKey === null) { decision('unknown', order.refreshPending?'上次换单结果待确认，等待服务器更新':'服务器返回重复的订单槽位，请刷新后再试'); return; }
+    if (!order.requirements.length || order.requirements.some(r => !r.id || !Number.isSafeInteger(r.num) || r.num <= 0)) {
+      decision('unknown', '尚未收到完整订单需求');
+      return;
     }
-    const countBefore = Math.max(Number(survey.orderOfTheDay?.orderNum ?? 0), Number(usage.counters?.residentOrders ?? 0));
-    const filter = residentFilter(order, { ...survey, available: id => Math.max(0, free(id) + lendable(id)), cropIds: survey.cropIds ?? new Set(rowsOf(config, 'FarmlandPlantCfg').map(row => row.id)),
+    // 禁用材料和农作物能从订单本身确定；判断缺料才需要可靠的库存及预留。
+    if (survey.orderCheckError && !residentMaterialRule(settings?.resident, order.requirements, cropIds, null)) {
+      decision('unknown', survey.orderCheckError);
+      return;
+    }
+    const available = id => Math.max(0, free(id) + lendable(id));
+    const filter = residentFilter(order, { ...survey, available, cropIds,
       orderOfTheDay: { ...survey.orderOfTheDay, orderNum: countBefore + residentPlanned } }, settings, usage);
     if (filter) {
-      decision('filtered', filter);
-      if (settings?.resident.enabled && settings.resident.reroll && enabled('denyOrder') && !filter.includes('上限') && (survey.player?.level ?? 0) >= 12) {
-        actions.push({ kind: 'denyOrder', request: 'DenyOrderRequest', response: null, body: { index: order.index }, orderKey: order.orderKey,
-          label: `刷新${label}：${filter}` });
+      if (readyOnly) return;
+      const reroll = filter.reroll && enabled('denyOrder') && (survey.player?.level ?? 0) >= 12;
+      decision(reroll ? 'reroll' : 'filtered', filter.reason);
+      if (reroll) {
+        residentSteps.push({ kind: 'denyOrder', request: 'DenyOrderRequest', response: null, body: { index: order.index }, orderKey: order.orderKey,
+          ...(filter.materialRule ? { materialRule: filter.materialRule, requirements: order.requirements } : {}),
+          label: `刷新${label}：${filter.reason}` });
       }
-      continue;
+      return;
     }
     const shortages = order.requirements.filter(r => free(r.id) < r.num).map(({ id, num }) => {
       const owned = have(id), available = Math.max(0, free(id));
@@ -1037,7 +1059,7 @@ export function planWorld(survey, {
     // does not cover the ship's outstanding demand when reallocating it.
     const canYield = weeklyIncomplete && shortages.every(item => item.missing === 0);
     if (!shortages.length || canYield) {
-      if (!enabled('finishOrder')) { decision('disabled', '材料已齐，自动交居民订单未开启'); continue; }
+      if (!enabled('finishOrder')) { decision('disabled', '材料已齐，自动交居民订单未开启'); return; }
       const weeklyBorrowed = shortages.map(({ id, canBorrow }) => ({ id, num: canBorrow }));
       const borrowedText = weeklyBorrowed.map(item => name(item.id) + ' ×' + item.num).join('、');
       decision('ready', borrowedText ? '商人订单尚缺材料，先交居民订单，商人订单待补 ' + borrowedText : '材料已齐，可交单');
@@ -1047,10 +1069,11 @@ export function planWorld(survey, {
         borrowedTotals.set(id, (borrowedTotals.get(id) ?? 0) + num);
       }
       for (const r of order.requirements) reserve(r.id, r.num);
-      actions.push(residentDeliveryAction(order, survey.orderOfTheDay, weeklyBorrowed, borrowedText));
+      residentSteps.push(residentDeliveryAction(order, survey.orderOfTheDay, weeklyBorrowed, borrowedText));
       residentPlanned++;
-      continue;
+      return;
     }
+    if (readyOnly) return;
     const short = shortages.map(item => {
       const holds = [];
       if (item.weeklyReserved) holds.push('商人订单预留 ' + item.weeklyReserved);
@@ -1072,9 +1095,9 @@ export function planWorld(survey, {
       decision('reserved', holdReason + short, shortages);
     } else if (enabled('finishOrder') && shortages.every(item => (dueHarvest.get(item.id) ?? 0) >= item.missing)) {
       decision('missing', '等待本轮收货后复查：' + short, shortages);
-    } else if (allowReroll && enabled('denyOrder') && (minOrderExp === null || (order.rewardExp ?? 0) < minOrderExp)) {
+    } else if (allowReroll && (!settings || settings.resident.reroll) && enabled('denyOrder') && (minOrderExp === null || (order.rewardExp ?? 0) < minOrderExp)) {
       decision('reroll', '材料不足，将拒单重刷：' + short, shortages);
-      actions.push({
+      residentSteps.push({
         kind: 'denyOrder',
         request: 'DenyOrderRequest',
         response: null,
@@ -1774,7 +1797,7 @@ export function planWorld(survey, {
     if (left === speeders) notes.push(`${SPEED_UP_ITEM} 有 ${speeders} 个，但没有等待中的建造或生产`);
   }
 
-  return { actions, notes, factoryReasons, queueChanges, cargoLoadLimits, upgradeChecks, upgradeReasons: upgradeChecks.map(upgradeReason), orderDecisions,
+  return { actions, notes, factoryReasons, queueChanges, cargoLoadLimits, upgradeChecks, upgradeReasons: upgradeChecks.map(upgradeReason), orderDecisions, allowReroll, minOrderExp,
     demands: detailedNeeds ? [...detailedNeeds].map(([id, need]) => ({ id, ...need })) : [], reserved: [...reserved].filter(([, n]) => n > 0) };
 }
 
@@ -1930,31 +1953,45 @@ export async function runWorldRound(client, protocol, plan, {
   finishEnabled, ...options
 }) {
   const execution = { ...options, config, player, cargoEnabled };
-  const result = await runWorld(client, protocol, plan, execution);
   const canFinish = finishEnabled ?? (() => !options.enabled || options.enabled('finishOrder'));
+  const rerolls = new Map();
+  if (canFinish()) {
+    for (const step of plan.actions) {
+      if (step.kind === 'denyOrder' && !step.materialRule) rerolls.set(step.body.index, step.orderKey);
+    }
+  }
+  // 收货和交付都可能改变库存。原定换单的槽位在最后一起复核，先交此时能交的单。
+  const initial = rerolls.size ? { actions: plan.actions.filter(step => step.kind !== 'denyOrder' || step.materialRule) } : plan;
+  const result = await runWorld(client, protocol, initial, execution);
   for (const { step } of result.results) {
     if (step.kind === 'finishOrder' || step.kind === 'denyOrder') attemptedOrders.add(step.body.index);
   }
   result.followupCount = 0;
   if (!canFinish()) return result;
   const slots = orderSlotsAfterHarvest(plan, result.results, attemptedOrders);
-  if (!slots.size) return result;
+  if (!slots.size && !rerolls.size) return result;
   try {
     const includeCargo = cargoEnabled();
     const survey = await surveyWorld(client, protocol, { config, player, ordersOnly: true, includeCargo });
-    const allow = kind => kind === 'finishOrder' && canFinish() && (includeCargo || !cargoEnabled());
+    const allow = kind => canFinish() && (includeCargo || !cargoEnabled()) &&
+      (kind === 'finishOrder' || kind === 'denyOrder' && rerolls.size > 0 && (!options.enabled || options.enabled(kind)));
     if (!allow('finishOrder')) return result;
     if (survey.orderCheckError) throw new Error(survey.orderCheckError);
-    survey.orders = survey.orders.filter(order => slots.has(order.index));
-    const followup = planWorld(survey, { config, enabled: allow, settings: options.getSettings?.() ?? options.settings,
+    survey.orders = survey.orders.filter(order => rerolls.has(order.index)
+      ? !attemptedOrders.has(order.index) && order.orderKey === rerolls.get(order.index)
+      : slots.has(order.index));
+    const settings = options.getSettings?.() ?? options.settings;
+    const followup = planWorld(survey, { config, enabled: allow, settings,
+      allowReroll: plan.allowReroll, minOrderExp: plan.minOrderExp,
       usage: options.getUsage?.() ?? options.usage });
+    followup.actions = followup.actions.filter(step => step.kind !== 'denyOrder' || rerolls.has(step.body.index));
     const { results } = await runWorld(client, protocol, followup, { ...execution, enabled: allow });
     for (const { step } of results) attemptedOrders.add(step.body.index);
-    result.followupCount = results.length;
+    result.followupCount = results.filter(({ step }) => !rerolls.has(step.body.index)).length;
     result.results.push(...results);
   } catch (error) {
     if (canFinish()) {
-      const entry = { step: { kind: 'checkResidentOrders', label: '收货后核对居民订单' }, ok: false, error: error.message };
+      const entry = { step: { kind: 'checkResidentOrders', label: rerolls.size ? '换单前核对居民订单' : '收货后核对居民订单' }, ok: false, error: error.message };
       result.followupCount = 1;
       result.results.push(entry);
       options.onStep?.(entry);
@@ -2239,6 +2276,7 @@ export async function runWorld(client, protocol, plan, {
       const finishAction = localGuard?.after ?? afterStep;
       const cancelAction = localGuard?.cancel ?? cancelStep;
       let ticket = null, prepared = false, dispatched = false, writePending = false;
+      let materialRefresh;
       let actual = step;
       let queueChanged = false;
       const observeQueue = ({name, body}) => {
@@ -2253,6 +2291,10 @@ export async function runWorld(client, protocol, plan, {
         const response = step.request === 'FarmPlantRequest' ? 'OkResponse' : step.response;
         if (step.request === 'FarmPlantRequest' && (!protocol.OkResponse || !protocol.OnWaterRequest || !protocol.OnWaterResponse)) {
           throw new AutomationSkip('当前协议不能确认农田播种结果');
+        }
+        if (step.materialRule === 'skipProduction' && results.some(entry =>
+          entry.step.kind === 'finishOrder' && !entry.ok && entry.step.costs?.some(cost => step.requirements.some(item => item.id === cost.id)))) {
+          throw new AutomationSkip('前一单的材料扣除尚未确认，重新核对库存后再换单');
         }
         if (step.kind === 'finishOrder') {
           if (!protocol[step.response]) throw new Error('当前协议不能确认居民订单交付结果');
@@ -2332,7 +2374,11 @@ export async function runWorld(client, protocol, plan, {
         if (resident && actual.orderKey) {
           const session = trackResidentOrders(client);
           if (session.get(step.body.index)?.key !== actual.orderKey) throw new Error('这条居民订单已刷新或已处理，请查看当前订单');
-          session.delete(step.body.index); // A lost reply can still have consumed this slot.
+          if (actual.materialRule) {
+            materialRefresh = session.get(step.body.index);
+            materialRefresh.materialRefresh = true;
+            materialRefresh.key = null; // 保留旧需求签名，服务器回读仍是旧单时不重复换单。
+          } else session.delete(step.body.index); // A lost reply can still have consumed this slot.
         }
         if (response && protocol[response]) {
           if (step.request === 'FarmPlantRequest') {
@@ -2375,6 +2421,10 @@ export async function runWorld(client, protocol, plan, {
       } catch (error) {
         // A later read/settlement failure cannot prove the completed write was unsent.
         const notSent = !dispatched || (writePending && error.notSent === true);
+        if (materialRefresh && (notSent || error.prompt && error.request === step.request)) {
+          const session = trackResidentOrders(client);
+          if (session.get(step.body.index) === materialRefresh) session.delete(step.body.index);
+        }
         if (prepared) await cancelAction?.(actual, ticket, { notSent, error });
         if (['StartFactoryProduceRequest','SetFactoryAutoProduceRequest'].includes(step.request)) rememberFactoryFailure(step, error);
         if(step.request==='SetFactoryAutoProduceRequest'&&(notSent||error.prompt&&error.request===step.request))nativeTargetChecks.get(client)?.delete(step.body.buildingId);

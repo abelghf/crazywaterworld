@@ -9,6 +9,7 @@ import { taskSettings, retiredAutomationTasks, migratedAutomationTasks, removedS
 import { EXTENDED_DEFAULTS, EXTENDED_CONSTRAINTS, SILICON_FLEET_NUMBERS, siliconTierLabels, validateSiliconFleets, validPlayerIdText } from './extended-settings.mjs';
 import { treasureRewardOptions } from './treasure-reward-filter.mjs';
 import { dailyWindowPattern } from './daily-time-windows.mjs';
+import { hasResidentMaterialRules } from './resident-materials.mjs';
 import { activityAutomationDefaults, activityAutomationFields } from './activity-automation.mjs';
 import { APPOINTMENT_PRIORITIES, DEFAULT_APPOINTMENT_PRIORITIES, normalizeAppointmentPriorities } from './appointment-priorities.mjs';
 import { validateLineupSettings, validateFleetLineupBindings } from './saved-lineups.mjs';
@@ -318,6 +319,7 @@ export function nativeTaskValues(settings, current) {
   for (const key of retiredAutomationTasks) result[key] = false;
   for (const key of removedScheduleKeys) delete result[key];
   result.startProduce = settings.factory.produce || settings.factory.cooperateNative;
+  result.denyOrder = settings.resident.reroll || hasResidentMaterialRules(settings.resident);
   result.speedUp = settings.building.speedUp || settings.factory.speedUp || settings.farm.speedUp || settings.factory.speedUpSources.length > 0;
   return result;
 }

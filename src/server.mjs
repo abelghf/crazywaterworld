@@ -2083,11 +2083,11 @@ export function createConsole({ host = '127.0.0.1', port = 17321, onLog, recover
     plan.actions = plan.actions.filter(step => allowAccelerators || !(step.costs ?? []).some(cost => cost.id === '加速器' && cost.num > 0));
     // Manual preview and idle execution can use different toggles. The order
     // table describes what the account's idle loop can actually deliver.
-    const autoOrders = survey.orders.length ? planWorld(survey, {
+    const autoOrders = settings || !survey.orders.length ? plan.orderDecisions : planWorld(survey, {
       config, enabled: kind => session.loop.tasks[worldTaskKey(kind)] === true,
       allowReroll: session.loop.tasks.denyOrder, minOrderExp: null,
       settings, usage,
-    }).orderDecisions : [];
+    }).orderDecisions;
     let map = null, mapError;
     try {
       map = await loadMapAsset(Number(session.player?.scenarioId ?? 0), config?.resources ?? null);
