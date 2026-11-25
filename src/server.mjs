@@ -71,11 +71,11 @@ import { challengeTrial, trialProgress, createTrialTask, readRaid, trialStageSum
 import { readTrialSweeps, executeTrialSweep } from './trial-sweeps.mjs';
 import { readHeroEquipment, equipHeroEmptySlots, enhanceHeroEquipment, uidText } from './hero-equipment.mjs';
 import { readEquipmentCrafting, startEquipmentCraft, collectEquipmentCraft } from './equipment-crafting.mjs';
-import { readLineups, applyLineup, editorLineupRecommendations } from './lineups.mjs';
+import { readLineups, applyLineup, editorLineupRecommendations, readGameLineups, applyGameLineup } from './lineups.mjs';
 import { moveLeagueTeam, readManualLeagueOrder, recoverLeagueOrder } from './league-order.mjs';
 import { describePets, getLineupCatalog, normalizeFormation, readLineupEditor, validateLineupSettings } from './saved-lineups.mjs';
 import { readPetLevelRoster } from './pet-leveling.mjs';
-import { readLineupRuntime, recoverLineup } from './lineup-runtime.mjs';
+import { lineupRecoveryView, readLineupRuntime, recoverLineup } from './lineup-runtime.mjs';
 import { createLineupExecutor, lineupRole, selectedSavedLineup } from './lineup-execution.mjs';
 import { lineupArt } from './lineup-art.mjs';
 import { pirateBoard } from './pirate-board.mjs';
@@ -1001,7 +1001,7 @@ export function createConsole({ host = '127.0.0.1', port = 17321, onLog, recover
 
   function lineupPresetsView(session) {
     const current = settingsView(session);
-    const recovery = readLineupRuntime(session.id);
+    const recovery = lineupRecoveryView(session.id);
     syncLineupRecoveryState(session, recovery);
     return { ...current.settings.lineups, revision: current.revision,
       trialRaids: current.catalog.trialRaids, catalog: getLineupCatalog(loadConfigSafe()),
@@ -4199,11 +4199,13 @@ export function createConsole({ host = '127.0.0.1', port = 17321, onLog, recover
       }
       if (route === 'GET /api/lineup-editor') {
         const { session, account } = scoped_(parsed);
-        json(await progressionJob(session, account, route, '读取布阵信息', async client => {
+        const scope = parsed.searchParams.get('scope');
+        const includeMainline = scope !== 'game' && scope !== 'fleet';
+        json(await progressionJob(session, account, route + ':' + scope, '读取布阵信息', async client => {
           const config = loadConfigSafe();
-          const editor = await readLineupEditor(client, config, session.player);
+          const editor = await readLineupEditor(client, config, session.player, { includeMainline, includePets: scope !== 'fleet' });
           return { ...editor, recommendations: editorLineupRecommendations(config, editor), ...lineupPresetsView(session) };
-        }));
+        }, { read: true }));
         return;
       }
       if (route === 'POST /api/lineup-presets/save') {
@@ -4254,6 +4256,22 @@ export function createConsole({ host = '127.0.0.1', port = 17321, onLog, recover
           await recoverSessionLineup(session, { resolution: payload.resolution, expectedTransactionId: payload.expectedTransactionId });
           return lineupPresetsView(session);
         }, '核对待恢复阵容', { recoverFormation: false }));
+        return;
+      }
+      if (route === 'GET /api/lineups/game') {
+        const { account, session } = scoped_(parsed);
+        json(await progressionJob(session, account, route, null, client => readGameLineups(client, loadConfigSafe(), session.player), { read: true }));
+        return;
+      }
+      if (route === 'POST /api/lineups/game/apply') {
+        const { account, session } = scoped_(parsed), payload = jsonBody();
+        needConfirm(payload);
+        const key = JSON.stringify([route, payload.targetKey, payload.version, payload.formation]);
+        json(await progressionJob(session, account, key, operationLabels[parsed.pathname], async (client, enabled) => {
+          const result = await applyGameLineup(client, loadConfigSafe(), session.player, payload, enabled);
+          emit(session, 'info', result.label);
+          return result;
+        }));
         return;
       }
       if (route === 'GET /api/lineups') {

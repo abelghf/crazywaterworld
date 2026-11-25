@@ -63,6 +63,7 @@ const coreSubset = [
 ];
 
 const lineups = [
+  'tools/selftest-lineups.mjs',
   'tools/selftest-saved-lineups.mjs',
   'tools/selftest-lineup-runtime.mjs',
   'tools/selftest-lineup-challenges.mjs',
@@ -117,7 +118,6 @@ const core = [
   'tools/selftest-ad-rewards.mjs',
   ...coreSubset,
   'tools/selftest-equipment-crafting.mjs',
-  'tools/selftest-lineups.mjs',
   ...lineups,
   'tools/selftest-lineup-protocol.mjs',
   'tools/selftest-phone-login.mjs',

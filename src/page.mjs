@@ -313,8 +313,8 @@ function cell(entry, size, name, qty, showPlaceholder = true) {
 function component(id) {
   return $(id).content.firstElementChild.cloneNode(true);
 }
-function smallButton(label, danger = false) {
-  const button = component(danger ? 'ui-delete' : 'ui-button');
+function smallButton(label, danger = false, primary = false) {
+  const button = component(danger ? 'ui-delete' : primary ? 'ui-primary' : 'ui-button');
   button.textContent = label;
   return button;
 }
@@ -832,6 +832,7 @@ function setBusy(text) {
 function paintConnection() {
   renderAccountOptions();
   setBusy(connectingAccounts.has(current) ? '连接中…' : connectionStatus(snapshot));
+  syncGameLineupPage();
 }
 
 function setAccountStatus(account, status) {
@@ -3144,7 +3145,7 @@ function activateConsolePage(button, resource = selectedResource) {
       }
       refreshManualWorld();
     }
-    if (target === 'lineups') void refreshSavedLineups();
+    if (target === 'lineups') { void refreshSavedLineups(); syncGameLineupPage(true); }
     if (button.dataset.tab === 'account') {
       renderAccounts();
       refreshAccountCards();
