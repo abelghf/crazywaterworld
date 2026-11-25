@@ -116,6 +116,7 @@ import { automationTasks, retiredAutomationTasks, migratedAutomationTasks, defau
 import { rewardSchedule } from './reward-schedule.mjs';
 import { beijingDay, loadAutomationSettings, loadRecoverableAutomationSettings, settingsFile, defaultSettings, saveAutomationSettings, validateSettings, settingsCatalog, settingsFromNative, settingsFromLegacyNative, nativeTaskValues, applyNativeTask, hasExtraWork, createUsageLedger, exportAutomationSettings, importAutomationSettings, SettingsError, settingsUiRules } from './automation-settings.mjs';
 import { listedPlayerNames, knownListPlayerIds, rememberPlayerNames, prunePlayerNames, readWorldListPlayers } from './player-name-history.mjs';
+import { playerPowerText } from './opponent-power.mjs';
 import { budgetPreview, exactAutomationId, createActionGuard, nativePreferenceEnabled, needsCargoDemand, AutomationSkip } from './automation-policy.mjs';
 import { guardRuntimeActions, validateRuntimeSettings } from './settings-runtime.mjs';
 import { assertResourcesReady, resourceReadiness } from './resource-store.mjs';
@@ -1219,7 +1220,7 @@ export function createConsole({ host = '127.0.0.1', port = 17321, onLog, recover
       if (name === 'GuildMemberResponse' || name === 'BlackListResponse' || name === 'WorldInfoResponse' || name === 'SCFleet') {
         const members = name === 'GuildMemberResponse' ? (body.titleList ?? []).flatMap(group => group.members ?? []) :
           name === 'BlackListResponse' ? body.list ?? [] : (body.fleets ?? []).map(fleet => fleet.owner).filter(Boolean);
-        noteNames(members.map(member => ({ id: exactAutomationId(member.playerId), name: member.nickname })), name !== 'GuildMemberResponse');
+        noteNames(members.map(member => ({ id: exactAutomationId(member.playerId), name: member.nickname, power: playerPowerText(member) })), name !== 'GuildMemberResponse');
       }
       if (session.client===instance && ['MyFleetsResponse','SCMyFleetUpdate'].includes(name)) {
         observeOwnedFleets(session,body?.fleets,{complete:name==='MyFleetsResponse'});
@@ -2594,7 +2595,7 @@ export function createConsole({ host = '127.0.0.1', port = 17321, onLog, recover
             }, { recoverFormation: false });
             if (!current()) break;
             if (typeof profile?.nickname !== 'string' || !profile.nickname.trim()) continue;
-            recordListNames(session, effectiveSettings(session), [{ id, name: profile.nickname }]);
+            recordListNames(session, effectiveSettings(session), [{ id, name: profile.nickname, power: playerPowerText(profile) }]);
             synced.push(id);
           } catch (error) { if (!error.prompt) break; }
         }

@@ -96,13 +96,33 @@
 .config-radio .config-option { padding:4px; white-space:nowrap }
 .config-radio .config-option:hover { background:transparent }
 
-.config-player-tags { display:flex; flex-wrap:wrap; gap:6px; margin-bottom:8px }
-.config-player-tag { display:inline-flex; align-items:center; gap:4px; max-width:100%; border:1px solid var(--border); border-radius:8px; padding:2px 4px 2px 8px; background:var(--muted) }
-.config-player-tag>span { min-width:0; overflow-wrap:anywhere }
-.config-list-history .config-player-tag { flex-wrap:wrap; overflow-wrap:anywhere }
-.config-list-history .config-name-changed { color:var(--foreground); font-weight:600 }
-.config-list-history>small { margin-inline-start:6px }
-.config-player-name { display:block }
+.config-player-picker { min-width:0; border:1px solid var(--border); border-radius:12px; background:var(--card) }
+.config-player-picker>.config-multi { border:0; border-radius:inherit; box-shadow:none }
+.config-player-picker>.config-multi>summary { min-height:44px; gap:8px; padding:8px 14px; border:0; border-radius:inherit }
+.config-player-count { margin-inline-start:auto; color:var(--muted-foreground); font-size:13px; font-variant-numeric:tabular-nums }
+.config-player-list { margin:0; padding:0 14px; max-height:min(18rem,42dvh); overflow-y:auto; scrollbar-width:thin; list-style:none }
+.config-player-list[tabindex] { overscroll-behavior-y:contain }
+.config-player-row { display:flex; align-items:center; flex-wrap:wrap; gap:4px 8px; padding:9px 0; border-top:1px solid var(--border) }
+.config-player-identity { display:grid; flex:1 1 9rem; gap:2px; min-width:0; overflow-wrap:anywhere; line-height:1.4 }
+.config-player-identity small,.config-player-status { color:var(--muted-foreground); font-size:12px }
+.config-player-identity small { font-variant-numeric:tabular-nums }
+.config-player-row-actions { display:none; max-width:100%; margin-inline-start:auto }
+.is-editing .config-player-row-actions:not(:empty) { display:flex; flex-wrap:wrap; justify-content:flex-end; gap:4px }
+#config-root .config-player-row-actions button { max-width:100%; height:auto; white-space:normal; overflow-wrap:anywhere }
+.config-player-footer { display:flex; align-items:center; flex-wrap:wrap; gap:0 4px; padding:0 6px; border-top:1px solid var(--border); container:player-footer / inline-size }
+.config-player-footer .config-player-action { border-color:transparent; box-shadow:none; background:transparent; color:#0062be }
+[data-theme=dark] .config-player-footer .config-player-action { color:#75baff }
+.config-player-footer .config-player-action:hover { background:var(--accent) }
+#config-root .config-player-action { min-height:44px }
+.config-player-footer button:last-child { margin-inline-start:auto }
+.config-player-status { min-width:0; flex:1 1 6rem; overflow-wrap:anywhere }
+.config-player-status:empty { display:none }
+@container player-footer (max-width:17rem) {
+  .config-player-status { order:1; flex-basis:100%; padding:0 8px 4px }
+}
+.config-player-headline { display:flex; align-items:baseline; gap:2px 8px; flex-wrap:wrap }
+.config-player-power { margin-inline-start:auto; white-space:nowrap; color:var(--muted-foreground); font-size:12px; font-variant-numeric:tabular-nums }
+.config-player-picker .config-option>span { flex:1; min-width:0 }
 .config-player-picker .config-add input { min-width:0; flex:1; width:100% }
 .config-select-foot { display:flex; flex-wrap:wrap; align-items:center; gap:8px; margin-top:8px; font-size:12px; color:var(--muted-foreground) }
 .config-select-foot-actions { display:flex; flex-wrap:wrap; justify-content:flex-end; gap:6px; margin-inline-start:auto }

@@ -1254,7 +1254,7 @@ function configRenderField(spec) {
   }
   box.append(error); row.append(name, box);
   const widget = { row, node: row, control, error, spec, clearError() { error.hidden = true; error.textContent = ''; control?.removeAttribute('aria-invalid'); } };
-  if (spec.nameList) widget.nameHistory = configListNameHistory(widget, box);
+  if (spec.kind === 'players') widget.nameHistory = control.nameHistory;
   if (spec.moduleControl) {
     widget.moduleNote = el('span', 'config-help'); widget.moduleNote.hidden = true;
     widget.moduleNote.id = id + '-note'; widget.moduleNote.setAttribute('role', 'status');
@@ -1790,16 +1790,62 @@ async function configRefreshPlayers(world = false, rankPage) {
   return job.promise;
 }
 
-function configListNameHistory(widget, box) {
-  const { spec } = widget, namesKey = spec.nameList, idKey = spec.key;
-  const root = el('div', 'config-list-history'), list = el('div', 'config-player-tags'), status = el('small', 'config-help');
-  const refresh = configButton('刷新昵称', () => { void sync(true); });
-  refresh.setAttribute('aria-label', '刷新' + spec.label + '昵称');
-  root.append(list, refresh, status); box.append(root);
-  let visible = false, pending = false, disposed = false, painted = '', checked = new Set();
+function configCompactPower(value) {
+  const digits = String(value ?? '');
+  if (!/^(0|[1-9]\d*)$/.test(digits)) return '';
+  // 游戏中文版从十万起缩写，截取两位小数，含小数点的数字部分最多六个字符。
+  if (digits.length < 6) return digits;
+  const [places, unit] = digits.length >= 14 ? [13, '兆'] : digits.length >= 9 ? [8, '亿'] : [4, '万'];
+  const whole = digits.slice(0, -places), fraction = digits.slice(-places, 2 - places);
+  const compact = fraction === '00' ? whole : (whole + '.' + fraction).slice(0, 6).replace(/\.$/, '');
+  return compact + unit;
+}
+
+function configPlayerHeadline(name, power) {
+  const line = el('span', 'config-player-headline'), compact = configCompactPower(power);
+  line.append(el('span', 'config-player-name', name));
+  if (compact) line.append(el('span', 'config-player-power', '战力 ' + compact));
+  return line;
+}
+
+function configListNameHistory(spec, control) {
+  const namesKey = spec.nameList, idKey = spec.key;
+  const state = spec.worldPlayers ? configEditor.worldPlayers : configEditor;
+  const root = el('div', 'config-list-history'), list = el('ul', 'config-player-list'), status = el('small', 'config-player-status');
+  const footer = el('div', 'config-player-footer');
+  const previewLimit = 2;
+  let expanded = false;
+  const more = configButton('查看全部', event => {
+    expanded = !expanded; paint();
+    if (expanded && !event.detail) list.focus({ preventScroll: true });
+  }, 'config-player-action');
+  const edit = configButton('编辑', event => {
+    setEditing(!editing);
+    paint();
+    if (editing && !event.detail) list.querySelector('button:not(:disabled)')?.focus();
+  }, 'config-player-action');
+  const refresh = configButton('刷新资料', () => { void sync(true); }, 'config-player-action');
+  status.setAttribute('role', 'status');
+  list.id = control.id + '-list';
+  list.setAttribute('role', 'list');
+  list.setAttribute('aria-label', spec.label + '角色');
+  more.setAttribute('aria-controls', list.id);
+  edit.setAttribute('aria-controls', list.id);
+  refresh.setAttribute('aria-label', '刷新' + spec.label + '资料');
+  footer.append(more, refresh, status, edit); root.append(list, footer); control.append(root);
+  let visible = false, pending = false, disposed = false, painted = '', checked = new Set(), editing = false;
+  let paintedMembers;
+  function setEditing(value) {
+    editing = value;
+    root.classList.toggle('is-editing', value);
+    edit.textContent = value ? '完成' : '编辑';
+    edit.setAttribute('aria-label', (value ? '完成编辑' : '编辑') + spec.label);
+  }
+  setEditing(false);
   const fold = value => idKey.startsWith('treasure.') ? value : value.toLocaleLowerCase();
+  const configuredNames = () => namesKey ? configGet(namesKey) ?? [] : [];
   function entries() {
-    const ids = configGet(idKey) ?? [], names = configGet(namesKey) ?? [], history = configEditor.data?.playerNames ?? {};
+    const ids = configGet(idKey) ?? [], names = configuredNames(), history = configEditor.data?.playerNames ?? {};
     const relevant = name => names.some(value => fold(value) === fold(name));
     return [...new Set([...ids, ...Object.keys(history).filter(id => [history[id].name, ...history[id].previous].some(relevant))])];
   }
@@ -1807,10 +1853,9 @@ function configListNameHistory(widget, box) {
     configSet(key, values);
     const control = configEditor.widgets.get(key)?.control;
     if (control?.tagName === 'TEXTAREA') control.value = values.join('\n');
-    for (const repaint of configEditor.playerWidgets) repaint();
   }
   function lastGate(key) {
-    const ids = configGet(idKey) ?? [], names = configGet(namesKey) ?? [];
+    const ids = configGet(idKey) ?? [], names = configuredNames();
     const last = (key === idKey ? ids.length === 1 && !names.length : names.length === 1 && !ids.length);
     let gate = '';
     if (last && idKey.endsWith('.huntPlayerIds')) gate = idKey.replace(/huntPlayerIds$/, 'huntEnabled');
@@ -1827,39 +1872,59 @@ function configListNameHistory(widget, box) {
       if (gate) configSet(gate, false);
       if (closeModule) configSet('treasure.enabled', false);
       change(key, configGet(key).filter(item => item !== value));
+      if (gate) configEditor.widgets.get(closeModule ? 'treasure.enabled' : gate)?.control.focus();
+      else (root.hidden ? control.querySelector('summary') : edit).focus({ preventScroll: true });
     }, 'remove');
   }
   function paint() {
     if (disposed || !configEditor.draft) return;
-    const ids = configGet(idKey) ?? [], names = configGet(namesKey) ?? [], history = configEditor.data?.playerNames ?? {};
+    const ids = configGet(idKey) ?? [], names = configuredNames(), history = configEditor.data?.playerNames ?? {};
     const rows = entries();
-    const signature = JSON.stringify([ids, names, lastGate(idKey), lastGate(namesKey), configGet('treasure.autoJoin'), configGet('treasure.chase'), configGet('treasure.follow'), configGet('treasure.enabled'), rows.map(id => [id, history[id]])]);
-    if (signature !== painted) {
-      painted = signature; clear(list);
-      widget.control?.refreshPlayerNames?.();
-      for (const id of rows) {
+    if (rows.length <= previewLimit) expanded = false;
+    const showAll = expanded || editing;
+    const shown = showAll ? rows : rows.slice(0, previewLimit);
+    const members = state.playerData?.members;
+    const signature = JSON.stringify([ids, names, rows.length, expanded, editing, lastGate(idKey), lastGate(namesKey), configGet('treasure.autoJoin'), configGet('treasure.chase'), configGet('treasure.follow'), configGet('treasure.enabled'), shown.map(id => [id, history[id]])]);
+    const changed = signature !== painted || members !== paintedMembers;
+    if (changed) {
+      const scrollTop = list.scrollTop;
+      painted = signature; paintedMembers = members; clear(list);
+      more.hidden = rows.length <= previewLimit || editing;
+      more.textContent = expanded ? '收起名单' : '查看全部';
+      more.setAttribute('aria-expanded', String(showAll));
+      if (showAll && rows.length > previewLimit) list.tabIndex = 0;
+      else list.removeAttribute('tabindex');
+      const roster = rows.length && members ? new Map(members.map(member => [member.id, member])) : null;
+      for (const id of shown) {
         const record = history[id], aliases = record?.previous ?? [];
-        const tag = el('div', 'config-player-tag');
-        const caption = record ? record.name + ' · ID ' + id + (ids.includes(id) ? '' : '（昵称匹配）') : 'ID ' + id + ' · 尚未同步昵称';
-        tag.append(el('span', '', caption));
-        if (aliases.length) tag.append(el('strong', 'config-name-changed', '已改名 · 曾用名 ' + aliases.join('、')));
+        const member = roster?.get(id), name = record?.name || member?.name;
+        const row = el('li', 'config-player-row'), identity = el('div', 'config-player-identity');
+        identity.append(configPlayerHeadline(name || '昵称待同步', record?.power ?? member?.power), el('small', '', 'ID ' + id + (ids.includes(id) ? '' : ' · 昵称匹配')));
+        if (aliases.length) identity.append(el('small', '', '已改名 · 曾用名 ' + aliases.join('、')));
+        const actions = el('div', 'config-player-row-actions');
         if (ids.includes(id)) {
-          const button = removeButton('移除 ID', idKey, id);
-          button.setAttribute('aria-label', button.textContent + '（' + id + '）'); tag.append(button);
+          const button = removeButton('移除', idKey, id);
+          button.setAttribute('aria-label', button.textContent + '（' + (name ? name + '，' : '') + 'ID ' + id + '）');
+          actions.append(button);
         }
         for (const value of names.filter(name => record && [record.name, ...aliases].some(alias => fold(alias) === fold(name)))) {
           if (!ids.includes(id)) {
-            const bind = configButton('绑定此 ID 并保留“' + value + '”', () => change(idKey, [...new Set([...configGet(idKey), id])]));
+            const bind = configButton('绑定此 ID 并保留“' + value + '”', () => {
+              change(idKey, [...new Set([...configGet(idKey), id])]); edit.focus({ preventScroll: true });
+            });
             bind.disabled = ids.length >= (idKey === 'treasure.avoidPlayerIds' || idKey === 'alliance.memberIds' ? 100 : 30);
-            tag.append(bind);
+            actions.append(bind);
           }
-          if (record.name !== value && aliases.some(alias => fold(alias) === fold(value))) tag.append(removeButton('删除旧昵称“' + value + '”', namesKey, value));
+          if (record.name !== value && aliases.some(alias => fold(alias) === fold(value))) actions.append(removeButton('删除旧昵称“' + value + '”', namesKey, value));
         }
-        list.append(tag);
+        row.append(identity, actions); list.append(row);
       }
+      list.scrollTop = showAll ? scrollTop : 0;
       root.hidden = !rows.length;
+      if (root.hidden) setEditing(false);
     }
     if (visible && !pending) void sync(false);
+    return changed;
   }
   async function sync(force) {
     if (disposed || pending || !configEditor.draft || configEditor.owner !== current) return;
@@ -1880,7 +1945,7 @@ function configListNameHistory(widget, box) {
         for (const id of batch) if (data.playerNames[id]) history[id] = data.playerNames[id];
         configEditor.data.playerNames = history;
         count += data.synced.length;
-        status.textContent = !data.online ? '账号离线，显示上次记录' : count < Math.min(i + 100, ids.length) ? '部分昵称未同步，显示上次记录' : '';
+        status.textContent = !data.online ? '离线 · 上次记录' : count < Math.min(i + 100, ids.length) ? '部分资料未同步，显示上次记录' : '';
       }
     } catch (error) { if (active()) status.textContent = error.message; }
     finally {
@@ -1895,8 +1960,7 @@ function configListNameHistory(widget, box) {
     visible = entry.isIntersecting;
     if (visible) paint();
   }) : null;
-  observer?.observe(widget.row);
-  paint();
+  observer?.observe(control);
   return { paint, dispose() { disposed = true; observer?.disconnect(); } };
 }
 
@@ -1904,10 +1968,10 @@ function configPlayerPicker(spec, id) {
   const world = !!spec.worldPlayers, noun = world ? '玩家' : '盟友';
   const state = world ? configEditor.worldPlayers : configEditor;
   const root = el('div', 'config-player-picker'); root.id = id; root.tabIndex = -1; root.setAttribute('role', 'group'); root.setAttribute('aria-label', spec.label);
-  const selected = el('div', 'config-player-tags');
   // 点击姓名标签时，焦点须留在下拉框内，避免落到外层分组触发失焦关闭。
   const details = el('details', 'config-multi'); details.tabIndex = -1;
-  const summary = el('summary', '', '选择' + noun); summary.setAttribute('aria-label', '选择' + spec.label); details.append(summary);
+  const summary = el('summary'), count = el('span', 'config-player-count');
+  summary.append(el('span', '', '选择' + noun), count); details.append(summary);
   const panel = el('div', 'config-multi-panel'); const search = el('input', 'config-input'); search.type = 'search'; search.placeholder = '搜索已载入的昵称或 ID'; search.setAttribute('aria-label', '搜索' + spec.label);
   const status = el('p', 'config-help'); status.setAttribute('role', 'status');
   const list = el('div', 'config-option-list');
@@ -1918,7 +1982,7 @@ function configPlayerPicker(spec, id) {
   const limit = spec.key === 'treasure.avoidPlayerIds' || spec.key === 'alliance.memberIds' ? 100 : 30;
   function change(value, checked) {
     const values = configGet(spec.key);
-    if (checked && !values.includes(value) && values.length >= limit) { manualError.textContent = '最多选择' + limit + '位玩家'; manualError.hidden = false; paint(); return; }
+    if (checked && !values.includes(value) && values.length >= limit) { manualError.textContent = '最多选择' + limit + '位玩家'; manualError.hidden = false; paintList(); return; }
     configSet(spec.key, checked ? [...new Set([...values, value])] : values.filter(item => item !== value)); manualError.hidden = true; paint();
   }
   const add = configButton('添加 ID', () => {
@@ -1935,7 +1999,9 @@ function configPlayerPicker(spec, id) {
     const matches = (state.playerData?.members ?? []).filter(member => (member.name + ' ' + member.id).toLocaleLowerCase().includes(query));
     for (const member of matches) {
       const option = el('label', 'config-option'); const check = el('input'); check.type = 'checkbox'; check.value = member.id; check.checked = values.includes(member.id); check.onchange = () => change(member.id, check.checked);
-      const label = el('span'); label.append(el('span', 'config-player-name', member.name), el('small', 'config-help', [member.source, member.guildIdx ? '联盟 ' + member.guildIdx : '', 'ID ' + member.id, member.online ? '在线' : ''].filter(Boolean).join(' · ')));
+      const label = el('span');
+      label.append(configPlayerHeadline(member.name, configEditor.data?.playerNames?.[member.id]?.power ?? member.power),
+        el('small', 'config-help', [member.source, member.guildIdx ? '联盟 ' + member.guildIdx : '', 'ID ' + member.id, member.online ? '在线' : ''].filter(Boolean).join(' · ')));
       option.append(check, label); list.append(option);
       if (member.id === focusId) check.focus({ preventScroll: true });
     }
@@ -1947,21 +2013,12 @@ function configPlayerPicker(spec, id) {
     }
     list.scrollTop = scrollTop;
   }
-  function paint() {
+  function paint(force = false) {
     const values = configGet(spec.key), members = state.playerData?.members ?? [];
     if (!values) return;
-    clear(selected);
-    for (const value of values) {
-      const member = members.find(row => row.id === value);
-      const duplicateName = member && members.filter(row => row.name === member.name).length > 1;
-      const displayName = configEditor.data?.playerNames?.[value]?.name || member?.name;
-      const name = displayName ? displayName + (duplicateName ? '（' + value + '）' : '') : '角色 ' + value;
-      const tag = el('span', 'config-player-tag'); const text = el('span', '', name); text.title = '角色 ID：' + value;
-      const remove = configButton('移除', () => { change(value, false); summary.focus(); }, 'remove'); remove.setAttribute('aria-label', '从' + spec.label + '移除' + name);
-      tag.append(text, remove); selected.append(tag);
-    }
-    selected.hidden = !values.length;
-    summary.textContent = values.length ? '选择' + noun + ' · 已选 ' + values.length + ' 位' : '选择' + noun;
+    if (!history.paint() && !force) return;
+    count.textContent = values.length ? '已选 ' + values.length + ' 位' : '';
+    summary.setAttribute('aria-label', '选择' + spec.label + (values.length ? '，' + count.textContent : ''));
     refresh.disabled = !!state.playerRequest; refresh.textContent = state.playerRequest ? '正在读取…' : '刷新' + noun + '名单';
     const data = state.playerData;
     if (more) {
@@ -1986,9 +2043,10 @@ function configPlayerPicker(spec, id) {
   details.onkeydown = event => { if (event.key === 'Escape') { details.open = false; summary.focus(); event.stopPropagation(); } };
   panel.append(search, status, list);
   if (more) panel.append(more);
-  panel.append(refresh, manual, manualError); details.append(panel); root.append(selected, details);
-  root.refreshPlayerNames = paint;
-  configEditor.playerWidgets.push(paint); paint(); return root;
+  panel.append(refresh, manual, manualError); details.append(panel); root.append(details);
+  const history = configListNameHistory(spec, root);
+  root.nameHistory = { paint, dispose: history.dispose };
+  configEditor.playerWidgets.push(() => paint(true)); paint(); return root;
 }
 
 function configCityWarRoles(spec, id) {
