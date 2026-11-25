@@ -97,7 +97,7 @@ function configuredLimitReason(doneToday, dailyLimit, recorded) {
 export function guildOrderProgress(reply, maxNum, dailyLimit = 0, recorded = 0) {
   const doneToday = countOf(reply);
   const limitReason = maxNum !== -1 && doneToday >= maxNum
-    ? '今日联盟募兵已完成 ' + doneToday + ' 次，达到本赛季上限 ' + maxNum
+    ? '已达到游戏每日募兵上限 ' + maxNum + ' 次'
     : configuredLimitReason(doneToday, dailyLimit, recorded);
   return { doneToday, limitReason };
 }

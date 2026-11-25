@@ -2215,7 +2215,8 @@ export async function runWorld(client, protocol, plan, {
   const failedRecipes = new Set();
   const confirmedBorrow = new Map();
   const checkDemandPlan = step => {
-    if ((step.queueReplan || step.factoryStrategy === 'smart' && (getSettings?.() ?? settings)?.factory.demandFirst)
+    if ((step.queueReplan || step.demandSources?.includes('guildRecruit')
+      || step.factoryStrategy === 'smart' && (getSettings?.() ?? settings)?.factory.demandFirst)
       && !factoryPlanCurrent(step)) throw new AutomationSkip('库存或需求已变化，按最新状态重新排产');
   };
   const checkFactoryStep = step => {
@@ -2405,6 +2406,7 @@ export async function runWorld(client, protocol, plan, {
           } else session.delete(step.body.index); // A lost reply can still have consumed this slot.
         }
         if (response && protocol[response]) {
+          checkDemandPlan(step);
           if (step.request === 'FarmPlantRequest') {
             const entries = factoryInsertions(player);
             if (!step.beforePlantSend && actual.body.args.some(arg => entries[arg.buildingId]?.jobs?.length)) {

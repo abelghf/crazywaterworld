@@ -2,6 +2,7 @@
 // scheduler at serial execution boundaries; push handlers never send requests.
 import { normalize } from './worlds.mjs';
 import { productionDemandChanged } from './factory-replanning.mjs';
+import { guildOrderCounterChanged } from './guild-orders.mjs';
 import { hasResidentMaterialRules } from './resident-materials.mjs';
 const MIN_CHECK_MS = 1000;
 const positiveTime = value => Number.isSafeInteger(value) && value > 0;
@@ -121,7 +122,8 @@ export function createFactorySchedule(client, {
   };
   const onMessage = ({ name, body } = {}) => {
     if (disposed) return;
-    if (productionDemandChanged(name, body)) {
+    const recruitChanged = name === 'SCGuildOrder' || guildOrderCounterChanged(name, body);
+    if (recruitChanged || productionDemandChanged(name, body)) {
       if (name === 'SCWorkerOrder' && watchResidentOrders()) {
         residentOrderChanged = true;
         demandVersion++; version++; wake();
@@ -130,8 +132,11 @@ export function createFactorySchedule(client, {
       const factory = preferences();
       const items = Array.isArray(body?.items) ? body.items : [];
       const dynamic = factory?.demandFirst && factory.strategy !== 'nativeSimulation';
+      const alliance = getSettings()?.alliance;
+      const recruitSupply = recruitChanged && factory?.produce && factory.strategy !== 'nativeSimulation'
+        && alliance?.enabled && alliance.recruit && alliance.recruitProduction;
       const refill = items.some(item => factory?.refillRules?.some(rule => rule.productId === item?.itemId));
-      if (modes().produce && (dynamic || factory?.produce && refill)) {
+      if (modes().produce && (dynamic || recruitSupply || factory?.produce && refill)) {
         demandVersion++; version++; wake();
       }
       return;

@@ -106,7 +106,21 @@ test('按需生产在库存扣减后唤醒，仅读建筑不能确认新的库�
   assert.equal(f.scheduler.nextAt(),1_030_000);
   f.scheduler.dispose();
 });
-
+test('募兵计数推送使按需生产和独立募兵备料重新检查，其他计数不触发', () => {
+  for (const demandFirst of [true, false]) {
+    const f = fixture();
+    f.settings.factory.demandFirst = demandFirst;
+    Object.assign(f.settings.alliance, { enabled: !demandFirst, recruit: true, recruitProduction: true });
+    f.scheduler.checked([factory([job(0, 2000)])], { slots: 1 });
+    const push = type => f.client.emit('message', { name: 'SCCounterUpdate', body: { info: { type, num: 10 } } });
+    push('DAILY_GUILD_AID');
+    assert.equal(f.scheduler.demandVersion(), 0);
+    push('DAILY_FINISH_GUILD_ORDER');
+    assert.equal(f.scheduler.demandVersion(), 1);
+    assert.equal(f.scheduler.nextAt(), 1_001_000);
+    f.scheduler.dispose();
+  }
+});
 test('满仓滞留成品无成功动作不热循环，检查失败沿用配置退避', () => {
   const f=fixture(); f.settings.factory.checkEverySeconds=11;
   f.scheduler.checked([factory([],[item(1)])],{version:0,progressed:false,slots:6});

@@ -4,6 +4,7 @@ let productionPlanBusy = false;
 let selectedForecastFactory = null;
 let displayedProductionRevision = null;
 let nextProductionRefresh = 0;
+let recruitResetAt = Infinity;
 
 bindConsoleSlice('productionPlan', { productionPlanOwner, productionPlanBusy }, state => {
   productionPlanOwner = state.productionPlanOwner;
@@ -14,6 +15,7 @@ function resetProductionPlan() {
   productionPlanVersion++;
   displayedProductionRevision = null;
   nextProductionRefresh = 0;
+  recruitResetAt = Infinity;
   selectedForecastFactory = null;
   setConsoleValue('productionPlan', 'productionPlanOwner', null);
   setConsoleValue('productionPlan', 'productionPlanBusy', false);
@@ -117,9 +119,10 @@ function planMaterialList(items, recipes, group) {
 function planDemandRow(order, index, recipes, snapshotTime) {
   const materials = el('div', 'plan-demand-materials');
   materials.appendChild(planMaterialList(order.requirements || [], recipes, 'production-plan-products-' + index));
-  if (order.reason) materials.appendChild(el('p', 'plan-demand-reason', order.reason));
+  const recruitBlock = order.metadata?.recruitBlock;
+  if (order.reason && recruitBlock?.kind !== 'dailyLimit') materials.appendChild(el('p', 'plan-demand-reason', order.reason));
   let status;
-  if (order.skipped) status = chip('waiting', order.metadata?.recruitBlock?.label || '已跳过');
+  if (order.skipped) status = chip('waiting', recruitBlock?.label || '已跳过');
   else if (!Number.isFinite(order.completionAt) || order.reason) status = chip('unknown', order.waitingForSupply ? order.statusLabel : '时间待定');
   else if (order.completionAt === snapshotTime) status = chip('ready', '现在可备齐');
   else status = el('span', 'plan-demand-eta', productionPlanTime(order.completionAt));
@@ -569,7 +572,9 @@ function productionAccountReady() {
 function refreshChangedProductionPlan() {
   if (document.hidden || consoleStore.getState().view.page !== 'manual' || $('modal').open || productionPlanBusy
     || productionPlanOwner !== current || !productionAccountReady() || Date.now() < nextProductionRefresh) return;
-  if (snapshot.productionRevision > displayedProductionRevision) return refreshProductionPlan({ background:true });
+  if (snapshot.productionRevision > displayedProductionRevision || Date.now() >= recruitResetAt) {
+    return refreshProductionPlan({ background:true });
+  }
 }
 
 async function refreshProductionPlan({ afterInsert = false, background = false } = {}) {
@@ -594,6 +599,10 @@ async function refreshProductionPlan({ afterInsert = false, background = false }
     const data = await call('/api/world/production-plan');
     if (version !== productionPlanVersion || account !== current || !productionAccountReady()) return;
     displayedProductionRevision = data.productionRevision ?? requestedRevision;
+    // Re-read a capped order after Beijing midnight even if no counter push arrives.
+    const capped = data.orders?.some(order => order.metadata?.recruitBlock?.kind === 'dailyLimit');
+    recruitResetAt = capped && Number.isFinite(data.snapshotTime)
+      ? Date.now() + (86400 - (data.snapshotTime + 8 * 3600) % 86400) * 1000 : Infinity;
     renderProductionPlan(data);
     if (!data.forecast) showProductionDayNotice('当前快照还没有排产清单，可点击「刷新计划」重试。');
     $('production-plan-status').textContent = Number.isFinite(data.snapshotTime)

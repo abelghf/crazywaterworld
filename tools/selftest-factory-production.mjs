@@ -679,6 +679,18 @@ await test('生产诊断保留期待数量与前后证据，日志观察者报�
   assert(failures.some(row => row.event === 'factory-production-verification' && !row.confirmed && row.expected['产品甲'] === 1));
   assert.equal(pendingOrderMaterialSpends(g.player).length, 1);
 });
+await test('独立募兵备料在批次中途达到上限后停止后续开工', async () => {
+  const f = fixture();
+  f.settings.factory.demandFirst = false;
+  Object.assign(f.settings.alliance, { enabled: true, recruit: true, recruitProduction: true });
+  const actions = Array.from({ length: 3 }, () => ({ ...f.step(), factoryStrategy: 'smart',
+    demandDriven: true, demandSources: ['guildRecruit'] }));
+  const result = await runWorld(f.client, protocol, { actions }, { ...f.options(), allowMutate: true,
+    factoryPlanCurrent: () => f.state.writes.length === 0 });
+  assert.equal(f.state.writes.length, 1);
+  assert.equal(result.results[0].ok, true);
+  assert.match(result.results[1].error, /库存或需求已变化/);
+});
 await test('活动备料批次中途关闭总开关后停止后续开工并结算已发送生产', async () => {
   for (const source of ['merchant', 'heroRaid']) {
     const f = fixture(); f.settings.heroRaid.enabled = true;

@@ -505,7 +505,7 @@ try {
         assert(plan.productionRevision > ready.productionRevision);
         assert.equal(order.skipped, true);
         assert.equal(order.completionAt, null);
-        assert.match(order.reason, /完成 10 次，达到本赛季上限 10/);
+        assert.equal(order.metadata.recruitBlock.kind, 'dailyLimit');
         assert(!plan.forecast.completions.some(o => o.id === order.id));
         assert(plan.orders.filter(o => o.source === 'resident').every(o => o.completionAt === plan.snapshotTime));
       }
@@ -521,6 +521,22 @@ try {
       assert.equal(recruit(unknown).metadata.recruitBlock.label, '募兵次数待确认');
       assert.equal(recruit(unknown).completionAt, null);
       assert(unknown.forecast.completions.some(o => o.id.startsWith('resident:')));
+      await updateSettings(f, s => { s.alliance.recruitDailyLimit = 2; });
+      replies.CounterInfoRequest = { counters: [counter] };
+      const requestsBeforeReset = f.state.requests.length;
+      f.state.onRequest = name => {
+        if (name !== 'RadarInfoRequest') return;
+        f.state.onRequest = null;
+        f.session().client.serverClockOffsetMs = 86400_000;
+        replies.CounterInfoRequest = { counters: [] };
+        replies.GuildOrderRequest.order = { requirements: [{ id: '小麦', num: 4 }], nextRefreshTime: f.state.now + 90000 };
+      };
+      const nextDay = await read();
+      assert.equal(f.state.requests.slice(requestsBeforeReset).filter(name => name === 'GuildOrderRequest').length, 2);
+      assert(nextDay.snapshotTime >= ready.snapshotTime + 86400);
+      assert.equal(recruit(nextDay).skipped, false);
+      assert.deepEqual(recruit(nextDay).requirements.map(({ id, num }) => [id, num]), [['小麦', 4]]);
+      assert(nextDay.forecast.completions.some(o => o.id === recruit(nextDay).id));
     } finally { await f.close(); }
   });
   await test('十五座工厂与农田同时原生接管时，按订单给出备齐时间或材料缺口', async () => {

@@ -6,6 +6,7 @@ import { exactAutomationId, resourceReserve, worldPreferenceEnabled } from './au
 import { makeTypeResolver, upgradeRow, factoryRecipeAvailability } from './world.mjs';
 import { readWeekOrder, weekSchedule } from './activities.mjs';
 import { guildOrderCounterChanged, guildOrderProgress, guildOrderQuota } from './guild-orders.mjs';
+import { beijingDay } from './usage-ledger.mjs';
 import { baseDemands } from './base-automation.mjs';
 import { readGuildShips, guildShipApplicationDeadline } from './guild-ships.mjs';
 import { watchHeroRaidPushes } from './hero-raid-automation.mjs';
@@ -166,7 +167,7 @@ export function buildProductionSnapshot(raw, config, settings = {}) {
         const { maxNum } = guildOrderQuota(config, raw.player);
         const { limitReason } = guildOrderProgress(raw.guildCounters, maxNum,
           enabled ? settings.alliance.recruitDailyLimit : 0, raw.guildRecruitUsed);
-        if (limitReason) metadata.recruitBlock = { label: '今日募兵已达上限', reason: limitReason };
+        if (limitReason) metadata.recruitBlock = { kind: 'dailyLimit', label: '今日募兵已达上限', reason: limitReason };
       } catch (error) {
         metadata.recruitBlock = { label: '募兵次数待确认', reason: error.message };
       }
@@ -308,7 +309,7 @@ export async function readProductionSnapshot(client, protocol, config, player, s
     try {
       return await readSnapshotOnce(client, protocol, config, player, settings, options, checkContext);
     } catch (error) {
-      if (error.code !== 'PRODUCTION_SNAPSHOT_CHANGED' || !error.updatePush || attempt >= 3) throw error;
+      if (error.code !== 'PRODUCTION_SNAPSHOT_CHANGED' || !error.retryable || attempt >= 3) throw error;
       await delay(200 * attempt);
     }
   }
@@ -319,7 +320,7 @@ async function readSnapshotOnce(client, protocol, config, player, settings, opti
   const check = () => {
     checkContext();
     if (otherRequest) throw Object.assign(new Error('读取期间有其他游戏操作，请稍后重新生成计划'), { code: 'PRODUCTION_SNAPSHOT_CHANGED' });
-    if (updatePush) throw Object.assign(new Error('游戏数据仍在更新，请稍后重新生成计划'), { code: 'PRODUCTION_SNAPSHOT_CHANGED', updatePush });
+    if (updatePush) throw Object.assign(new Error('游戏数据仍在更新，请稍后重新生成计划'), { code: 'PRODUCTION_SNAPSHOT_CHANGED', updatePush, retryable: true });
   };
   const reads = [], cache = new Map(), raw = { player, reads };
   const allowed = new Set(['OnWaterRequest', 'AllItemRequest', 'AllResourceRequest', 'GameEffectRequest', 'WeekInfoRequest',
@@ -392,7 +393,9 @@ async function readSnapshotOnce(client, protocol, config, player, settings, opti
     const cargoLevel = cargoLevels.length ? Math.min(...cargoLevels) : null;
     if (amount(cargoLevel) !== null && amount(player?.level) !== null && player.level < cargoLevel) reads.push({ request: 'CargoShipsRequest', status: 'notApplicable', reason: '贸易港尚未开放' });
     else await get('cargo', 'CargoShipsRequest');
+    let recruitDay;
     if (exactAutomationId(player?.guildId)) {
+      recruitDay = beijingDay(now() * 1000);
       await get('guildOrder', 'GuildOrderRequest');
       if (raw.guildOrder?.order?.requirements?.length) {
         await get('guildCounters', 'CounterInfoRequest');
@@ -437,6 +440,9 @@ async function readSnapshotOnce(client, protocol, config, player, settings, opti
     raw.observedDurations = options.observedDurations ?? [];
     raw.capturedAt = new Date(options.now?.() ?? Date.now()).toISOString();
     check();
+    if (raw.guildOrder?.order?.requirements?.length && recruitDay !== beijingDay(raw.serverNow * 1000)) {
+      throw Object.assign(new Error('募兵读取期间已换日，需重新核对订单和次数'), { code: 'PRODUCTION_SNAPSHOT_CHANGED', retryable: true });
+    }
     return buildProductionSnapshot(raw, config, settings);
   } finally {
     client.off?.('frame', observeFrame);
