@@ -41,14 +41,14 @@ function test(name, run) { run(); passed++; console.log('通过：' + name); }
 test('居民材料规则逐单过滤，共享现货只够一单，待收成品不计入现货', () => {
   const { snapshot, settings, plan } = fixture();
   Object.assign(settings.resident, { enabled: true, skipCrops: true, skipProduction: true, blockedMaterials: ['酒精'] });
-  snapshot.inventory.push({ id: '面包', num: 1 }, { id: '酒精', num: 1 });
-  snapshot.factories[0].finished.push({ id: '面包', num: 3 });
-  snapshot.orders = [['小麦', '面包'], ['酒精', '面包'], ['面包'], ['面包']].map((ids, i) => ({
+  snapshot.inventory.push({ id: '面包', num: 1 }, { id: '酒精', num: 1 }, { id: '食盐', num: 1 });
+  snapshot.factories[0].finished.push({ id: '食盐', num: 3 });
+  snapshot.orders = [['小麦', '食盐'], ['酒精', '食盐'], ['面包', '食盐'], ['食盐'], ['食盐']].map((ids, i) => ({
     id: 'resident:' + i, source: 'resident', kind: 'order', metadata: { enabled: true },
     requirements: ids.map(id => ({ id, num: 1 })),
   }));
   const result = plan();
-  assert.deepEqual(result.orders.map(order => order.skipped), [true, true, false, true]);
+  assert.deepEqual(result.orders.map(order => order.skipped), [true, true, true, false, true]);
   assert.deepEqual(result.timeline.filter(job => job.kind === 'production'), []);
 });
 

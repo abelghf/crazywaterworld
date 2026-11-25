@@ -171,7 +171,7 @@ export function residentFilter(order, survey, settings, usage = {}) {
   const count = Math.max(Number(survey.orderOfTheDay?.orderNum ?? 0), Number(usage.counters?.residentOrders ?? 0));
   if (r.dailyCap > 0 && count >= r.dailyCap) return { reason: `今日满足次数 ${count}，已达上限 ${r.dailyCap}` };
   const available = survey.available ?? (id => survey.have(id) - resourceReserve(settings, id));
-  const materialRule = residentMaterialRule(r, order.requirements, survey.cropIds, available);
+  const materialRule = residentMaterialRule(r, order.requirements, survey.cropRelatedIds ?? survey.cropIds, available);
   if (materialRule) return { reason: residentMaterialReasons[materialRule], materialRule, reroll: true };
   if (r.minExp > 0 && (order.rewardExp == null || order.rewardExp < r.minExp)) return { reason: `经验奖励未达到 ${r.minExp}`, reroll: r.reroll };
   if (r.minGold > 0 && (order.rewardGold == null || order.rewardGold < r.minGold)) return { reason: `金币奖励未达到 ${r.minGold}`, reroll: r.reroll };

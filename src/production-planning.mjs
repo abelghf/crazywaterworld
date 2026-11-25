@@ -6,7 +6,7 @@ import { createProductionTiming } from './production-timing.mjs';
 import { resourceReserve, worldPreferenceEnabled } from './automation-policy.mjs';
 import { activityProductionEnabled } from './activity-automation.mjs';
 import { createProductionEligibility } from './production-eligibility.mjs';
-import { residentMaterialRule, residentMaterialReasons } from './resident-materials.mjs';
+import { cropRelatedMaterialIds, residentMaterialRule, residentMaterialReasons } from './resident-materials.mjs';
 import { displayBuilding } from './world.mjs';
 
 const rows = (config, key) => config?.tables?.[key]?.data ?? [];
@@ -79,6 +79,7 @@ export function buildProductionModel(snapshot, config, settings, { pendingMateri
     quantity: Math.max(0, item.num - (resourceReserve(settings, item.id) || 0)) }));
   const factoryConfigs = new Map(rows(config, 'BuildingProduceCfg').map(recipe => [recipe.itemId, recipe]));
   const cropConfigs = new Map(rows(config, 'FarmlandPlantCfg').map(recipe => [recipe.id, recipe]));
+  const cropRelatedIds = cropRelatedMaterialIds(config, cropConfigs.keys());
   const factoryMachines = new Map();
   const uncertainSupply = new Map();
   const nativeReceipts = worldPreferenceEnabled(settings, 'gainFactory');
@@ -160,7 +161,7 @@ export function buildProductionModel(snapshot, config, settings, { pendingMateri
   const onHand = new Map(inventory.map(item => [item.itemId, item.quantity]));
   const available = id => onHand.get(id) ?? 0;
   const activeOrderRows = orderRows.filter(order => {
-    const rule = order.source === 'resident' && residentMaterialRule(settings.resident, order.requirements, cropConfigs,
+    const rule = order.source === 'resident' && residentMaterialRule(settings.resident, order.requirements, cropRelatedIds,
       (snapshot.inventoryKnown ?? snapshot.complete) ? available : null);
     if (rule) {
       skippedOrders.set(order.id, [{ reason: residentMaterialReasons[rule] }]);

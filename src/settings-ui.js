@@ -320,7 +320,7 @@ const configGroups = [
   ] },
   { id: 'resident', title: '居民需求', category: 'base', fields: [
     configField('resident.enabled', '自动满足'),
-    configField('resident.skipCrops', '跳过农作物订单', 'switch', { help: '订单含农作物就整单跳过备料。开启自动满足且角色达到12级后直接换单。' }),
+    configField('resident.skipCrops', '跳过农作物订单', 'switch', { help: '订单含农作物，或任一材料的上游配方用到农作物（如小麦做的面包），就整单跳过备料。即使已有现货也会跳过。开启自动满足且角色达到12级后直接换单。' }),
     configField('resident.skipProduction', '跳过需生产的订单', 'switch', { help: '现有可用库存凑不齐整单就跳过备料。开启自动满足且角色达到12级后直接换单，在产和待收材料不计入现货。' }),
     configField('resident.blockedMaterials', '不准消耗', 'multi', { catalog: 'materials', empty: '未选择，允许消耗所有材料', help: '订单含任一所选材料就整单跳过备料。开启自动满足且角色达到12级后直接换单。' }),
     configField('resident.minExp', '最低经验', 'number', { help: '奖励低于此值或无法确认奖励时跳过，0 表示不限制。' }),

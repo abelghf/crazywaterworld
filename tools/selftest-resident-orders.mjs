@@ -160,19 +160,26 @@ async function testDeliveryBeforeReroll() {
 async function testMaterialRerolls() {
   const client = mock();
   client.weekly = client.stock = 0;
-  client.otherStock = ['番茄', '酒精', '卷纸'].map(itemId => ({ itemId, num: 1 }));
-  client.onWater = [['番茄', '烤鱼'], ['酒精', '烤鱼'], ['烤鱼'], ['卷纸']].map((ids, i) => ({
+  client.otherStock = ['面包', '电线', '酒精', '卷纸'].map(itemId => ({ itemId, num: 1 }));
+  client.onWater = [['面包', '食盐', '电线'], ['酒精', '烤鱼'], ['烤鱼'], ['卷纸']].map((ids, i) => ({
     index: i + 1, requirements: ids.map(id => ({ id, num: 1 })),
   }));
   client.buildings = [{ buildingId: '1食品厂', level: 1, factory: { factoryQ: [], finishedProducts: [] } }];
-  const cfg = { ...config, tables: { ...config.tables, FarmlandPlantCfg: { data: [{ id: '番茄' }] } } };
+  const cfg = { ...config, tables: { ...config.tables, FarmlandPlantCfg: { data: [{ id: '小麦' }] },
+    BuildingProduceCfg: { data: [...config.tables.BuildingProduceCfg.data,
+      { itemId: '面包', buildType: '食品厂', unlockLevel: 1, produceTime: 60, costItem: [['小麦', 5]] }] } } };
   const settings = defaultSettings();
   settings.loop.world = settings.resident.enabled = true;
-  Object.assign(settings.resident, { skipCrops: true, skipProduction: true, blockedMaterials: ['酒精'] });
+  settings.resident.skipCrops = true;
   Object.assign(settings.factory, { enabled: true, produce: true, keepStock: 0, demandFirst: true, demandPriority: ['resident'] });
   const player = client.player;
   const proto = { ...protocol, DenyOrderRequest: true };
   const read = async () => planWorld(await surveyWorld(client, proto, { config: cfg, player }), { config: cfg, settings });
+  assert.equal((await read()).actions.find(step => step.body.index === 1)?.materialRule, 'skipCrops',
+    '面包有现货、只缺食盐，单开农作物规则也会换掉整单');
+  settings.resident.skipCrops = false;
+  assert.equal((await read()).orderDecisions[0].status, 'missing');
+  Object.assign(settings.resident, { skipCrops: true, skipProduction: true, blockedMaterials: ['酒精'] });
   client.itemReply = Error('仓库暂未同步');
   assert.deepEqual((await read()).orderDecisions.map(row => row.status), ['reroll', 'reroll', 'unknown', 'unknown'],
     '已知的材料规则独立于库存读取；库存未知时不能按缺料换单');

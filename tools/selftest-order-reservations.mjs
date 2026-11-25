@@ -47,10 +47,14 @@ export async function testOrderReservations() {
 
   const materialRules = fixture();
   const resident = { enabled: true, blockedMaterials: ['wood'], skipProduction: true, skipCrops: true };
-  materialRules.responses.OnWaterRequest.workerOrder = [['fish','wood'], ['fish','crop'], ['fish','missing'], ['iron']]
+  materialRules.responses.AllItemRequest.items.push({ itemId: 'sandwich', num: 1 });
+  materialRules.responses.OnWaterRequest.workerOrder = [['fish','wood'], ['fish','sandwich'], ['fish','missing'], ['iron']]
     .map((ids, i) => ({ index: i + 1, requirements: ids.map(id => asset(id, 1)) }));
   const filtered = await materialRules.read({ settings: { resident } }, protocol,
-    { tables: { ...config.tables, FarmlandPlantCfg: { data: [{ id: 'crop' }] } } });
+    { tables: { ...config.tables, FarmlandPlantCfg: { data: [{ id: 'crop' }] }, BuildingProduceCfg: { data: [
+      { itemId: 'sandwich', costItem: [['bread', 1], ['fish', 1]] },
+      { itemId: 'bread', costItem: [['crop', 5]] },
+    ] } } });
   assert.deepEqual([...filtered.reservations.resident], [['iron', 1]], '换单规则释放整单预留，合格居民单仍留料');
 
   f.responses.OnWaterRequest.workerOrder.push(

@@ -22,7 +22,7 @@ import { normalize } from './worlds.mjs';
 import { upgradeReason } from './building-upgrade-log.mjs';
 import { linkOperationResult } from './operation-log.mjs';
 import { residentFilter, residentOrderStockWarning, resourceReserve, worldPreferenceEnabled, worldActionAllowed, factoryItemSpeedEnabled, exactAutomationId, AutomationSkip, createActionGuard } from './automation-policy.mjs';
-import { residentMaterialRule } from './resident-materials.mjs';
+import { cropRelatedMaterialIds, residentMaterialRule } from './resident-materials.mjs';
 import { readWeekOrder } from './activities.mjs';
 import { RESOURCE, displayMaterial } from './config.mjs';
 import { captureFarmMaterialState, farmInventory, settleFarmMaterialState } from './farm-planting.mjs';
@@ -535,6 +535,7 @@ export async function surveyWorld(client, protocol, { config = null, player = nu
   const vip = rowsOf(config, 'VipLevelCfg').find(row => row.level === player?.vip?.vipLevel);
   const stockBonus = Number(vip?.effects?.find(([effect]) => effect === '加工品存量上限')?.[1] ?? 0);
   const baseStockCap = paramOf(config, STOCK_PARAM);
+  const cropIds = new Set(rowsOf(config, 'FarmlandPlantCfg').map(row => row.id));
 
   return {
     now: Math.floor(Date.now() / 1000),
@@ -565,7 +566,8 @@ export async function surveyWorld(client, protocol, { config = null, player = nu
     futurePopulation,
     maxPopulation,
     autoFarming: water.autoFarming === true,
-    cropIds: new Set(rowsOf(config, 'FarmlandPlantCfg').map(row => row.id)),
+    cropIds,
+    cropRelatedIds: cropRelatedMaterialIds(config, cropIds),
     fishingLevel: water.fishingLevel ?? null,
     salvageLevel: water.salvageLevel ?? null,
     divingLevel: water.divingLevel ?? null,
@@ -994,7 +996,7 @@ export function planWorld(survey, {
     return Math.max(0, (weeklyHeld.get(id) ?? 0) - cargoOverlap);
   };
   const countBefore = Math.max(Number(survey.orderOfTheDay?.orderNum ?? 0), Number(usage.counters?.residentOrders ?? 0));
-  const cropIds = survey.cropIds ?? new Set(rowsOf(config, 'FarmlandPlantCfg').map(row => row.id));
+  const cropRelatedIds = survey.cropRelatedIds ?? (survey.orders.length ? cropRelatedMaterialIds(config, survey.cropIds) : null);
   const residentSteps = [];
   let residentPlanned = 0;
   // 先给本轮可交的订单分配库存和次数，再用剩余额度决定哪些槽位需要换单。
@@ -1023,12 +1025,12 @@ export function planWorld(survey, {
       return;
     }
     // 禁用材料和农作物能从订单本身确定；判断缺料才需要可靠的库存及预留。
-    if (survey.orderCheckError && !residentMaterialRule(settings?.resident, order.requirements, cropIds, null)) {
+    if (survey.orderCheckError && !residentMaterialRule(settings?.resident, order.requirements, cropRelatedIds, null)) {
       decision('unknown', survey.orderCheckError);
       return;
     }
     const available = id => Math.max(0, free(id) + lendable(id));
-    const filter = residentFilter(order, { ...survey, available, cropIds,
+    const filter = residentFilter(order, { ...survey, available, cropRelatedIds,
       orderOfTheDay: { ...survey.orderOfTheDay, orderNum: countBefore + residentPlanned } }, settings, usage);
     if (filter) {
       if (readyOnly) return;
