@@ -1546,9 +1546,9 @@ await test('硅晶达标在周期活动内预览本轮消耗，确认后执行�
   await f.api.refresh();
   f.api.select(id);
   const stats = f.node('activities-list');
-  assert.match(stats.querySelector('.week-chip-metrics').textContent, /已完成轮次1 \/ 5.*当前累计积分15,997.*预计本轮积分8,000 \/ 8,000/);
+  assert.match(stats.querySelector('.week-chip-metrics').textContent, /已完成轮次1 \/ 5.*当前累计积分15,997.*当前积分 \/ 本轮积分上限7,997 \/ 8,000/);
   assert.match(stats.querySelector('.week-chip-inventory').textContent, /初级硅晶0 个中级硅晶1 个高级硅晶0 个优质硅晶0 个特级硅晶0 个/);
-  assert.match(stats.textContent, /第 2 轮 · 7997 \/ 8000 分/);
+  assert.match(stats.textContent, /第 2 轮/);
   assert.doesNotMatch(stats.textContent, /中级硅晶 ×1|超出目标/);
   assert.equal(button().disabled, false);
   button().onclick();
@@ -1580,7 +1580,7 @@ await test('硅晶达标在周期活动内预览本轮消耗，确认后执行�
   Object.assign(plan.statistics, { completed: 1, qualified: 1, forecast: 8000, weekly: 500 });
   await f.api.refresh();
   const rebatePanel = stats.querySelector('.week-chip-panel').textContent;
-  assert.match(rebatePanel, /预计本轮积分8,000 \/ 8,000/);
+  assert.match(rebatePanel, /当前积分 \/ 本轮积分上限0 \/ 8,000/);
   assert.doesNotMatch(rebatePanel, /库存可得|周活动返晶|免费礼包|芯片厂|预计积分计入|分批加工|返晶到账|将开启|本轮档位奖励|中级硅晶 ×50|还缺 406/);
   assert.equal(button().disabled, false);
   button().onclick();
@@ -1599,6 +1599,12 @@ await test('硅晶达标在周期活动内预览本轮消耗，确认后执行�
   await f.api.refresh();
   assert.equal(button().textContent, '领取本轮达标奖励');
   assert.equal(button().disabled, false);
+  assert.match(stats.querySelector('.week-chip-metrics').textContent, /当前积分 \/ 本轮积分上限8,000 \/ 8,000/);
+  Object.assign(plan, { round: 6, score: 0, total: 40000, key: null });
+  Object.assign(plan.statistics, { completed: 5, qualified: 5 });
+  await f.api.refresh();
+  assert.match(stats.textContent, /本期全部轮次已完成/);
+  assert.doesNotMatch(stats.querySelector('.week-chip-metrics').textContent, /本轮积分上限/);
 });
 
 console.log('活动分组与集中配置专项 ' + passed + '/' + passed + ' 通过');

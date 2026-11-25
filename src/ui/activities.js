@@ -346,7 +346,9 @@ function renderWeekChipStatistics(section, plan) {
   const metrics = el('dl', 'week-chip-metrics');
   metric(metrics, '已完成轮次', stats.completed + ' / ' + plan.roundLimit);
   metric(metrics, '当前累计积分', format(plan.total));
-  metric(metrics, '预计本轮积分', format(stats.forecast) + ' / ' + format(stats.cap));
+  if (plan.round <= plan.roundLimit) {
+    metric(metrics, '当前积分 / 本轮积分上限', format(plan.score) + ' / ' + format(plan.target));
+  }
   section.appendChild(metrics);
   if (stats.qualified > stats.completed) section.appendChild(el('p', 'dim', '已有 ' + stats.qualified + ' 轮积分达标，领完本轮档位奖励后计入完成轮次。'));
   const inventory = el('dl', 'week-chip-inventory');
@@ -366,7 +368,11 @@ function renderWeekChip(box, row) {
   }
   const key = account + ':' + row.id;
   if (plan.statistics) renderWeekChipStatistics(section, plan);
-  section.appendChild(el('p', null, plan.round > plan.roundLimit ? '本期全部轮次已完成。' : '第 ' + plan.round + ' 轮 · ' + plan.score + ' / ' + plan.target + ' 分'));
+  if (plan.round > plan.roundLimit) section.appendChild(el('p', null, '本期全部轮次已完成。'));
+  else {
+    const round = '第 ' + plan.round + ' 轮';
+    section.appendChild(el('p', null, plan.statistics ? round : round + ' · ' + plan.score + ' / ' + plan.target + ' 分'));
+  }
   if (plan.blockedReason) section.appendChild(el('p', 'dim', plan.blockedReason));
   else if (!plan.key && plan.round <= plan.roundLimit) {
     const shortfall = plan.target - (plan.statistics?.forecast ?? Math.min(plan.target, plan.score + plan.available));
