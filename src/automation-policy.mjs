@@ -105,6 +105,18 @@ export function nativePreferenceEnabled(settings, key) {
   return worldPreferenceEnabled(settings, key);
 }
 
+export function productionDemandConsumes(order, settings) {
+  if (order.kind === 'consumption' && order.source === 'building') {
+    const action = order.metadata?.action;
+    if (action !== 'build' && action !== 'upgrade') return false;
+    const limit = action === 'build' ? settings.building.maxBuilds : settings.building.maxUpgrades;
+    return limit > 0 && worldPreferenceEnabled(settings, action);
+  }
+  return order.kind === 'order' && (order.source === 'merchant'
+    ? activityProductionEnabled(settings, 'merchant') && settings.schedule?.weekOrderSubmit === true
+    : order.metadata?.enabled === true);
+}
+
 export function resourceReserve(settings, id, step = null) {
   if (!settings) return 0;
   if (id === '建筑蓝图') return settings.building.keepBlueprints;
