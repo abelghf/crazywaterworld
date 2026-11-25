@@ -185,6 +185,14 @@ const orderClient = {
 const options = { config: orderConfig, player: firstSeason };
 await surveyTasks(orderClient, {}, { ...options, scheduler });
 assert.equal(deadlines.get('orderDaily'), scheduler.nextDay());
+const orderPushClient = Object.assign(new EventEmitter(), orderClient);
+const orderPushSchedule = rewardSchedule(orderPushClient);
+await surveyTasks(orderPushClient, {}, { ...options, scheduler: orderPushSchedule });
+const orderPush = rewardedNum => orderPushClient.emit('message', { name: 'SCOrderOfTheDay', body: { orderOfTheDay: { orderNum: 55, rewardedNum } } });
+orderPush(40);
+assert.equal(orderPushSchedule.nextCheck('orderDaily'), orderPushSchedule.nextDay());
+orderPush(0);
+assert(orderPushSchedule.due('orderDaily'));
 reads.length = 0;
 const skippedOrder = await surveyTasks(orderClient, {}, { ...options, scheduler });
 assert.deepEqual(reads, ['MainTaskInfoRequest', 'AchievementInfoRequest']);

@@ -207,6 +207,20 @@ try{
   assert.equal(f.state.writes.filter(row => row.name === 'TrialRaidBuySweepRequest').length, 1);
   assert.equal((await run(f, l, 'ad')).cached, true);
  });
+ await check('单副本广告和钻石扫荡分别休眠，调高钻石限额只恢复付费检查',async()=>{
+  const f=trialModesFixture(), l=ledger();
+  Object.assign(f.settings.trials,{raidIds:['1'],paidPerRaidLimit:1});
+  const round=()=>runLoop(f.client,f.protocol,{config:f.config,player:f.player,adChannel:f.channel,
+    allowMutate:true,rounds:1,getSettings:()=>f.settings,isEnabled:key=>['trialAdSweep','trialPaidSweep'].includes(key),usageLedger:l});
+  await round();
+  assert.equal(f.state.writes.filter(row=>row.name==='TrialRaidBuySweepRequest').length,2);
+  f.state.reads.length=0; await round();
+  assert(!f.state.reads.some(row=>['TrialRaidInfoRequest','MonthCardRequest','OnWaterRequest'].includes(row.name)));
+  f.settings.trials.paidPerRaidLimit=2; await round();
+  assert(f.state.reads.some(row=>row.name==='MonthCardRequest'));
+  assert(!f.state.reads.some(row=>row.name==='OnWaterRequest'));
+  assert.equal(f.state.writes.filter(row=>row.name==='TrialRaidBuySweepRequest').length,3);
+ });
  await check('三种扫荡分别保留每个副本的跳过原因，检查本身不消耗次数',async()=>{
   const f=trialModesFixture(), l=ledger();
   f.state.raids.get(1).buySweepTimes=3;

@@ -239,6 +239,7 @@ export async function runLoop(client, protocol, {
   }
   const treasureScan = scheduler.scanTask({
     enabled: () => treasureAutomationEnabled(getSettings()),
+    notBefore: () => (rewards?.scheduledAt('treasureDaily') ?? 0) * 1000 - (client.serverClockOffsetMs || 0),
     intervalMs: () => (getSettings()?.treasure?.checkEverySeconds ?? 15) * 1000,
     hourlyFallback: true,
     async observe(current) {
@@ -275,6 +276,7 @@ export async function runLoop(client, protocol, {
     },
     intervalMs: () => (getSettings()?.radar?.checkEverySeconds ?? 30) * 1000,
   });
+  let treasureFleetVersion = 0;
   scheduler.listen(client, 'message', ({ name, body }) => {
     if (name === 'SCAllActivity' || name === 'SCServerTimeChanged') wakeActivities();
     if (name === 'SCTreasureLootRefresh') { recallStarts.treasure = null; treasureScan.invalidate(); }
@@ -294,6 +296,10 @@ export async function runLoop(client, protocol, {
     if (name === 'SCMyFleetUpdate') {
       const idle = (body?.fleets ?? []).filter(fleet => fleet.state === 1);
       const settings = getSettings();
+      if (body?.fleets?.some(fleet => fleet.treasureLootUid > 0 && settings?.treasure?.fleetIds.includes(fleet.buildingId))) {
+        treasureFleetVersion++;
+        treasureScan.invalidate();
+      }
       if (inWar && idle.some(fleet => settings?.cityWar?.fleetIds?.includes(fleet.buildingId))) cityWarScan.invalidate();
       if (idle.some(fleet => settings?.treasure?.fleetIds?.includes(fleet.buildingId))) treasureScan.invalidate();
       const miners = (body?.fleets ?? []).filter(isMiningSilicon);
@@ -322,9 +328,23 @@ export async function runLoop(client, protocol, {
   }));
   const fleetScans = { treasure: treasureScan, cityWar: cityWarScan, radar: radarScan };
   const scanOptions = new Map(Object.keys(fleetScans).map(key => [key, JSON.stringify(getSettings()?.[key])]));
+  function syncDailyPreferences(settings) {
+    if (!rewards || !settings) return;
+    rewards.syncPreference('gold.enabled', settings.gold);
+    rewards.syncPreference('pirate', settings.pirateSweep);
+    rewards.syncPreference('trialPaidSweep', [settings.trials?.paid, settings.trials?.paidPerRaidLimit,
+      settings.trials?.dailyDiamondBudget, settings.resources?.diamondDailyLimit]);
+    rewards.syncPreference('trialAdSweep', settings.trials?.ads);
+    rewards.syncPreference('guildOrders', [settings.alliance?.recruitDailyLimit, player?.level, exactAutomationId(player?.guildId)]);
+    rewards.syncPreference('guildFort', settings.guildFort);
+    rewards.syncPreference('treasureDaily', settings.treasure);
+    rewards.syncPreference('weeklyActivity', settings.weeklyActivity);
+    rewards.syncPreference('weekSupplyFree', [settings.activityAutomation?.weekLottery, settings.activityAutomation?.weekChip, settings.activityAutomation?.weekUnique]);
+  }
   const settingsWake = () => { fleetSpeedAt = 0; siliconAt = 0; resourceFieldsAt = 0; extendedAt = 0; siliconVersion++;
     meritCheckAt = 0;
     const settings = getSettings();
+    syncDailyPreferences(settings);
     dispatchSettingsPending = Boolean((cityWarState && !cityWarEnabled(settings)) || watchFleetMaintenance(client).held().length);
     for (const [key, scan] of Object.entries(fleetScans)) {
       const options = JSON.stringify(settings?.[key]);
@@ -334,7 +354,7 @@ export async function runLoop(client, protocol, {
       }
       scanOptions.set(key, options);
     }
-    guildShipSchedule.clearTask('guildShip'); rewards?.clearTask('guildFort'); wakeActivities(); scheduler.wake(); };
+    guildShipSchedule.clearTask('guildShip'); rewards?.clear('guildFort'); wakeActivities(); scheduler.wake(); };
   const extendedPush = ({ name }) => {
     if (isGuildShipPush(name) && getSettings()?.guildShip?.enabled) scheduler.wake();
     if (/^SCFort|^SCHeroRaid/.test(name) || ['SCAllActivity','SCGuildOrder','SCNewGuildAidAsk','SCGuildAidHelp','SCGuildAidRemove','SCNewGuildWelfarePack'].includes(name)) {
@@ -381,6 +401,7 @@ export async function runLoop(client, protocol, {
     const empty = () => ({ planned: 0, results: [] });
     const summary = { round, startedAt: Math.floor(Date.now() / 1000), tasks: empty(), dailies: empty(), world: empty() };
     const settings = getSettings();
+    syncDailyPreferences(settings);
     // 查询关闭或尚未到期的任务无需扫描磁盘。允许执行时仍使用最新资源复核。
     const selected = key => !stop.aborted && isActivityTaskAvailable(key, client)
       && nativePreferenceEnabled(getSettings(), key) && (!isEnabled || isEnabled(key));
@@ -566,7 +587,7 @@ export async function runLoop(client, protocol, {
         let demand = [];
         if (currentSettings && canFactory('startProduce') && (!simulateNative || checkUpgrade)) {
           const extra = await surveyBaseAutomation(client, protocol, config, player, currentSettings, survey,
-            { ledger: usageLedger, enabled: current });
+            { ledger: usageLedger, enabled: current, scheduler: rewards, includeGold: false });
           if (current()) demand = baseDemands(extra, config, currentSettings);
         }
         const orderRead = !survey.notes.some(note => note.startsWith('本轮未能读取商人订单'));
@@ -740,7 +761,7 @@ export async function runLoop(client, protocol, {
       };
       try {
         if (getSettings()?.alliance?.enabled) {
-          await runAllianceAutomation(client, protocol, config, player, { getSettings, ledger: usageLedger, enabled: active, report: report('alliance.enabled') });
+          await runAllianceAutomation(client, protocol, config, player, { getSettings, ledger: usageLedger, scheduler: rewards, enabled: active, report: report('alliance.enabled') });
           const options = { player, getSettings, ledger: usageLedger, scheduler: rewards,
             enabled: () => active() && getSettings()?.alliance?.enabled };
           if (getSettings()?.guildFort?.enabled) await serviceGuildForts(client, protocol, config, { ...options, report: report('guildFort.enabled') });
@@ -804,9 +825,14 @@ export async function runLoop(client, protocol, {
     }
     async function checkBoss(){
       if(stop.aborted||!getSettings()?.worldBoss.enabled||!rewards?.due('worldBoss'))return;
-      try{await runWorldBoss(client,config,player,{getSettings,ledger:usageLedger,enabled:()=>!stop.aborted&&runtimeActive()&&client.connected&&getSettings().worldBoss.enabled,report:entry=>{summary.world.results.push(entry);stepLog('world')({...entry,title:entry.label,taskKey:'worldBoss'});}});}
+      const reset = rewards.nextDay();
+      let completed = false;
+      try{
+        const result = await runWorldBoss(client,config,player,{getSettings,ledger:usageLedger,enabled:()=>!stop.aborted&&runtimeActive()&&client.connected&&getSettings().worldBoss.enabled,report:entry=>{summary.world.results.push(entry);stepLog('world')({...entry,title:entry.label,taskKey:'worldBoss'});}});
+        completed = result?.count > 0;
+      }
       catch(error){phaseFailure('world','世界Boss首战',error);}
-      finally{rewards?.defer('worldBoss',rewards.now()+Math.ceil(getEveryMs()/1000));}
+      finally{rewards.defer('worldBoss',completed ? reset : Math.min(reset,rewards.now()+Math.ceil(getEveryMs()/1000)));}
     }
     async function checkTreasure() {
       if (await treasureScan.check(scanTreasure)) publishScanDeadline('万吨巨轮', treasureScan);
@@ -845,6 +871,7 @@ export async function runLoop(client, protocol, {
     }
     async function scanTreasure() {
       const started = serverNowSeconds();
+      const fleetVersion = treasureFleetVersion, preferences = getSettings().treasure, midnight = rewards?.nextDay();
       if(getSettings()?.cityWar.reserveDuringWar)await checkCityWar();
       try {
         const result = await runTreasureLoot(client, protocol, config, player, { getSettings, ledger: usageLedger,
@@ -864,6 +891,10 @@ export async function runLoop(client, protocol, {
             lastTreasureNotes = text;
           },
         });
+        if (rewards && result.quotaComplete && preferences === getSettings().treasure && fleetVersion === treasureFleetVersion) {
+          rewards.observe('treasureDaily', '今日巨轮领奖次数已满', 'completed', {fleetIds:[...preferences.fleetIds]});
+          rewards.defer('treasureDaily', midnight);
+        }
         const recallTimes = await prepareSiliconRecall('treasure', result.canPrepare ? result.nextRefreshTime : null, result.miningFleetIds);
         return [...treasureScanTimes(started, result.nextRefreshTime), ...recallTimes];
       } catch (error) { recallStarts.treasure = null; phaseFailure('world', '万吨巨轮检查', error); }
@@ -930,10 +961,10 @@ export async function runLoop(client, protocol, {
     }
 
     async function checkWeeklyActivity() {
-      if (stop.aborted || !getWeeklySettings()?.weeklyActivity?.enabled) return;
+      if (stop.aborted || !getWeeklySettings()?.weeklyActivity?.enabled || (rewards && !rewards.due('weeklyActivity'))) return;
       try {
         await runWeeklyActivity(client, protocol, config, player, {
-          getSettings: getWeeklySettings, ledger: usageLedger,
+          getSettings: getWeeklySettings, ledger: usageLedger, scheduler: rewards,
           enabled: () => !stop.aborted && runtimeActive() && client.connected,
           report(entry) {
             summary.world.results.push(entry);
@@ -1101,7 +1132,7 @@ export async function runLoop(client, protocol, {
         if (!raids.length) for (const key of ['trialPaidSweep','trialAdSweep']) {
           if (enabled(key)) stepLog('dailies')({ taskKey: key, title: '试炼扫荡', skipped: true, reason: '尚未选择扫荡副本' });
         }
-        await runExtraTrialSweeps(client, protocol, config, player, { getSettings, ledger: usageLedger, channel: adChannel,
+        await runExtraTrialSweeps(client, protocol, config, player, { getSettings, ledger: usageLedger, channel: adChannel, scheduler: rewards,
           enabled: mode => enabled(mode === 'paid' ? 'trialPaidSweep' : 'trialAdSweep'),
           report: (entry, id, mode) => reportTrial(mode === 'paid' ? 'trialPaidSweep' : 'trialAdSweep', raids, entry, id) });
       }
@@ -1112,7 +1143,7 @@ export async function runLoop(client, protocol, {
           yield;
           if (!settings && key === 'weekHeroStar') continue;
           if (!settings && !usageLedger && key === 'vipDaily') continue;
-          if (!serviceEnabled(key)) continue;
+          if (!serviceEnabled(key) || !rewards.due(key)) continue;
           // 战报两个开关共享一次检查。
           const checkCampaignReports = key === 'battleReportRewards' && active('campaignReports');
           let reported = false;
@@ -1320,7 +1351,7 @@ export async function runLoop(client, protocol, {
           includeWeekOrder: readsOrders || cargoDemand || (allowWorld('speedUpProduce') && settings?.factory.speedUpSources.includes('merchant')) });
         if (settings && ((allowWorld('startProduce') && (!simulateNative || readsOrders) && (settings.factory.demandFirst || settings.alliance?.enabled &&
           settings.alliance.recruit && settings.alliance.recruitProduction || settings.guildShip?.enabled && settings.guildShip.produceMissing)) || settings.factory.speedUpSources.length > 0)) {
-          const extra = await surveyBaseAutomation(client, protocol, config, player, settings, survey, { ledger: usageLedger, enabled: () => !stop.aborted && runtimeActive() && client.connected !== false });
+          const extra = await surveyBaseAutomation(client, protocol, config, player, settings, survey, { ledger: usageLedger, scheduler: rewards, includeGold: false, enabled: () => !stop.aborted && runtimeActive() && client.connected !== false });
           extraDemand = baseDemands(extra, config, settings);
         }
         if (factorySchedule.active() || factorySchedule.due())
@@ -1442,14 +1473,25 @@ export async function runLoop(client, protocol, {
       }
       yield;
       const latest = getSettings();
-      if (hasBaseWork(latest)) {
+      const includeGold = !!latest?.gold?.enabled && latest.loop.dailies &&
+        (usageLedger?.snapshot().pendingPaidGold || (latest.gold.times > 0 && (!rewards || rewards.due('gold.enabled'))));
+      if (hasBaseWork(latest, { includeGold })) {
+        const midnight = rewards?.nextDay();
+        const deferGold = reset => rewards?.defer('gold.enabled', reset > rewards.now() ? reset : midnight);
         try {
           const survey = await surveyWorld(client, protocol, { config, player, includeWeekOrder: false, includeProductionTiming: false });
-          const extra = await surveyBaseAutomation(client, protocol, config, player, latest, survey, { ledger: usageLedger, enabled: () => !stop.aborted && runtimeActive() && client.connected !== false });
+          const extra = await surveyBaseAutomation(client, protocol, config, player, latest, survey, { ledger: usageLedger, scheduler: rewards, includeGold, enabled: () => !stop.aborted && runtimeActive() && client.connected !== false });
           const plan = planBaseAutomation(extra, config, latest, usage(), { diveCompleted });
           observeBaseAutomationPlan(rewards, plan, latest, getEveryMs());
+          if (latest === getSettings() && plan.goldResetTime != null) deferGold(plan.goldResetTime);
           const results = await runBaseAutomation(client, protocol, config, plan, { player, getSettings, ledger: usageLedger,
             enabled: () => !stop.aborted && runtimeActive() && client.connected, onStep: stepLog('world') });
+          for (const {step, ok} of results) {
+            if (!ok || step.kind !== 'paidGold' || !step.verify || latest !== getSettings()) continue;
+            if (step.verify.paidBefore + step.body.times >= Math.min(latest.gold.times, step.verify.maxPaidTimes)) {
+              deferGold(step.verify.resetTime);
+            }
+          }
           summary.world.planned += plan.actions.length;
           summary.world.results.push(...results);
           summary.world.notes = [...(summary.world.notes ?? []), ...plan.notes];
@@ -1521,7 +1563,10 @@ export async function runLoop(client, protocol, {
         let upgradeAt = Date.now() + 30_000;
         while (scheduler.active() && Date.now() < waitStartedAt + getEveryMs()) {
           const nextRound = waitStartedAt + getEveryMs();
-          const weeklyAt = nextWeeklyActivityBoundary(client, getWeeklySettings(), roundStartedMs);
+          const weeklySettings = getWeeklySettings();
+          const weeklyDeadline = weeklySettings?.weeklyActivity?.enabled && rewards?.scheduledAt('weeklyActivity');
+          const weeklyAt = Math.min(nextWeeklyActivityBoundary(client, weeklySettings, roundStartedMs),
+            weeklyDeadline ? weeklyDeadline * 1000 - (client.serverClockOffsetMs || 0) : Infinity);
           const activityAt = activityVersion !== roundActivityVersion ? 0
             : nextActivityBoundary(client, activityConfigured, roundStartedMs);
           const wakeAt = Math.min(nextRound, activityAt, weeklyAt, factorySchedule.nextAt(), dispatchNext(), guildShipNext(), extendedNext(), merchantNext(), appointmentNext(), worldOnlineNext(), meritNext(),

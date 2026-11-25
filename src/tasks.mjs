@@ -165,9 +165,9 @@ export async function surveyTaskRewards(client, { config = null, timeout = 8000 
 export async function surveyOrderDaily(client, { config, water, timeout = 8000, scheduler, player } = {}) {
   const summary = { orderOfTheDay: null, plan: [], notes: [] };
   if (scheduler && !scheduler.due('orderDaily')) return summary;
-  function note(text, state = 'waiting') {
+  function note(text, state = 'waiting', details) {
     summary.notes.push('每日订单：' + text);
-    scheduler?.observe?.('orderDaily', text, state);
+    scheduler?.observe?.('orderDaily', text, state, details);
   }
   let order;
   try {
@@ -193,7 +193,7 @@ export async function surveyOrderDaily(client, { config, water, timeout = 8000, 
   summary.orderOfTheDay = orderView;
   if (!tier.reqNums.length) note('未能确认当前赛季的奖励档位', 'unsynced');
   else if (tier.tier === null) {
-    note(`已领完本日全部档位，最高 ${orderView.rewardedNum} 单档`);
+    note(`已领完本日全部档位，最高 ${orderView.rewardedNum} 单档`, 'waiting', { maxTier: tier.reqNums.at(-1) });
     scheduler?.defer('orderDaily', scheduler.nextDay());
   } else if (!tier.claimable) {
     const claimed = orderView.rewardedNum > 0 ? `已领至 ${orderView.rewardedNum} 单档，` : '';

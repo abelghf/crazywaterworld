@@ -82,6 +82,7 @@ export async function readPirateSweeps(client,config,player,settings,usage={}){
  const fixed=state.allocations.filter(row=>row.times>row.used);
  const reserved=fixed.reduce((sum,row)=>sum+row.times-row.used,0);
  const remaining=state.allocations.filter(row=>row.times===-1).sort((a,b)=>a.used-b.used||a.type-b.type);
+ if(state.allocations.length&&!fixed.length&&!remaining.length)return {...state,quotaComplete:true,reason:'今日所选海盗的扫荡次数已完成'};
  // 暂缺地图目标时保留该类固定次数，只有超出预留的次数才能用于其余目标。
  const eligible=state.left>reserved ? [...fixed,...remaining] : fixed;
  const next=eligible.find(row=>row.target);
@@ -117,7 +118,11 @@ export async function runPirateSweeps(client,config,player,{getSettings,ledger,e
    const settings=getSettings(),state=await readPirateSweeps(client,config,player,settings,ledger);
    const prefix='pirate-sweep:'+state.world+':';
    for(const [key,r]of Object.entries(ledger.keyRecords()))if(key.startsWith(prefix)&&!r.confirmed&&r.details?.day===state.day&&valid(state.used)&&state.used>r.details.used)ledger.resolveKey(key,true);
-   if(state.reason){emit({skipped:true,...(state.pending?{status:'pending'}:{}),reason:state.reason});if(state.left===0)scheduler?.defer('pirate',scheduler.nextDay());return;}
+   if(state.reason){
+    emit({skipped:true,...(state.pending?{status:'pending'}:{}),reason:state.reason});
+    if(!state.pending&&(state.left===0||state.quotaComplete)&&settings===getSettings()&&state.day===day(now(client)))scheduler?.defer('pirate',scheduler.nextDay());
+    return;
+   }
    const key=prefix+state.day+':'+state.used;
    if(ledger.hasKey(key)){emit({skipped:true,reason:'本次扫荡次数已记录，等待服务器计数更新'});return;}
    const signature=key+':'+state.target.uid,rejected=rejections.get(client);

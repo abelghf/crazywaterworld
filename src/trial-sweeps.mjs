@@ -26,7 +26,13 @@ function pendingFor(state, records) {
     r.details.playerId === state.playerId && r.details.raidId === state.raidId && !(r.details.mode === 'ad' && r.details.day < state.day));
 }
 
-export async function readTrialSweeps(client, protocol, config, player, settings, raidId, { channel = {}, usage = { counters: {} }, records = {}, pendingDiamonds = 0 } = {}) {
+function paidBudgetReached(raidId, cost, settings, counters) {
+  return (counters['trialPaid' + raidId] ?? 0) >= settings.trials.paidPerRaidLimit ||
+    (counters.trialDiamonds ?? 0) + cost > settings.trials.dailyDiamondBudget ||
+    (counters.diamonds ?? 0) + cost > settings.resources.diamondDailyLimit;
+}
+
+export async function readTrialSweeps(client, protocol, config, player, settings, raidId, { channel = {}, usage = { counters: {} }, records = {}, pendingDiamonds = 0, mode } = {}) {
   const now = nowOf(client), name = rows(config, 'TrialRaidCfg').find(r => r.raidId === raidId)?.title;
   const state = { ...trialScope(player, raidId, dayOf(now)), name, passedStage: null,
     buyUsed: null, normalLimit: null, normalLeft: null, adUsed: null, adLimit: null, adLeft: null, ruby: null,
@@ -46,48 +52,54 @@ export async function readTrialSweeps(client, protocol, config, player, settings
     state.paid.cost = price.costRuby;
     if (!price.costRuby) { state.paid.reason = state.ad.reason = '当前首轮可免费扫荡，请先使用免费次数'; return state; }
     const vip = rows(config, 'VipLevelCfg').find(r => r.level === player.vip?.vipLevel);
-    try {
-      const [cards, resources] = await Promise.all([client.request('MonthCardRequest', {}, 'MonthCardResponse'), client.request('AllResourceRequest', {}, 'AllResourceResponse')]);
-      if (!vip || !Array.isArray(cards.cardItem) || !Array.isArray(resources.list)) throw new Error('VIP、月卡或钻石状态未确认');
-      const base = rows(config, 'TrialRaidParamCfg').find(r => r.paramName === '试炼副本扫荡次数')?.paramValue;
-      const bonus = vip.effects?.find(r => r[0] === '试炼扫荡次数')?.[1] ?? 0;
-      if (!valid(base) || !valid(bonus)) throw new Error('普通扫荡次数上限未确认');
-      let extra = 0; const cardTypes = new Set();
-      for (const card of cards.cardItem) {
-        if (!Number.isSafeInteger(card.endTime) || cardTypes.has(card.type)) throw new Error('月卡状态异常'); cardTypes.add(card.type);
-        if (card.endTime <= now && card.endTime !== -1) continue;
-        const type = card.type === protocol.MonthCardType?.MONTH_CARD_NORMAL ? '普通月卡' : card.type === protocol.MonthCardType?.MONTH_CARD_SENIOR ? '高级月卡' : null;
-        const cfg = rows(config, 'MonthCardCfg').find(r => r.id === type);
-        if (!cfg || !Array.isArray(cfg.effectList)) throw new Error('有效月卡效果未确认');
-        const amount = cfg.effectList.find(r => r[0] === '试炼扫荡次数')?.[1] ?? 0;
-        if (!valid(amount)) throw new Error('月卡扫荡次数无效'); extra += amount;
-      }
-      state.normalLimit = base + bonus + extra;
-      if (!valid(state.normalLimit)) throw new Error('普通扫荡次数上限无效');
-      state.normalLeft = Math.max(0, state.normalLimit - state.buyUsed);
-      const currency = resources.list.filter(r => r.res === protocol.Resource?.RUBY);
-      state.ruby = currency.length === 1 ? quantity(currency[0].amount) : null;
-      const used = usage.counters ?? {}, paidCount = used['trialPaid' + raidId] ?? 0, spent = used.trialDiamonds ?? 0, allSpent = used.diamonds ?? 0;
-      if (![state.ruby, paidCount, spent, allSpent, pendingDiamonds, pref?.paidPerRaidLimit, pref?.dailyDiamondBudget, pref?.maxSingleCost, settings?.resources?.diamondThreshold, settings?.resources?.diamondDailyLimit].every(valid)) throw new Error('钻石余额或本工具预算未确认');
-      if (!state.normalLeft) state.paid.reason = '今日普通扫荡次数已用完';
-      else if (!settings.resources.allowDiamonds) state.paid.reason = '钻石消耗总开关已关闭';
-      else if (paidCount >= pref.paidPerRaidLimit) state.paid.reason = '已达本工具每副本每日钻石扫荡上限';
-      else if (price.costRuby > pref.maxSingleCost) state.paid.reason = '本次费用超过单次钻石上限';
-      else if (spent + price.costRuby > pref.dailyDiamondBudget || allSpent + price.costRuby > settings.resources.diamondDailyLimit) state.paid.reason = '本次费用超过试炼或全局每日钻石预算';
-      else if (state.ruby - pendingDiamonds - price.costRuby < settings.resources.diamondThreshold) state.paid.reason = '钻石不足或会低于全局保留量';
-      else state.paid.allowed = true;
-    } catch (error) { state.paid.reason = error.message; }
-    try {
-      const access = await adAccess(client, config.tables, { player, clientInfo: channel.clientInfo, settings });
-      if (access.reason) throw new Error(access.reason);
-      state.adWaitMs = access.waitMs;
-      const water = await client.request('OnWaterRequest', {}, 'OnWaterResponse');
-      const id = effectIds[raidId], entries = water.adv?.filter(r => r.id === id);
-      const limit = rows(config, 'AdvEffectCfg').find(r => r.id === id)?.dailyLimit;
-      if (!entries || entries.length !== 1 || !valid(entries[0].gotTimes) || !valid(limit)) throw new Error('该副本广告扫荡剩余次数未确认');
-      state.adUsed = entries[0].gotTimes; state.adLimit = limit; state.adLeft = Math.max(0, limit - state.adUsed); state.effectId = id;
-      if (!state.adLeft) state.ad.reason = adExhausted; else state.ad.allowed = true;
-    } catch (error) { state.ad.reason = error.message; }
+    if (mode !== 'ad') {
+      try {
+        const [cards, resources] = await Promise.all([client.request('MonthCardRequest', {}, 'MonthCardResponse'), client.request('AllResourceRequest', {}, 'AllResourceResponse')]);
+        if (!vip || !Array.isArray(cards.cardItem) || !Array.isArray(resources.list)) throw new Error('VIP、月卡或钻石状态未确认');
+        const base = rows(config, 'TrialRaidParamCfg').find(r => r.paramName === '试炼副本扫荡次数')?.paramValue;
+        const bonus = vip.effects?.find(r => r[0] === '试炼扫荡次数')?.[1] ?? 0;
+        if (!valid(base) || !valid(bonus)) throw new Error('普通扫荡次数上限未确认');
+        let extra = 0; const cardTypes = new Set();
+        for (const card of cards.cardItem) {
+          if (!Number.isSafeInteger(card.endTime) || cardTypes.has(card.type)) throw new Error('月卡状态异常'); cardTypes.add(card.type);
+          if (card.endTime <= now && card.endTime !== -1) continue;
+          const type = card.type === protocol.MonthCardType?.MONTH_CARD_NORMAL ? '普通月卡' : card.type === protocol.MonthCardType?.MONTH_CARD_SENIOR ? '高级月卡' : null;
+          const cfg = rows(config, 'MonthCardCfg').find(r => r.id === type);
+          if (!cfg || !Array.isArray(cfg.effectList)) throw new Error('有效月卡效果未确认');
+          const amount = cfg.effectList.find(r => r[0] === '试炼扫荡次数')?.[1] ?? 0;
+          if (!valid(amount)) throw new Error('月卡扫荡次数无效'); extra += amount;
+        }
+        state.normalLimit = base + bonus + extra;
+        if (!valid(state.normalLimit)) throw new Error('普通扫荡次数上限无效');
+        state.normalLeft = Math.max(0, state.normalLimit - state.buyUsed);
+        const currency = resources.list.filter(r => r.res === protocol.Resource?.RUBY);
+        state.ruby = currency.length === 1 ? quantity(currency[0].amount) : null;
+        const used = usage.counters ?? {}, paidCount = used['trialPaid' + raidId] ?? 0, spent = used.trialDiamonds ?? 0, allSpent = used.diamonds ?? 0;
+        if (![state.ruby, paidCount, spent, allSpent, pendingDiamonds, pref?.paidPerRaidLimit, pref?.dailyDiamondBudget, pref?.maxSingleCost, settings?.resources?.diamondThreshold, settings?.resources?.diamondDailyLimit].every(valid)) throw new Error('钻石余额或本工具预算未确认');
+        state.paid.quotaComplete = !state.normalLeft || (!pendingDiamonds && paidBudgetReached(raidId, price.costRuby, settings, used));
+        if (!state.normalLeft) state.paid.reason = '今日普通扫荡次数已用完';
+        else if (!settings.resources.allowDiamonds) state.paid.reason = '钻石消耗总开关已关闭';
+        else if (paidCount >= pref.paidPerRaidLimit) state.paid.reason = '已达本工具每副本每日钻石扫荡上限';
+        else if (price.costRuby > pref.maxSingleCost) state.paid.reason = '本次费用超过单次钻石上限';
+        else if (spent + price.costRuby > pref.dailyDiamondBudget || allSpent + price.costRuby > settings.resources.diamondDailyLimit) state.paid.reason = '本次费用超过试炼或全局每日钻石预算';
+        else if (state.ruby - pendingDiamonds - price.costRuby < settings.resources.diamondThreshold) state.paid.reason = '钻石不足或会低于全局保留量';
+        else state.paid.allowed = true;
+      } catch (error) { state.paid.reason = error.message; }
+    }
+    if (mode !== 'paid' || pendingFor(state, records)?.details.mode === 'ad') {
+      try {
+        const access = await adAccess(client, config.tables, { player, clientInfo: channel.clientInfo, settings });
+        if (access.reason) throw new Error(access.reason);
+        state.adWaitMs = access.waitMs;
+        const water = await client.request('OnWaterRequest', {}, 'OnWaterResponse');
+        const id = effectIds[raidId], entries = water.adv?.filter(r => r.id === id);
+        const limit = rows(config, 'AdvEffectCfg').find(r => r.id === id)?.dailyLimit;
+        if (!entries || entries.length !== 1 || !valid(entries[0].gotTimes) || !valid(limit)) throw new Error('该副本广告扫荡剩余次数未确认');
+        state.adUsed = entries[0].gotTimes; state.adLimit = limit; state.adLeft = Math.max(0, limit - state.adUsed); state.effectId = id;
+        state.ad.quotaComplete = state.adLeft === 0;
+        if (!state.adLeft) state.ad.reason = adExhausted; else state.ad.allowed = true;
+      } catch (error) { state.ad.reason = error.message; }
+    }
     if (pendingFor(state, records)) state.paid.reason = state.ad.reason = '前次试炼扫荡结果待确认，暂停该副本的新增扫荡';
     for (const mode of ['paid','ad']) {
       if (records[keyOf(state,mode)] && !state[mode].reason) state[mode].reason = '本次计数对应的扫荡已提交，等待状态更新';
@@ -97,7 +109,7 @@ export async function readTrialSweeps(client, protocol, config, player, settings
   return state;
 }
 
-export async function executeTrialSweep(client, protocol, config, player, raidId, mode, { getSettings, ledger, channel = {}, enabled = () => true, expected = null, manual = false } = {}) {
+export async function executeTrialSweep(client, protocol, config, player, raidId, mode, { getSettings, ledger, channel = {}, enabled = () => true, expected = null, manual = false, scheduler } = {}) {
   if (!['paid','ad'].includes(mode)) throw new Error('请选择钻石或免广告扫荡');
   if (!ledger?.reserve || !getSettings) throw new Error('缺少扫荡预算与确认记录');
   if (active.has(client)) return { skipped: true, reason: '试炼扫荡正在处理' };
@@ -128,7 +140,23 @@ export async function executeTrialSweep(client, protocol, config, player, raidId
       return result.ok ? { ...result, note: result.note + '，' + adNextCheck, nextCheckAt }
         : { ...result, reason: adNextCheck, nextCheckAt };
     }
-    const read = () => readTrialSweeps(client, protocol, config, player, getSettings(), raidId, { channel, usage: ledger.snapshot(), records: ledger.keyRecords(), pendingDiamonds: ledger.pendingCounters().diamonds ?? 0 });
+    const preference = getSettings();
+    const paidTask = 'trialPaidSweep:' + raidId;
+    const paidIdle = mode === 'paid' && scheduler && !manual && !expected;
+    if (paidIdle && !scheduler.due(paidTask) && !hasPendingSweep()) return { title, cached: true, skipped: true,
+      reason: scheduler.status(paidTask)?.text || '今日钻石扫荡已达上限', nextCheckAt: scheduler.scheduledAt(paidTask) };
+    function recordCompletion(state, result) {
+      if (!paidIdle) return recordAdExhaustion(state, result);
+      if (state.paid.quotaComplete == null || hasPendingSweep() || getSettings() !== preference || client.connectionEpoch !== epoch ||
+          state.day !== scope.day || dayOf(nowOf(client)) !== scope.day || state.worldId !== scope.worldId || state.playerId !== scope.playerId) return result;
+      if (state.paid.quotaComplete || (!ledger.pendingCounters().diamonds && paidBudgetReached(raidId, state.paid.cost, preference, ledger.snapshot().counters))) {
+        scheduler.defer(paidTask, nextCheckAt);
+        return { ...result, nextCheckAt };
+      }
+      return result;
+    }
+    const read = () => readTrialSweeps(client, protocol, config, player, getSettings(), raidId, { channel, usage: ledger.snapshot(),
+      records: ledger.keyRecords(), pendingDiamonds: ledger.pendingCounters().diamonds ?? 0, mode: scheduler && !manual && !expected ? mode : undefined });
     let state = await read();
     let reconciled = false;
     for (const [key, record] of Object.entries(ledger.keyRecords())) {
@@ -137,13 +165,13 @@ export async function executeTrialSweep(client, protocol, config, player, raidId
         ((d.mode === 'paid' && state.buyUsed >= d.nextCount) || (d.mode === 'ad' && state.adUsed != null && state.adUsed >= d.nextCount))) { ledger.resolveKey(key, true); reconciled = true; }
     }
     if (reconciled) state = await read();
-    if (!state[mode].allowed) return recordAdExhaustion(state, { title, skipped: true, reason: state[mode].reason });
+    if (!state[mode].allowed) return recordCompletion(state, { title, skipped: true, reason: state[mode].reason });
     const quote = { passedStage: state.passedStage, buyUsed: state.buyUsed, adUsed: state.adUsed, cost: state[mode].cost, day: state.day };
     if (expected && Object.keys(quote).some(k => expected[k] !== quote[k])) throw new Error('试炼进度、费用或次数已变化，请刷新后再扫荡');
     const settings = getSettings(), fresh = await read();
     if (!permitted() || settings !== getSettings() || !fresh[mode].allowed || fresh.worldId !== state.worldId || fresh.playerId !== state.playerId ||
       fresh.passedStage !== state.passedStage || fresh.day !== state.day || fresh.buyUsed !== state.buyUsed || fresh.adUsed !== state.adUsed || fresh[mode].cost !== state[mode].cost) {
-      return recordAdExhaustion(fresh, { title, skipped: true, reason: '发送前扫荡条件已变化，未执行' });
+      return recordCompletion(fresh, { title, skipped: true, reason: '发送前扫荡条件已变化，未执行' });
     }
     const paid = mode === 'paid', cost = fresh[mode].cost, counter = 'trialPaid' + raidId;
     const access = { waitMs: paid ? 0 : fresh.adWaitMs ?? 0 }, adTarget = 'effect:' + fresh.effectId;
@@ -176,16 +204,16 @@ export async function executeTrialSweep(client, protocol, config, player, raidId
       if (rejected) ledger.cancel(ticket);
       return { title, ok:false, pending:!rejected, error:error.message };
     }
-    return recordAdExhaustion(after, { title, ok:true, cost, note:'服务端已确认扫荡次数增加' });
+    return recordCompletion(after, { title, ok:true, cost, note:'服务端已确认扫荡次数增加' });
   } finally { active.delete(client); }
 }
 
-export async function runExtraTrialSweeps(client, protocol, config, player, { getSettings, ledger, channel, enabled, report } = {}) {
+export async function runExtraTrialSweeps(client, protocol, config, player, { getSettings, ledger, channel, enabled, report, scheduler } = {}) {
   for (const mode of ['ad','paid']) {
     if (!enabled(mode)) continue;
     for (const id of getSettings()?.trials?.raidIds ?? []) {
       if (!enabled(mode)) break;
-      try { report(await executeTrialSweep(client, protocol, config, player, Number(id), mode, { getSettings, ledger, channel, enabled:()=>enabled(mode) }), Number(id), mode); }
+      try { report(await executeTrialSweep(client, protocol, config, player, Number(id), mode, { getSettings, ledger, channel, scheduler, enabled:()=>enabled(mode) }), Number(id), mode); }
       catch (error) { report({ title:'试炼'+(mode==='paid'?'钻石':'免广告')+'扫荡', ok:false, error:error.message }, Number(id), mode); }
     }
   }
