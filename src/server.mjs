@@ -146,7 +146,7 @@ import { startCapture, stopCapture, captureState, inspectCaptureRecovery, recove
 import { createPhoneLogin, loadDeviceProfile, saveDeviceProfile, DEVICE_PROFILE_PATH } from './phone-login.mjs';
 import { createAlipayLogin } from './alipay-login.mjs';
 import { createWechatLogin } from './wechat-login.mjs';
-import { iconIndex, atlasFile, itemIcon, resourceIcon, materialIcon, heroIcon, heroCard, buildingIcon, workerIcon } from './art.mjs';
+import { iconIndex, atlasFile, itemIcon, resourceIcon, materialIcon, heroIcon, heroCard, buildingIcon, residentOrderIcon } from './art.mjs';
 
 const LOG_LIMIT = 400;
 const STREAM_BUFFER_LIMIT = 1024 * 1024;
@@ -2126,7 +2126,7 @@ export function createConsole({ host = '127.0.0.1', port = 17321, onLog, recover
       autoProduce: autoProduceView(config, survey),
       orders: survey.orders.map((order) => ({
         ...order,
-        workerIcon: workerIcon(order.workerId),
+        workerIcon: residentOrderIcon(order.workerId),
         decision: autoOrders.find(row => row.index === order.index),
         manualRefresh:{allowed:!!order.orderKey&&!order.refreshTime&&!order.refreshPending&&order.requirements.length>0&&session.player?.level>=12,reason:order.refreshPending?'上次换单待确认':order.refreshTime?'等待新订单':session.player?.level<12?'角色12级开放':!order.orderKey?'订单身份待确认':!order.requirements.length?'订单需求未同步':''},
         manualDecision: manualResidentOrderDecision(survey, order, config),
