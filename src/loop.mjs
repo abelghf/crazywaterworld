@@ -441,10 +441,18 @@ export async function runLoop(client, protocol, {
       } catch (error) { phaseFailure('tasks', '赛季自动偷榜', error, 'seasonMerit'); }
     }
     const reportTrial = (key, raids, entry, raidId) => {
-      if (entry.pending) entry = { ...entry, status: 'pending' };
-      summary.dailies.results.push(entry);
-      if (!entry.skipped) summary.dailies.planned++;
-      stepLog('dailies')({ ...entry, taskKey: key + ':' + raidId, category: '试炼' });
+      const taskKey = key + ':' + raidId;
+      if (entry.cached) {
+        if (rewards.scheduledAt(taskKey) === entry.nextCheckAt) return;
+        // 重连后恢复控制台状态，不把本地记录算作新的服务端检查。
+        rewards.observe(taskKey, entry.reason);
+      } else {
+        if (entry.pending) entry = { ...entry, status: 'pending' };
+        summary.dailies.results.push(entry);
+        if (!entry.skipped) summary.dailies.planned++;
+        stepLog('dailies')({ ...entry, taskKey, category: '试炼' });
+      }
+      if (entry.nextCheckAt) rewards.defer(taskKey, entry.nextCheckAt);
       summarizeTrialChecks(rewards, key, raids);
     };
     const allowDaily = (id, action) => !(getSettings() && action.request === 'ClickGoldRequest' && !action.body.free) && enabled(dailyTaskKey(id, action));

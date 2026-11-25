@@ -5,6 +5,8 @@ const rows = (config, key) => config?.tables?.[key]?.data ?? [];
 const valid = n => Number.isSafeInteger(n) && n >= 0;
 const nowOf = client => Math.floor((Date.now() + (client.serverClockOffsetMs || 0)) / 1000);
 const dayOf = now => Math.floor((now + 28800) / 86400);
+const adExhausted = '今日该副本广告扫荡次数已用完';
+const adNextCheck = adExhausted + '，北京时间次日 00:00 后再查';
 const effectIds = { 1: 4, 2: 3, 3: 5 };
 const active = new WeakSet();
 function quantity(value) {
@@ -13,6 +15,9 @@ function quantity(value) {
   if (typeof value === 'string' && /^\d+$/.test(value)) n = BigInt(value);
   else if (Number.isInteger(value?.low) && Number.isInteger(value?.high)) n = (BigInt(value.high) << 32n) + BigInt(value.low >>> 0);
   return n >= 0n && n <= BigInt(Number.MAX_SAFE_INTEGER) ? Number(n) : null;
+}
+function trialScope(player, raidId, day) {
+  return { worldId: exactAutomationId(player?.worldId), playerId: exactAutomationId(player?.playerId), raidId, day };
 }
 function keyOf(state, mode) { return `trialSweep:${state.worldId}:${state.playerId}:${state.day}:${state.raidId}:${mode}:${mode === 'paid' ? state.buyUsed : state.adUsed}`; }
 function pendingFor(state, records) {
@@ -23,7 +28,7 @@ function pendingFor(state, records) {
 
 export async function readTrialSweeps(client, protocol, config, player, settings, raidId, { channel = {}, usage = { counters: {} }, records = {}, pendingDiamonds = 0 } = {}) {
   const now = nowOf(client), name = rows(config, 'TrialRaidCfg').find(r => r.raidId === raidId)?.title;
-  const state = { raidId, name, day: dayOf(now), worldId: exactAutomationId(player?.worldId), playerId: exactAutomationId(player?.playerId), passedStage: null,
+  const state = { ...trialScope(player, raidId, dayOf(now)), name, passedStage: null,
     buyUsed: null, normalLimit: null, normalLeft: null, adUsed: null, adLimit: null, adLeft: null, ruby: null,
     paid: { allowed: false, cost: null, reason: '' }, ad: { allowed: false, cost: 0, reason: '' } };
   if (!name || !state.worldId || !state.playerId) { state.paid.reason = state.ad.reason = '副本、区服或角色身份未确认'; return state; }
@@ -81,7 +86,7 @@ export async function readTrialSweeps(client, protocol, config, player, settings
       const limit = rows(config, 'AdvEffectCfg').find(r => r.id === id)?.dailyLimit;
       if (!entries || entries.length !== 1 || !valid(entries[0].gotTimes) || !valid(limit)) throw new Error('该副本广告扫荡剩余次数未确认');
       state.adUsed = entries[0].gotTimes; state.adLimit = limit; state.adLeft = Math.max(0, limit - state.adUsed); state.effectId = id;
-      if (!state.adLeft) state.ad.reason = '今日该副本广告扫荡次数已用完'; else state.ad.allowed = true;
+      if (!state.adLeft) state.ad.reason = adExhausted; else state.ad.allowed = true;
     } catch (error) { state.ad.reason = error.message; }
     if (pendingFor(state, records)) state.paid.reason = state.ad.reason = '前次试炼扫荡结果待确认，暂停该副本的新增扫荡';
     for (const mode of ['paid','ad']) {
@@ -101,6 +106,28 @@ export async function executeTrialSweep(client, protocol, config, player, raidId
   active.add(client);
   const title = (rows(config,'TrialRaidCfg').find(r=>r.raidId===raidId)?.title ?? '试炼') + (mode === 'paid' ? '钻石扫荡' : '免广告扫荡');
   try {
+    const scope = trialScope(player, raidId, dayOf(nowOf(client)));
+    const completionKey = mode === 'ad' && scope.worldId && scope.playerId
+      ? `trialAdSweep:${scope.worldId}:${scope.playerId}:${raidId}:${scope.day}` : null;
+    const nextCheckAt = (scope.day + 1) * 86400 - 28800;
+    const epoch = client.connectionEpoch;
+    const hasPendingSweep = () => ledger.snapshot().uncertain > 0 && pendingFor(scope, ledger.keyRecords());
+    if (!manual && completionKey && ledger.hasDailyCompletion(completionKey) && !hasPendingSweep()) {
+      return { title, skipped: true, cached: true, reason: adNextCheck, nextCheckAt };
+    }
+    function recordAdExhaustion(state, result) {
+      if (!completionKey || state.adLeft !== 0 || state.day !== scope.day || dayOf(nowOf(client)) !== scope.day ||
+          state.worldId !== scope.worldId || state.playerId !== scope.playerId || client.connectionEpoch !== epoch || hasPendingSweep()) return result;
+      try { ledger.markDailyCompletion(completionKey); }
+      catch (error) {
+        // 扫荡已经回读确认，保存检查时间失败时仍保留实际执行结果。
+        const warning = '保存当日耗尽记录失败，下轮重新检查（' + error.message + '）';
+        return result.ok ? { ...result, note: result.note + '，' + warning }
+          : { ...result, reason: result.reason + '，' + warning };
+      }
+      return result.ok ? { ...result, note: result.note + '，' + adNextCheck, nextCheckAt }
+        : { ...result, reason: adNextCheck, nextCheckAt };
+    }
     const read = () => readTrialSweeps(client, protocol, config, player, getSettings(), raidId, { channel, usage: ledger.snapshot(), records: ledger.keyRecords(), pendingDiamonds: ledger.pendingCounters().diamonds ?? 0 });
     let state = await read();
     let reconciled = false;
@@ -110,18 +137,21 @@ export async function executeTrialSweep(client, protocol, config, player, raidId
         ((d.mode === 'paid' && state.buyUsed >= d.nextCount) || (d.mode === 'ad' && state.adUsed != null && state.adUsed >= d.nextCount))) { ledger.resolveKey(key, true); reconciled = true; }
     }
     if (reconciled) state = await read();
-    if (!state[mode].allowed) return { title, skipped: true, reason: state[mode].reason };
+    if (!state[mode].allowed) return recordAdExhaustion(state, { title, skipped: true, reason: state[mode].reason });
     const quote = { passedStage: state.passedStage, buyUsed: state.buyUsed, adUsed: state.adUsed, cost: state[mode].cost, day: state.day };
     if (expected && Object.keys(quote).some(k => expected[k] !== quote[k])) throw new Error('试炼进度、费用或次数已变化，请刷新后再扫荡');
     const settings = getSettings(), fresh = await read();
     if (!permitted() || settings !== getSettings() || !fresh[mode].allowed || fresh.worldId !== state.worldId || fresh.playerId !== state.playerId ||
-      fresh.passedStage !== state.passedStage || fresh.day !== state.day || fresh.buyUsed !== state.buyUsed || fresh.adUsed !== state.adUsed || fresh[mode].cost !== state[mode].cost) return { title, skipped: true, reason: '发送前扫荡条件已变化，未执行' };
+      fresh.passedStage !== state.passedStage || fresh.day !== state.day || fresh.buyUsed !== state.buyUsed || fresh.adUsed !== state.adUsed || fresh[mode].cost !== state[mode].cost) {
+      return recordAdExhaustion(fresh, { title, skipped: true, reason: '发送前扫荡条件已变化，未执行' });
+    }
     const paid = mode === 'paid', cost = fresh[mode].cost, counter = 'trialPaid' + raidId;
     const access = { waitMs: paid ? 0 : fresh.adWaitMs ?? 0 }, adTarget = 'effect:' + fresh.effectId;
     if (!paid && !takeAdSlot(client, access, { manual, target: adTarget })) return { title, skipped:true, reason:AD_PACED_REASON };
     const ticket = ledger.reserve(paid ? { diamonds: cost, trialDiamonds: cost, [counter]: 1 } : {}, paid ? { diamonds: settings.resources.diamondDailyLimit, trialDiamonds: settings.trials.dailyDiamondBudget, [counter]: settings.trials.paidPerRaidLimit } : {}, {},
       { uniqueKey: keyOf(fresh,mode), details: { kind:'trialSweep', mode, raidId, worldId:fresh.worldId, playerId:fresh.playerId, day:fresh.day, nextCount:(paid?fresh.buyUsed:fresh.adUsed)+1 } });
     if (!permitted() || getSettings() !== settings || dayOf(nowOf(client)) !== fresh.day) { ledger.cancel(ticket); return { title, skipped:true, reason:'扫荡已暂停或已跨日' }; }
+    let after;
     try {
       if (!paid) {
         if (protocol.AdvType?.ADV_EFFECT !== 1) throw new Error('广告请求类型未确认');
@@ -133,10 +163,10 @@ export async function executeTrialSweep(client, protocol, config, player, raidId
         }
       }
       await client.sendWatch('TrialRaidBuySweepRequest', { raidId, useAdvCard:!paid }, { window:access.waitMs ? 1500 : 600 });
-      const after = await read();
+      after = await read();
       const confirmed = after.day === fresh.day && after.worldId === fresh.worldId && after.playerId === fresh.playerId && (paid ? after.buyUsed === fresh.buyUsed+1 : after.adUsed === fresh.adUsed+1);
-      if (confirmed) { ledger.confirm(ticket); return { title, ok:true, cost, note:'服务端已确认扫荡次数增加' }; }
-      return { title, ok:false, pending:true, error:'扫荡已发送，次数变化尚未确认；保留额度和记录，不重复提交' };
+      if (!confirmed) return { title, ok:false, pending:true, error:'扫荡已发送，次数变化尚未确认；保留额度和记录，不重复提交' };
+      ledger.confirm(ticket);
     } catch (error) {
       if (isAdNotFinished(error)) {
         ledger.cancel(ticket); coolAd(client, adTarget);
@@ -146,6 +176,7 @@ export async function executeTrialSweep(client, protocol, config, player, raidId
       if (rejected) ledger.cancel(ticket);
       return { title, ok:false, pending:!rejected, error:error.message };
     }
+    return recordAdExhaustion(after, { title, ok:true, cost, note:'服务端已确认扫荡次数增加' });
   } finally { active.delete(client); }
 }
 
