@@ -776,7 +776,7 @@ try {
   await advanced.locator('summary').click();
   await advanced.getByLabel('目标等级', { exact: true }).fill('35');
   await advanced.locator('summary').click();
-  const newActions = ['skillAdvance', 'exclusiveLevel', 'exclusiveStar', 'showSkillReward'];
+  const newActions = ['skillAdvance', 'exclusiveLevel', 'exclusiveStar', 'badge', 'showSkillReward'];
   for (const action of newActions) {
     const toggle = page.locator('#config-field-heroes-' + action);
     assert.equal(await toggle.getAttribute('aria-checked'), 'false');
@@ -797,6 +797,10 @@ try {
   await picker.waitFor();
   const growth = loadAutomationSettings('config-a').settings.heroes;
   assert(newActions.every(action => growth[action])); assert.equal(growth.targetLevel, 35);
+  const badgeSwitch = page.locator('#config-group-heroes').getByRole('switch', { name: '徽章强化', exact: true });
+  assert.equal(await badgeSwitch.getAttribute('aria-checked'), 'true');
+  await badgeSwitch.click(); await saved();
+  assert.equal(loadAutomationSettings('config-a').settings.heroes.badge, false);
   await picker.locator('summary').click(); await picker.getByRole('button', { name: '清空选择' }).click();
   await picker.locator('summary').click(); await saved();
   assert.equal(await picker.locator('summary').textContent(), '留空则暂停培养，不影响技能展示领奖');

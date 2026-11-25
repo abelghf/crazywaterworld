@@ -513,6 +513,7 @@ const configGroups = [
     configField('heroes.level', '自动升级', 'switch', { help: '优先补齐等级最低的所选英雄，同级按勾选顺序各升一级。重启后按实际等级接续。' }), configField('heroes.star', '自动升星'),
     configField('heroes.skill', '技能升级'), configField('heroes.skillAdvance', '技能进阶'),
     configField('heroes.exclusiveLevel', '专武升级'), configField('heroes.exclusiveStar', '专武升星'),
+    configField('heroes.badge', '徽章强化', 'switch', { help: '消耗徽章经验和金币，强化指定英雄已佩戴的徽章。' }),
     configField('heroes.showSkillReward', '领取技能展示奖励', 'switch', { help: '领取所有已拥有英雄的技能展示奖励，不受指定英雄名单限制；已领取的英雄自动跳过。' }),
     configField('heroes.universal', '英雄升星允许使用万能碎片', 'switch', { section: '高级设置', startCollapsed: true }),
     configField('heroes.keepExp', '保留英雄经验', 'number', { section: '高级设置' }),

@@ -2934,7 +2934,7 @@ export function createConsole({ host = '127.0.0.1', port = 17321, onLog, recover
             const gearOnly = category === 'equipmentGrowth';
             const excluded = gearOnly
               ? { level: false, star: false, skill: false, skillAdvance: false, exclusiveLevel: false, exclusiveStar: false, showSkillReward: false }
-              : { equipment: false, badge: false };
+              : { equipment: false };
             const previewSettings = { ...settings, heroes: { ...settings.heroes, ...excluded } };
             const { plan, heroes, stock } = await readHeroGrowthPlan(client, config, session.player, previewSettings);
             const actions = plan.steps.map(step => ({ ...step, label: heroStepLabel(step), setting: 'heroes.' + step.kind }));
