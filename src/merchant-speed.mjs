@@ -4,7 +4,7 @@ import {
   beginOrderMaterialSpend, cancelOrderMaterialSpend, confirmOrderMaterialOperation,
   confirmOrderMaterialSpends, refreshOrderMaterialSpends
 } from './order-reservations.mjs';
-import { MERCHANT_DEFAULTS, merchantActionSeconds, merchantFinalCargoStart, merchantGoalSalePrice, merchantPointerSeconds, merchantSpeedMode, merchantSpeedSalePrices, merchantTiming, planMerchant } from './merchant-planner.mjs';
+import { MERCHANT_DEFAULTS, merchantActionSeconds, merchantDailyCloseWindow, merchantFinalCargoStart, merchantGoalSalePrice, merchantPointerSeconds, merchantSpeedMode, merchantSpeedSalePrices, merchantTiming, planMerchant } from './merchant-planner.mjs';
 import { buyMerchantPointers, reconcileMerchantAction } from './merchant-strategy.mjs';
 import { estimateMerchantRace, merchantCompetitorArrivals } from './merchant-race.mjs';
 import { watchMerchant } from './merchant-monitor.mjs';
@@ -15,12 +15,12 @@ import { merchantFingerprint as fingerprint, merchantSpeedMatches, merchantSpeed
 export { merchantSpeedMatches };
 
 const pointer = '海商王加速';
-// 20:00 之后出发的船按隔夜航次处理，不再用针。情报门槛最晚在收盘前 7 小时放开，同盟情报偏慢时当天仍有足够时间用针。
+// 已规划的隔夜船自然航行；收市前盈利航次另外核对。情报门槛最晚在收盘前 7 小时放开。
 const INTEL_RELEASE_SECONDS = 7 * 3600;
 // 收盘前航次到港后，除卖货外再留三轮操作，供采购隔夜货和出航。
 const EVENING_SPARE_ACTIONS = 3;
 const clockLabel = new Intl.DateTimeFormat('zh-CN', { timeZone: 'Asia/Shanghai', hour: '2-digit', minute: '2-digit', hour12: false });
-const arrivalReasons = new Set(['race', 'full', 'guard', 'finalCargo']);
+const arrivalReasons = new Set(['race', 'full', 'guard', 'finalCargo', 'dailyClose', 'finalClose']);
 const fullSettingsOf = ctx => (typeof ctx.settings === 'function' ? ctx.settings() : ctx.settings) ?? {};
 const settingsOf = ctx => fullSettingsOf(ctx).merchant ?? {};
 const stampSettings = ctx => {
@@ -104,11 +104,17 @@ export function planMerchantSpeed(config, event, state, radar, stock, settings, 
     return none('自然航行即可赶上开市，保留指针');
   const timing = merchantTiming(config, event, time);
   if (!timing.tradingOpen) return none('不在开放交易时段');
+  const closeWindow = merchantDailyCloseWindow(config, event, settings, time);
+  const dailyClose = closeWindow?.active;
+  const perPointer = merchantPointerSeconds(config);
+  const lastPointerGuard = settings.guardLastPointer === true && perPointer && cargo.moveEndTime - time <= perPointer;
+  if (settings.speedUpMode === 'dailyClose' && !dailyClose && !lastPointerGuard)
+    return none('每日收市策略等待当天最后一轮刷新，期间自然航行');
   const deadline = timing.tradeEndTime;
   const finalStart = merchantFinalCargoStart(timing, event, settings, state.player.goods, cargo.moveToCityId);
   const finalCargo = finalStart !== null && time >= finalStart;
   const actionSeconds = merchantActionSeconds({}, options.actionSeconds);
-  const savingPointers = !finalCargo && (settings.fullCargoRoutes ?? MERCHANT_DEFAULTS.fullCargoRoutes) &&
+  const savingPointers = !dailyClose && !finalCargo && (settings.fullCargoRoutes ?? MERCHANT_DEFAULTS.fullCargoRoutes) &&
     event.endTime - time > (settings.liquidationMinutes ?? MERCHANT_DEFAULTS.liquidationMinutes) * 60;
   if (savingPointers && (!state.player?.goods?.length || cargo.moveEndTime + state.player.goods.length * actionSeconds < deadline))
     return none('满舱航线可自然到港成交，保留指针用于收尾');
@@ -119,8 +125,7 @@ export function planMerchantSpeed(config, event, state, radar, stock, settings, 
   const mode = savingPointers ? 'deadline' : priorityCargo ? 'full' : merchantSpeedMode(settings.speedUpMode);
   const goalMode = mode === 'goal';
   const adaptiveRace = goalMode || settings.speedUpMode === 'targetFirst';
-  const perPointer = merchantPointerSeconds(config);
-  const guard = !savingPointers && settings.guardLastPointer === true && perPointer && cargo.moveEndTime - time <= perPointer;
+  const guard = !savingPointers && lastPointerGuard;
   const arrivalPolicy = finalCargo ? 'finalCargo' : guard ? 'guard' : ['race', 'full'].includes(mode) ? mode : null;
   const refreshMode = ['refresh', 'arrival'].includes(mode);
   const inRefreshWindow = refreshMode && positive(timing.previousRefreshAt) &&
@@ -140,7 +145,7 @@ export function planMerchantSpeed(config, event, state, radar, stock, settings, 
   const maxPerLeg = settings.speedUpMaxPerLeg ?? 4;
   const usedPointers = options.usedPointers ?? 0;
   const intelPorts = settings.speedUpIntelPorts ?? 0;
-  if (!['deadline', 'refresh', 'arrival', 'race', 'full', 'goal'].includes(mode)
+  if (!['deadline', 'refresh', 'arrival', 'race', 'full', 'goal', 'dailyClose'].includes(mode)
     || (!arrivalPolicy && (!natural(discount) || discount >= 100))
     || !natural(keep) || !positive(maxAge) || !positive(maxPerLeg) || !natural(usedPointers) || !natural(intelPorts))
     return wait('商会指针策略参数无效');
@@ -149,7 +154,7 @@ export function planMerchantSpeed(config, event, state, radar, stock, settings, 
   const totalBatches = Array.isArray(state.player?.goods) ? Math.max(1, state.player.goods.length) : null;
   const competing = rival && totalBatches !== null;
   if (!arrivalPolicy && options.exploration && !competing) return none('寻价途中暂无可争取的同盟采购顺位');
-  if (!arrivalPolicy && !goalMode && totalBatches !== null && cargo.moveEndTime <= deadline - totalBatches * actionSeconds && !competing) {
+  if (!dailyClose && !arrivalPolicy && !goalMode && totalBatches !== null && cargo.moveEndTime <= deadline - totalBatches * actionSeconds && !competing) {
     if (arrivals[0] > cargo.moveEndTime) return { kind: 'none', leading: true, reason: '自然到港已领先可见同盟船，保留指针，到港按实价选货' };
     return none('正常到港后仍有逐批成交时间，无需加速');
   }
@@ -181,7 +186,7 @@ export function planMerchantSpeed(config, event, state, radar, stock, settings, 
     || new Set(goods.map(row => row.pid)).size !== goods.length)
     return wait('船舶或持货批次未确认，不使用指针');
   const knownQuotes = new Map(knownMarket?.goods.map(good => [good.goodsId, good.price]) ?? []);
-  const shortage = goalMode && settings.knownPortChains && cargo.moveEndTime < deadline
+  const shortage = (goalMode || dailyClose && !closeWindow.finalDay) && settings.knownPortChains && cargo.moveEndTime < deadline
     ? merchantSpeedSalePrices(config, event, radar, [...(options.marketHistory ?? []), ...(options.markets ?? [])], time, cargo.cityId, cargo.moveToCityId,
       { quoteMaxAgeSeconds: maxAge, estimateDiscountPercent: discount }) : null;
   let usedCapacity = 0;
@@ -213,6 +218,41 @@ export function planMerchantSpeed(config, event, state, radar, stock, settings, 
     return wait(settings.speedUpMode === 'eventFree' ? '当前没有已核实可用的本期免费针，继续自然航行' : '本期总针数已用完，继续自然航行');
   const inventory = Math.min(Math.max(0, have - keep), periodRemaining);
   const available = Math.min(limit, inventory);
+  if (dailyClose) {
+    const saleCount = goods.filter(good => good.cityId !== cargo.moveToCityId).length;
+    if ((!saleCount || !gains.length) && !guard) return none('收市航次尚无可核实盈利货物，继续自然航行');
+    if (!natural(have)) return wait('商会指针库存未同步');
+    const upgrades = settings.autoUpgrade ? table(config, 'TradeShipCfg').filter(s => s.lv > cargo.cargoLv).length : 0;
+    const saleSeconds = (saleCount + upgrades) * actionSeconds;
+    // 未到港不能假设能买到哪些货；按可能的商品批次数预留时间，到港仍按实价与库存重配。
+    const purchaseTypes = knownMarket ? knownMarket.goods.length : definitions.size;
+    const spareActions = closeWindow.finalDay ? 0 : Math.max(1, purchaseTypes) + 1;
+    const fits = (n, spare) => Math.max(time + (n ? actionSeconds : 0), cargo.moveEndTime - n * perPointer) +
+      saleSeconds + spare * actionSeconds < deadline;
+    const naturalFits = fits(0, spareActions);
+    if (naturalFits && settings.speedUpMode === 'dailyClose' && !guard)
+      return none('自然到港来得及完成收市卖货' + (spareActions ? '、备货和出航' : '') + '，保留指针');
+    if (!naturalFits) {
+      const minimum = spare => {
+        for (let n = 1; n <= available; n++) if (fits(n, spare)) return n;
+        return 0;
+      };
+      const roomy = minimum(spareActions), useNum = roomy || (spareActions ? minimum(0) : 0);
+      if (!useNum) return wait('可用指南针或剩余时间不足以完成收市前逐批卖货，保留指针');
+      const reserved = roomy ? spareActions : 0;
+      const afterEndTime = Math.max(time, cargo.moveEndTime - useNum * perPointer), savedSeconds = cargo.moveEndTime - afterEndTime;
+      const accelerationReason = closeWindow.finalDay ? 'finalClose' : 'dailyClose';
+      const requiredSeconds = actionSeconds + saleSeconds + reserved * actionSeconds;
+      return { kind: 'speed', useNum, have, deadline, saleCount, saleSeconds, spareActions: reserved, requiredSeconds,
+        savedSeconds, accelerationReason, estimatedProfit: gains.reduce((a, b) => a + b, 0),
+        evidenceExpiresAt: Math.min(deadline - requiredSeconds - 1, cargo.moveEndTime - 1),
+        expected: { request: 'TradeSpeedRequest', period: event.period, city: cargo.cityId, destination: cargo.moveToCityId,
+          moveStartTime: cargo.moveStartTime, beforeEndTime: cargo.moveEndTime, afterEndTime, useNum, accelerationReason, savedSeconds },
+        label: '海商王 · 使用商会指针 ×' + useNum + (closeWindow.finalDay ? '，末日收市前逐批卖货，不再备隔夜货' :
+          reserved ? '，每日末轮刷新后加速卖货，预留 ' + reserved + ' 轮备货与出航时间' :
+            '，优先保住今日卖货，已无足够时间完成隔夜备货与出航') + '；到港按实价及亏损限制复核' };
+    }
+  }
   const estimateRace = competing && estimateMerchantRace(config, event, state, radar, time, settings, options, rival, actionSeconds);
   const raceCandidates = [];
   if (adaptiveRace && !finalCargo && !guard && natural(have) && remaining > gains.reduce((s, gain) => s + gain, 0)) {
@@ -471,9 +511,10 @@ export function merchantClosingRoute(config, event, state, market, ports, radar,
       { actionSeconds: step, dailyUsed: budget.dailyUsed, periodRemaining: budget.periodRemaining, markets: inputs.markets,
         ...(eveningLeg && { closingPointers: pins }) });
     // 收盘前航次到港后要来得及备隔夜货，否则不值得为它改掉原来的隔夜计划。
-    if (speed.kind === 'speed' && speed.useNum >= pins && (speed.accelerationReason !== 'evening' || speed.spareActions > 0))
-      return { ...route, accelerationRequired: pins, travelSeconds: route.arrival - time,
-        label: route.label + (eveningLeg ? '，收盘前加速航次已核对 ' : '，收尾航线已核对 ') + pins + ' 根库存指南针' };
+    if (speed.kind === 'speed' && speed.useNum >= pins &&
+      (!eveningLeg || !['evening', 'dailyClose'].includes(speed.accelerationReason) || speed.spareActions > 0))
+      return { ...route, accelerationRequired: speed.useNum, travelSeconds: route.arrival - time,
+        label: route.label + (eveningLeg ? '，收盘前加速航次已核对 ' : '，收尾航线已核对 ') + speed.useNum + ' 根库存指南针' };
   }
   return null;
 }
@@ -601,6 +642,7 @@ export async function runMerchantSpeed(client, config, ctx, event, state, freePo
       || JSON.stringify(fingerprint(state)) !== JSON.stringify(fingerprint(fresh))
       || verified.estimatedProfit !== plan.estimatedProfit || verified.saleCount !== plan.saleCount
       || verified.saleSeconds !== plan.saleSeconds || verified.accelerationReason !== plan.accelerationReason
+      || verified.spareActions !== plan.spareActions || verified.requiredSeconds !== plan.requiredSeconds
       || verified.rivalEta !== plan.rivalEta || verified.goalProgress !== plan.goalProgress || verified.reachesGoal !== plan.reachesGoal
       || verified.estimatedIncrementalProfit !== plan.estimatedIncrementalProfit)
       return skip('航程、库存或加速收益已变化，下一轮重算');
@@ -611,6 +653,7 @@ export async function runMerchantSpeed(client, config, ctx, event, state, freePo
       if (now === verifiedAt) return true;
       const latest = verifyAt(now);
       return latest.useNum === verified.useNum && latest.accelerationReason === verified.accelerationReason && latest.rivalEta === verified.rivalEta &&
+        latest.saleSeconds === verified.saleSeconds && latest.spareActions === verified.spareActions &&
         latest.goalProgress === verified.goalProgress && latest.reachesGoal === verified.reachesGoal;
     };
     let material;

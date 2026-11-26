@@ -1,5 +1,5 @@
 // 海商王推送仅使快照失效并唤醒现有串行调度，不在监听器中发送任何协议。
-import { merchantFinalCargoStart, merchantPointerSeconds, merchantTiming } from './merchant-planner.mjs';
+import { merchantDailyCloseWindow, merchantFinalCargoStart, merchantPointerSeconds, merchantTiming } from './merchant-planner.mjs';
 import { exactAutomationId } from './automation-policy.mjs';
 
 const watchers = new WeakMap();
@@ -139,6 +139,10 @@ export function watchMerchant(client) {
       if (positive(event?.endTime) && event.endTime > time) deadlines.push(event.endTime);
       if (input.config) {
         const timing = merchantTiming(input.config, event, time);
+        const close = merchantDailyCloseWindow(input.config, event, settings, time);
+        if (close && positive(destination) && cargo?.moveEndTime > time)
+          priorityAt = Math.min(priorityAt || Infinity, close.active ? Math.min(cargo.moveEndTime,
+            time + merchantMonitorSeconds(input.settings)) : close.refreshAt);
         const finalStart = merchantFinalCargoStart(timing, event, settings, input.state?.player?.goods, destination);
         if (finalStart !== null && cargo?.moveEndTime > Math.max(time, finalStart)) {
           const checkAt = time < finalStart ? finalStart : cargo.moveEndTime;

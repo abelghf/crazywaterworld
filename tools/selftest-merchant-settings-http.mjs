@@ -68,7 +68,7 @@ try {
     let current = ok(await api('merchant/settings'));
     const changes = Object.entries(before.settings.merchant).map(([key, value]) => {
       let next = typeof value === 'boolean' ? !value : typeof value === 'number' ? value + 1 : value;
-      if (key === 'speedUpMode') next = 'arrival';
+      if (key === 'speedUpMode') next = 'dailyClose';
       if (key === 'firstDepartureMode') next = 'time';
       if (key === 'firstDepartureTime') next = '23:59';
       return ['merchant.' + key, next];

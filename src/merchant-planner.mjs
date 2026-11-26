@@ -35,12 +35,30 @@ export function merchantSpeedMode(value = MERCHANT_DEFAULTS.speedUpMode) {
   return value === 'profit' ? 'deadline' : value;
 }
 
+export const merchantDailyCloseEnabled = settings => settings?.autoSpeedUp === true &&
+  ['dailyClose', 'targetFirst'].includes(settings.speedUpMode);
+
+// 以配置中当天最后一次开市内刷新为起点；活动夜间结束时，末日仍是最后一个实际交易日。
+export function merchantDailyCloseWindow(config, event, settings, time) {
+  if (!merchantDailyCloseEnabled(settings) || !(event?.startTime <= time && time < event.endTime)) return null;
+  const timing = merchantTiming(config, event, time);
+  if (!timing.tradingOpen) return null;
+  const midnight = dayOf(time) * 86400 - 28800;
+  const refreshAt = String(param(config, '海商王刷新时间')).split(',').map(Number)
+    .filter(hour => natural(hour) && hour < 24).map(hour => midnight + hour * 3600)
+    .filter(at => at >= timing.tradeStartTime && at < timing.tradeEndTime).sort((a, b) => b - a)[0];
+  if (!positive(refreshAt)) return null;
+  const tomorrow = merchantTiming(config, event, timing.tradeStartTime + 86400);
+  return { refreshAt, deadline: timing.tradeEndTime, active: time >= refreshAt,
+    finalDay: tomorrow.tradeStartTime >= tomorrow.tradeEndTime };
+}
+
 export function merchantSettings(input = {}) {
   const output = { ...MERCHANT_DEFAULTS };
   for (const [key, fallback] of Object.entries(output)) {
     const value = input?.[key];
     if (typeof fallback === 'boolean') output[key] = typeof value === 'boolean' ? value : fallback;
-    else if (key === 'speedUpMode') output[key] = ['deadline', 'refresh', 'arrival', 'race', 'full', 'goal', 'targetFirst', 'eventFree'].includes(value) ? value : fallback;
+    else if (key === 'speedUpMode') output[key] = ['deadline', 'refresh', 'arrival', 'race', 'full', 'goal', 'targetFirst', 'eventFree', 'dailyClose'].includes(value) ? value : fallback;
     else if (key === 'firstDepartureMode') output[key] = ['smart', 'time'].includes(value) ? value : fallback;
     else if (key === 'firstDepartureTime') output[key] = typeof value === 'string' && /^([01]\d|2[0-3]):[0-5]\d$/.test(value) ? value : fallback;
     else if (natural(value)) output[key] = value;
@@ -457,6 +475,7 @@ function saleToUnlockShip(sales, config, event, state, ship, settings, timing, t
 export function planMerchant(config, event, state, market, radar, time, visited = [], options = {}) {
   const settings = merchantSettings(options.settings), timing = merchantTiming(config, event, time);
   const actionSeconds = merchantActionSeconds({}, options.actionSeconds);
+  const dailyClose = merchantDailyCloseWindow(config, event, settings, time);
   const liquidation = positive(event?.endTime) && event.endTime - time <= settings.liquidationMinutes * 60;
   const mode = liquidation ? 'FINAL_LIQUIDATION' : 'TRADE';
   const wait = (reason, extra = {}) => ({ kind: 'wait', mode, reason, ...extra });
@@ -499,7 +518,8 @@ export function planMerchant(config, event, state, market, radar, time, visited 
   // 本港刚买的货约束后续补货和出航；行情或竞争变化不能把它改运到同种特产港。
   // 更早航次留下的滞销批次仍可留仓，不能堵住其他货物的正常出售。
   const carriesLocalSpecialtyConflict = port => player.goods.some(b => b.cityId === cargo.cityId && b.goodsId === port.specGoodsId);
-  const closing = positive(options.closingPointers) && settings.autoSpeedUp && merchantSpeedMode(settings.speedUpMode) === 'goal';
+  const closing = positive(options.closingPointers) && settings.autoSpeedUp &&
+    (merchantSpeedMode(settings.speedUpMode) === 'goal' || settings.speedUpMode === 'dailyClose' && dailyClose?.active);
   const travel = closing ? Math.max(actionSeconds, timing.travelSeconds - options.closingPointers * merchantPointerSeconds(config)) :
     timing.travelSeconds ?? Infinity;
   const arrival = time + travel;
@@ -531,7 +551,9 @@ export function planMerchant(config, event, state, market, radar, time, visited 
   const shortage = market.rareGoodsId || localIntel?.rareGoodsId;
   const slotsAt = arrivalTime => Math.max(0, Math.floor((saleEnd - arrivalTime - 1) / actionSeconds));
   const saleSlots = slotsAt(saleAt), routeSlots = slotsAt(arrival);
-  const buyEnd = Math.min(timing.tradeEndTime, event.endTime - settings.liquidationMinutes * 60);
+  // 普通日最后一轮采购必须给采购确认后的出航留一轮，不能在关市前最后一秒还补货。
+  const buyEnd = Math.min(timing.tradeEndTime, event.endTime - settings.liquidationMinutes * 60,
+    dailyClose?.active && !dailyClose.finalDay ? timing.tradeEndTime - 2 * actionSeconds : Infinity);
   const buySlots = timing.tradingOpen ? Math.max(0, Math.ceil((buyEnd - time) / actionSeconds)) : 0;
   if (!occupied && !timing.tradingOpen) {
     const start = merchantTiming(config, event, event.startTime);
@@ -548,6 +570,23 @@ export function planMerchant(config, event, state, market, radar, time, visited 
         exploration: true, plannedOpening: firstOpening, arrival, latestActionAt: firstOpening - travel + 1,
         expectedProfit: null, estimated: true, label: '首日空船提前前往 ' + port.cityId + ' 号港，准备采购特产' +
           definitions.get(port.specGoodsId).itemName + '。开市前可见同盟在途船 ' + (port.openingShips ?? 0) + ' 艘，开市后核对实价和库存' };
+    }
+  }
+  // 收市策略先处理本港可售批次，再按回款重配下一程；不因收市放开原有亏损限制。
+  if (dailyClose?.active) {
+    const sales = player.goods.filter(b => b.cityId !== cargo.cityId && positive(quotes.get(b.goodsId)?.price))
+      .map(batch => ({ batch, price: quotes.get(batch.goodsId).price, gain: profit(quotes.get(batch.goodsId).price, batch, ship) }))
+      .filter(s => safe(s.gain) && (s.gain >= 0 || liquidation && settings.maxLossPercent > 0 &&
+        -s.gain <= s.batch.buyPrice * s.batch.num * settings.maxLossPercent / 100))
+      .sort((a, b) => b.gain - a.gain || a.batch.pid - b.batch.pid);
+    if (sales.length) {
+      if (time + actionSeconds >= timing.tradeEndTime) return wait('收市前已不足一轮成交时间，保留货物等待核对');
+      const { batch, price, gain } = sales[0];
+      return { kind: 'sell', mode: dailyClose.finalDay ? 'FINAL_LIQUIDATION' : 'DAILY_CLOSE_SALE', city: cargo.cityId,
+        pid: batch.pid, goodsId: batch.goodsId, count: batch.num, price, gain, expectedProfit: gain, estimated: false,
+        latestActionAt: timing.tradeEndTime - actionSeconds,
+        label: (dailyClose.finalDay ? '末日收市' : '每日收市') + '，出售' + definitions.get(batch.goodsId).itemName +
+          ' ×' + batch.num + '，本港实价盈亏 ' + gain + '，成交后重算剩余货物和出航' };
     }
   }
   // 收盘前到港的异地货先按本港实价卖出，回款后再备隔夜货。次日紧缺重置，带过夜只能按普通价清舱。
@@ -606,7 +645,8 @@ export function planMerchant(config, event, state, market, radar, time, visited 
       if (held) {
         const sales = player.goods.slice(0, saleSlots);
         return { ...base, kind: 'move', goodsId: sales[0].goodsId, salePids: sales.map(b => b.pid),
-          accelerationRequired: 0, latestActionAt: saleEnd - travel - sales.length * actionSeconds,
+          accelerationRequired: 0, latestActionAt: Math.min(saleEnd - travel - sales.length * actionSeconds,
+            dailyClose?.active ? timing.tradeEndTime - actionSeconds : Infinity),
           priceNote: costNote + '，开市价格待定，届时按实价逐批清舱',
           label: '隔夜备货 ' + occupied + '/' + ship.capacity + ' 格，提前出航前往港口 ' + port.cityId +
             '，' + openLabel + ' 开市后按实价逐批清舱，再采购' };

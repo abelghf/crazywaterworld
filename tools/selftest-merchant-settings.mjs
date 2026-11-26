@@ -162,6 +162,14 @@ test('拒绝错误类型、越界参数、未知字段，合法边界与零值�
   assert.throws(() => importAutomationSettings(invalid), /不支持的设置项/);
 });
 
+test('每日收市独立模式可保存和导入导出，既有账号策略不会被改写', () => {
+  const settings = defaultSettings(); settings.merchant.speedUpMode = 'dailyClose';
+  assert.equal(validateSettings(settings).merchant.speedUpMode, 'dailyClose');
+  assert.equal(merchantSettings(settings.merchant).speedUpMode, 'dailyClose');
+  assert.equal(importAutomationSettings(exportAutomationSettings(settings)).merchant.speedUpMode, 'dailyClose');
+  assert.equal(defaultSettings().merchant.speedUpMode, 'deadline');
+});
+
 test('海商王活动配置完整接线，并说明估算、默认不亏卖和独立指针开关', () => {
   const script = fs.readFileSync(new URL('../src/settings-ui.js', import.meta.url), 'utf8');
   const definitions = script.slice(0, script.indexOf('function configGet('));
@@ -181,7 +189,7 @@ test('海商王活动配置完整接线，并说明估算、默认不亏卖和�
   assert.match(byKey.get('merchant.autoShareIntel').help, /已有共享直接跳过/);
   assert.match(byKey.get('merchant.autoShareIntel').help, /失败不阻塞买卖/);
   assert.equal(byKey.has('merchant.speedUpMinProfit'), false);
-  assert.deepEqual(byKey.get('merchant.speedUpMode').options.map(([mode]) => mode), ['deadline', 'refresh', 'arrival', 'race', 'full', 'goal', 'targetFirst', 'eventFree']);
+  assert.deepEqual(byKey.get('merchant.speedUpMode').options.map(([mode]) => mode), ['deadline', 'refresh', 'arrival', 'race', 'full', 'goal', 'targetFirst', 'eventFree', 'dailyClose']);
   const when = byKey.get('merchant.keepPointers').when;
   assert.equal(when(defaultSettings()), false);
   const enabled = defaultSettings();

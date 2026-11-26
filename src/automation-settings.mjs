@@ -139,7 +139,7 @@ const constraints = {
   'merchant.minPurchaseReturnPercent': int(100),
   'merchant.refreshWaitSeconds': int(3600), 'merchant.liquidationMinutes': int(1440), 'merchant.maxLossPercent': int(100),
   'merchant.minExpectedProfit': int(1000000000, 1), 'merchant.keepPointers': int(1000000),
-  'merchant.speedUpMode': { kind: 'choice', values: ['deadline', 'refresh', 'arrival', 'race', 'full', 'goal', 'targetFirst', 'eventFree'] }, 'merchant.speedUpMaxPerLeg': int(100, 1),
+  'merchant.speedUpMode': { kind: 'choice', values: ['deadline', 'refresh', 'arrival', 'race', 'full', 'goal', 'targetFirst', 'eventFree', 'dailyClose'] }, 'merchant.speedUpMaxPerLeg': int(100, 1),
   'merchant.refreshWindowMinutes': int(30, 1), 'merchant.dailyPointerLimit': int(1000), 'merchant.periodPointerLimit': int(1000000, -1), 'merchant.speedUpIntelPorts': int(100), 'merchant.pointerDailyDiamondLimit': int(100000),
   'merchant.profitLimit': int(1000000000), 'merchant.firstDepartureMode': { kind: 'choice', values: ['smart', 'time'] },
   'merchant.firstDepartureTime': { kind: 'time' }, 'merchant.firstDepartureWaitMinutes': int(120),

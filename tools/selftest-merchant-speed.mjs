@@ -69,12 +69,12 @@ async function test(name, run) { await run(); passed++; console.log('通过：' 
 
 try {
   await test('达标优先从首日加速载货回款，满级后按缺口用针，末日追赶并在五千万停针', async () => {
-    const f = fixture();
+    const f = fixture(now - 9 * 3600); // 日间行为；末轮收市规则另有专项验证。
     f.event.endTime = now + 3 * 86400;
     const cfg = structuredClone(config);
     cfg.tables.TradeShipCfg.data.push({ lv: 5, capacity: 81000, profitMargin: 1500, upMoney: 1000000 });
     const settings = { ...f.settings.merchant, speedUpMode: 'targetFirst', periodPointerLimit: -1, keepPointers: 0 };
-    const plan = (options = {}) => planMerchantSpeed(cfg, f.event, f.state, f.radar, f.stock, settings, now, options);
+    const plan = (options = {}) => planMerchantSpeed(cfg, f.event, f.state, f.radar, f.stock, settings, f.now, options);
     assert.equal(plan().accelerationReason, 'full');
     assert.notEqual(plan({ exploration: true }).kind, 'speed');
     assert.notEqual(plan({ plannedOpening: f.state.cargo.moveEndTime + 1 }).kind, 'speed');
@@ -92,6 +92,21 @@ try {
     f.stock.set(pointer, 4);
     f.state.player.profit = 50000000;
     assert.equal(plan().kind, 'none');
+  });
+  await test('每日收市独立模式实际执行并记账，读取拖到成交窗口不足时撤销', async () => {
+    for (const delay of [false, true]) {
+      const f = fixture();
+      f.event.endTime = now + 3 * 86400;
+      Object.assign(f.settings.merchant, { speedUpMode: 'dailyClose', keepPointers: 0 });
+      let reads = 0;
+      if (delay) f.hook(name => {
+        if (name === 'TradeInfoRequest' && ++reads === 1)
+          f.client.serverClockOffsetMs = (now + 45 * 60 - 61) * 1000 - Date.now();
+      });
+      await f.run();
+      assert.deepEqual(f.sent().map(r => r.body.useNum), delay ? [] : [2]);
+      assert.equal(f.stock.get(pointer), delay ? 4 : 2);
+    }
   });
   await test('按情报用针，已知紧缺港不足时留针，首日和升船期间同样适用，收盘前七小时放开', async () => {
     const f = fixture(now - (8 * 60 + 30) * 60); // 12:45，正常 14:00 到港。

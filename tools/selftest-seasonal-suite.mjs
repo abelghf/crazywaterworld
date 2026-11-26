@@ -1288,10 +1288,10 @@ await test('手动选择省针追赶时，末日 21:15 从空船购货，用成�
   assert.equal(f.state.stock['海商王加速'], 7);
 });
 await test('次日仍开市的 20:30 改跑收盘前加速航次，当天成交，没有针时照常隔夜', async () => {
-  for (const pins of [10, 0]) {
+  for (const speedUpMode of ['goal', 'dailyClose', 'targetFirst']) for (const pins of [10, 0]) {
     const f = setup(), at = f.now + 8.5 * 3600; // 北京时间 20:30，自然航行 22:30 才到。
     const run = () => f.run(merchantActivity, 'merchantTrade');
-    Object.assign(f.settings.merchant, merchantPresets.find(p => p.id === 'sprint').settings.merchant, { speedUpMode: 'goal' });
+    Object.assign(f.settings.merchant, merchantPresets.find(p => p.id === 'sprint').settings.merchant, { speedUpMode });
     f.client.serverClockOffsetMs = at * 1000 - Date.now();
     f.state.stock['海商王加速'] = pins;
     await run();

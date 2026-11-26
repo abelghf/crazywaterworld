@@ -73,6 +73,7 @@ const cases = [
   ['selftest-merchant-activity-ui.mjs'],
   ['selftest-merchant-competition.mjs'],
   ['selftest-merchant-clearance-sim.mjs'],
+  ['selftest-merchant-daily-close.mjs'],
   ['selftest-hero-raid-settings-http.mjs'],
   ['selftest-merchant-settings-http.mjs'],
   ['selftest-guild-ship-settings-http.mjs'],

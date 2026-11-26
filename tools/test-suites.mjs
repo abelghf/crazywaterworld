@@ -248,6 +248,7 @@ const extra = [
   'tools/selftest-merchant-competition.mjs',
   'tools/selftest-merchant-clearance-sim.mjs',
   'tools/selftest-merchant-speed.mjs',
+  'tools/selftest-merchant-daily-close.mjs',
   'tools/selftest-merchant-report.mjs',
   'tools/selftest-merchant-settings.mjs',
   'tools/selftest-merchant-journal.mjs',
