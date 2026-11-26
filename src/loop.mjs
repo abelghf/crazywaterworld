@@ -516,6 +516,7 @@ export async function runLoop(client, protocol, {
     const attemptedOrders = new Set();
     const harvestOptions = { config, player, attemptedOrders, cargoEnabled: () => (!!isEnabled && enabled('cargo')) || (needsCargoDemand(getSettings()) && runtimeActive()),
       finishEnabled: () => allowWorld('finishOrder'), getSettings, getBlockedCollectionTypes, getUsage: usage,
+      expectFactoryStockChange: factorySchedule.expectStockChange,
       beforeStep: guard.before, afterStep: guard.after, cancelStep: guard.cancel };
     function phaseFailure(phase, title, error, taskKey) {
       if (!client.connected || error.code === 'SETTINGS_STALE' || error.code === 'RESOURCE_STALE') throw error;
