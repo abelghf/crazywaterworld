@@ -120,7 +120,7 @@ export function productionDemandConsumes(order, settings) {
 }
 
 export function resourceReserve(settings, id, step = null) {
-  if (id === '家园币') return settings?.homeland?.keepCoins ?? 0;
+  if (id === '家园币') return 0;
   if (id === 'DUAL_COMBINE_STAMINA') return 0;
   if (!settings) return 0;
   if (id === '建筑蓝图') return settings.building.keepBlueprints;

@@ -6,6 +6,7 @@ import { HOMELAND_ACTIONS, HOMELAND_DEFAULTS, homelandEnabled, homelandActionEna
 import { planHomelandMerges, sortHomelandOrders } from './homeland-merge.mjs';
 import { planHomelandProduction } from './homeland-production.mjs';
 import { planHomelandSupplies } from './homeland-supplies.mjs';
+import { planHomelandBoard } from './homeland-board.mjs';
 
 const COIN = '家园币', SHOP = 15;
 const requests = {
@@ -280,10 +281,7 @@ function plan(config, state, options) {
     const key = scope + digest(identity);
     if (pending.length) reason = '前次家园操作待确认，请刷新后核对';
     else if (options.ledger?.hasKey(key)) reason ||= '该状态已处理，等待游戏同步';
-    if (coinCost) {
-      if (state.coins - coinCost < pref.keepCoins) reason ||= '家园币不足或低于保留量';
-      if (used + coinCost > pref.dailyCoinLimit) reason ||= '今日家园币预算不足';
-    }
+    if (coinCost && state.coins < coinCost) reason ||= '家园币不足';
     if (evidence.staminaCost) {
       if (state.stamina < evidence.staminaCost) reason ||= '工坊体力不足';
     }
@@ -292,12 +290,15 @@ function plan(config, state, options) {
       reason ||= '当前协议缺少后续取料或合成操作';
     if (evidence.forProduction && requests.produceOrders.some(name => !options.protocol?.[name] && !options.clientProtocol?.[name]))
       reason ||= '当前协议缺少生产原料操作';
+    if (evidence.forUnlock && requests.mergeOrders.some(name => !options.protocol?.[name] && !options.clientProtocol?.[name]))
+      reason ||= '当前协议缺少格子解锁所需的合成操作';
     if (evidence.forSupply && [...requests.openSupplies, ...requests.useSupplies, ...requests.mergeSupplies].some(name => !options.protocol?.[name] && !options.clientProtocol?.[name]))
       reason ||= '当前协议缺少补给生产、合并或领取操作';
     const id = `${kind}:${target}` + (['takeWarehouse', 'mergeOrders', 'warehouseBuffer'].includes(kind) ? `:${evidence.order}` : '');
     actions.push({ id, kind, target, title: HOMELAND_ACTIONS[kind], detail, coinCost, staminaCost: evidence.staminaCost ?? 0, reason, token, body, expected, key,
       forMerge: evidence.forMerge === true, forProduction: evidence.forProduction === true,
-      forProducer: evidence.forProducer === true, forSupply: evidence.forSupply === true, orderSlot: evidence.orderSlot ?? null });
+      forProducer: evidence.forProducer === true, forSupply: evidence.forSupply === true,
+      forUnlock: evidence.forUnlock === true, forSpace: evidence.forSpace === true, orderSlot: evidence.orderSlot ?? null });
   };
   const current = table(config, 'HomelandLevelCfg').find(row => row.level === state.level);
   const next = table(config, 'HomelandLevelCfg').find(row => row.level === state.level + 1);
@@ -349,25 +350,33 @@ function plan(config, state, options) {
   });
   const mergePlans = planHomelandMerges(config, state, { takeWarehouse: true, warehouseBuffer: true });
   const productionPlans = planHomelandProduction(config, state, mergePlans);
-  for (const recipe of mergePlans.map(merge => {
+  const boardPlan = planHomelandBoard(config, state, mergePlans);
+  const recipes = mergePlans.map(merge => {
     const production = productionPlans.find(row => row.slot === merge.slot);
     return production ? { ...merge, ...production, status: 'production', steps: null, lowerBound: null, forProduction: true } : merge;
-  })) {
+  });
+  if (boardPlan.next) recipes.unshift(boardPlan);
+  for (const recipe of recipes) {
     const order = orders.find(row => row.slot === recipe.slot), next = recipe.next;
-    order.synthesis = { merges: recipe.merges, stores: recipe.stores, takes: recipe.takes, steps: recipe.steps,
+    if (order) order.synthesis = { merges: recipe.merges, stores: recipe.stores, takes: recipe.takes, steps: recipe.steps,
       status: recipe.status, lowerBound: recipe.lowerBound, reason: recipe.reason || (recipe.forProduction
         ? '原料不足，按订单逐件生产并继续合成' : '') };
     if (!next) continue;
-    const evidence = { order: orderIdentity(recipe.order), orderSlot: recipe.slot, forMerge: true, forProduction: recipe.forProduction === true, forProducer: next.forProducer === true };
+    const purpose = recipe.forUnlock ? `解锁格子 ${recipe.target.cellId}（${pieceName(config, recipe.target.piece.id)}）`
+      : recipe.forSpace ? '为订单腾出合成空位' : `订单 ${recipe.slot + 1}`;
+    const evidence = { order: recipe.forUnlock ? `unlock:${recipe.target.cellId}:${recipe.target.piece.uid}`
+      : recipe.forSpace ? 'board-space' : orderIdentity(recipe.order), orderSlot: recipe.slot,
+      forMerge: true, forProduction: recipe.forProduction === true, forProducer: next.forProducer === true,
+      forUnlock: recipe.forUnlock === true, forSpace: recipe.forSpace === true || next.forSpace === true };
     if (next.kind === 'takeWarehouse') {
       const existing = actions.find(action => action.kind === 'takeWarehouse' && action.expected.target === next.piece.uid && action.orderSlot === recipe.slot);
-      if (existing && !next.forProducer) { existing.recipeStep = true; if (recipe.forProduction) existing.forProduction = true; }
+      if (existing && !next.forProducer && !recipe.forUnlock) { existing.recipeStep = true; if (recipe.forProduction) existing.forProduction = true; }
       else
-        add('takeWarehouse', next.piece.uid, { pieceUid: next.piece.uid }, `取出${pieceName(config, next.piece.id)}，用于合成订单 ${recipe.slot + 1}`, 0, '', evidence);
+        add('takeWarehouse', next.piece.uid, { pieceUid: next.piece.uid }, `取出${pieceName(config, next.piece.id)}，用于${purpose}`, 0, '', evidence);
     } else if (next.kind === 'warehouseBuffer') {
       const { piece } = next;
       const target = digest([piece.uid, evidence.order, state.cells, state.warehouse]);
-      add('warehouseBuffer', target, { cellId: piece.cellId }, `暂存${pieceName(config, piece.id)}到仓库，为订单 ${recipe.slot + 1} 腾位`, 0, '',
+      add('warehouseBuffer', target, { cellId: piece.cellId }, `暂存${pieceName(config, piece.id)}到仓库，${recipe.forUnlock ? `用于${purpose}` : `为${purpose} 腾位`}`, 0, '',
         { ...evidence, pieceUid: piece.uid, pieceId: piece.id, cellId: piece.cellId, warehouseCapacity: state.warehouseCapacity });
     } else if (next.kind === 'produceOrders') {
       const { producer, staminaCost, outputs, count, cd } = next;
@@ -375,14 +384,14 @@ function plan(config, state, options) {
         piece: cell.piece ? { uid: cell.piece.uid, id: cell.piece.id } : null }));
       const target = digest([producer, boardBefore, state.warehouse, evidence.order, state.day, counters.homelandProductions ?? 0]);
       add('produceOrders', target, { cellId: producer.cellId },
-        `使用${pieceName(config, producer.id)}生产原料，用于订单 ${recipe.slot + 1}`, 0, '',
+        `使用${pieceName(config, producer.id)}生产原料，用于${purpose}`, 0, '',
         { ...evidence, day: state.day, producer, staminaCost, outputs, count, cd, boardBefore, warehouseBefore: digest(state.warehouse),
           uidsBefore: [...state.cells.flatMap(cell => cell.piece ? [cell.piece.uid] : []), ...state.warehouse.map(piece => piece.uid)] });
     } else {
       const { from, to, nextId } = next;
       if (from.location !== 'board' || !['board', 'half'].includes(to.location) || from.id !== to.id || from.uid === to.uid) throw Error('合成首步依赖尚未就绪');
       add('mergeOrders', digest([from.uid, to.uid, from.id, nextId]), { fromCellId: from.cellId, toCellId: to.cellId },
-        `${pieceName(config, from.id)} ×2 → ${pieceName(config, nextId)}，用于订单 ${recipe.slot + 1}`, 0, '',
+        `${pieceName(config, from.id)} ×2 → ${pieceName(config, nextId)}，用于${purpose}`, 0, '',
         { ...evidence, from: { uid: from.uid, cellId: from.cellId, id: from.id }, to: { uid: to.uid, cellId: to.cellId, state: to.state }, nextId });
     }
   }
@@ -408,9 +417,8 @@ function plan(config, state, options) {
       state.level < tech.homelandLevel ? `需要家园 ${tech.homelandLevel} 级` : '');
   }
   const coinNeed = actions.filter(action => ['clean', 'tech'].includes(action.kind) && pref[action.kind]
-    && (action.kind !== 'tech' || action.target <= pref.targetTech) && /家园币不足/.test(action.reason)
-    && used + action.coinCost <= pref.dailyCoinLimit).map(action => Math.max(0, pref.keepCoins + action.coinCost - state.coins));
-  const staminaNeed = pref.submitOrders && productionPlans.some(row => /工坊体力不足/.test(row.reason)) ? 1 : 0;
+    && /家园币不足/.test(action.reason)).map(action => Math.max(0, action.coinCost - state.coins));
+  const staminaNeed = pref.submitOrders && [boardPlan, ...productionPlans].some(row => /工坊体力不足/.test(row.reason)) ? 1 : 0;
   const supply = planHomelandSupplies(config, state, { stamina: staminaNeed, coins: coinNeed.length ? Math.min(...coinNeed) : 0 });
   if (supply.next) {
     const next = supply.next, evidence = { forSupply: true };
@@ -442,9 +450,10 @@ function plan(config, state, options) {
     warehouse: { used: state.warehouse.length, capacity: state.warehouseCapacity },
     tech: tech ? { level: tech.level, name: tech.name, requirement: tech.homelandLevel, cost: tech.unlockCost[1], attribute: `${tech.attr?.[0]} +${tech.attr?.[1]}` } : null,
     floors, orders, freeStaminaClaimed, chestCount: state.chestCount, supplyReason: supply.reason ?? '',
+    boardReason: boardPlan.reason ?? '',
     freeBoxClaimed: freeProducts.length > 0 && freeProducts.every(row => row.limit > 0 && row.bought >= row.limit),
     pending: pending.map(([, row]) => row.details?.label ?? '家园操作'),
-    budget: { used, limit: pref.dailyCoinLimit, keep: pref.keepCoins }, checkedAt: new Date().toISOString(),
+    coinsUsed: used, checkedAt: new Date().toISOString(),
     staminaUsed: usedStamina,
   };
 }
@@ -482,7 +491,7 @@ export async function executeHomeland(client, config, options) {
       { ...options, enabled: () => connection.connected !== false && scopeOf(options.player) === scope })) };
   let hold, ticket, attempted = false, writeRejected = false;
   try {
-    if (!permitted()) return { status: 'cancelled', message: '家园操作已关闭或目标已达到' };
+    if (!permitted()) return { status: 'cancelled', message: '家园操作已关闭或连接已变化' };
     ticket = await options.guard.before(step);
     const final = await snapshot(client, config, { ...options, enabled: active });
     const fresh = plan(config, final, { ...options, clientProtocol: client.protocol }).actions.find(row => row.id === id);
@@ -490,14 +499,12 @@ export async function executeHomeland(client, config, options) {
     hold = ledger.reserve(action.coinCost ? { homelandCoins: action.coinCost }
       : ['produceOrders', 'openSupplies'].includes(action.kind) ? { homelandStamina: action.staminaCost, homelandProductions: 1 }
         : action.kind === 'takeRewards' ? { homelandRewardTakes: 1 } : {},
-      { homelandCoins: settingsOf(options).dailyCoinLimit }, {},
+      {}, {},
       { uniqueKey: action.key, details: { expected: action.expected, label: action.detail } });
     const beforeSend = () => {
-      const latest = settingsOf(options);
       if (!permitted() || (action.expected.day !== undefined && dayOf(clock(client)) !== action.expected.day)
-        || (action.coinCost && (final.coins - action.coinCost < latest.keepCoins
-          || ledger.snapshot().counters.homelandCoins > latest.dailyCoinLimit))
-        || (action.staminaCost && final.stamina < action.staminaCost)) throw Object.assign(Error('开关、资源、预算、日期或连接已变化'), { notSent: true });
+        || (action.coinCost && final.coins < action.coinCost)
+        || (action.staminaCost && final.stamina < action.staminaCost)) throw Object.assign(Error('开关、资源、日期或连接已变化'), { notSent: true });
       if (action.orderSlot !== null) {
         const order = final.orders.find(row => row.slot === action.orderSlot);
         if (!order || (count(order.expireTs ?? 0, '订单到期时间') > 0 && count(order.expireTs, '订单到期时间') <= clock(client))) throw Object.assign(Error('订单已到期'), { notSent: true });
@@ -573,12 +580,13 @@ export async function runHomeland(client, config, options) {
       const current = settingsOf(options);
       const priority = ['freeStamina', 'freeBox', 'submitOrders', 'mergeOrders', 'mergeSupplies', 'useSupplies', 'openSupplies', 'takeRewards', 'warehouseBuffer', 'takeWarehouse', 'produceOrders', 'upgrade', 'unlockFloors', 'clean', 'tech'];
       const candidates = view.actions.filter(action => homelandActionEnabled(current, action));
-      const action = candidates.filter(action => !action.reason).sort((a, b) => Number(a.forProduction) - Number(b.forProduction)
+      const action = candidates.filter(action => !action.reason).sort((a, b) => Number(b.forUnlock) - Number(a.forUnlock)
+        || Number(a.forProduction && !a.forSpace) - Number(b.forProduction && !b.forSpace)
         || priority.indexOf(a.kind) - priority.indexOf(b.kind)
         || Number(b.recipeStep || b.forMerge) - Number(a.recipeStep || a.forMerge))[0];
       if (!action) {
         const waiting = candidates.map(row => row.reason);
-        if (current.submitOrders) waiting.push(...view.orders.map(row => row.synthesis?.reason));
+        if (current.submitOrders) waiting.push(view.boardReason, ...view.orders.map(row => row.synthesis?.reason));
         if (current.useSupplies) waiting.push(view.supplyReason);
         if (dailyOnly && !view.pending.length && (!current.freeStamina || view.freeStaminaClaimed)
           && (!current.freeBox || view.freeBoxClaimed)) options.ledger.markDailyCompletion(completion);

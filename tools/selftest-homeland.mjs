@@ -16,12 +16,14 @@ const execute = async (f, kind, extra = {}) => {
 let passed = 0;
 async function test(name, body) { await body(); passed++; console.log('通过：' + name); }
 try {
-  await test('旧设置迁移后家园保持关闭，严格验证预算与间隔', async () => {
+  await test('旧设置迁移后家园保持关闭，清理废弃限制并严格验证检查间隔', async () => {
     const old = defaultSettings(); delete old.homeland;
     const migrated = importAutomationSettings({ format: SETTINGS_FORMAT, version: 71, settings: old });
     for (const [key, value] of Object.entries(migrated.homeland)) if (typeof value === 'boolean') assert.equal(value, false, key);
     const invalid = defaultSettings(); invalid.homeland.checkEverySeconds = 1; assert.throws(() => validateSettings(invalid));
-    invalid.homeland.checkEverySeconds = 30; invalid.homeland.dailyCoinLimit = -1; assert.throws(() => validateSettings(invalid));
+    invalid.homeland.checkEverySeconds = 30; invalid.homeland.dailyCoinLimit = -1;
+    assert(!Object.hasOwn(validateSettings(invalid).homeland, 'dailyCoinLimit'));
+    invalid.homeland.unknownLimit = 1; assert.throws(() => validateSettings(invalid));
   });
   await test('真实协议只读预览使用累计消费，正确还原家具上限和锁定棋子', async () => {
     const f = h.fixture(); f.state.coins = 10000;
@@ -39,13 +41,15 @@ try {
     assert.equal((await execute(f, 'freeBox')).status, 'confirmed');
     assert.equal(f.state.bought, 1); assert.equal(f.state.coins, 200);
   });
-  await test('科技消费、每日预算和保留量，升级不会再扣累计消费门槛', async () => {
-    const f = h.fixture(); f.settings.homeland.dailyCoinLimit = 50;
+  await test('家园币只按实际余额使用，旧保留量和日上限不生效，消耗统计继续累计', async () => {
+    const f = h.fixture(); Object.assign(f.settings.homeland, { keepCoins: 999999, dailyCoinLimit: 0 });
+    const previous = f.ledger.reserve({ homelandCoins: 600 }); f.ledger.confirm(previous);
     assert.equal((await execute(f, 'tech')).status, 'confirmed');
-    assert.equal(f.state.coins, 150); assert.equal(f.state.spent, 150); assert.equal(f.ledger.snapshot().counters.homelandCoins, 50);
-    assert.match((await read(f)).actions.find(row => row.kind === 'tech').reason, /预算/);
-    f.settings.homeland.dailyCoinLimit = 500; f.settings.homeland.keepCoins = 140;
-    assert.match((await read(f)).actions.find(row => row.kind === 'tech').reason, /保留/);
+    assert.equal(f.state.coins, 150); assert.equal(f.state.spent, 150); assert.equal(f.ledger.snapshot().counters.homelandCoins, 650);
+    const view = await read(f); assert.equal(view.coinsUsed, 650); assert(!Object.hasOwn(view, 'budget'));
+    assert.equal((await execute(f, 'tech')).status, 'confirmed'); assert.equal(f.state.coins, 100);
+    f.state.coins = 49;
+    assert.match((await read(f)).actions.find(row => row.kind === 'tech').reason, /家园币不足/);
     f.state.spent = 250; f.state.coins = 0;
     assert.equal((await execute(f, 'upgrade')).status, 'confirmed'); assert.equal(f.state.home.level, 3); assert.equal(f.state.coins, 0);
   });
@@ -87,17 +91,18 @@ try {
     delete f.state.cells[0].piece; f.state.drop = null;
     assert.equal((await execute(f, 'freeStamina')).status, 'confirmed'); assert.equal(f.ledger.snapshot().uncertain, 0);
   });
-  await test('发送前暂停、预算降低和明确拒绝释放占用，回执丢失可回读确认', async () => {
+  await test('发送前暂停、关闭开关和明确拒绝释放占用，回执丢失可回读确认', async () => {
     const f = h.fixture(); f.state.beforeWrite = () => { f.enabled = false; };
     assert.equal((await execute(f, 'tech')).status, 'cancelled'); assert.equal(f.state.writes.length, 0); assert.equal(f.ledger.snapshot().uncertain, 0);
-    f.enabled = true; f.state.beforeWrite = () => { f.settings.homeland.dailyCoinLimit = 0; };
-    assert.equal((await execute(f, 'tech')).status, 'cancelled'); assert.equal(f.state.writes.length, 0);
-    f.state.beforeWrite = null; f.settings.homeland.dailyCoinLimit = 500; f.state.reject = 'HomelandTechUpRequest';
+    f.enabled = true; Object.assign(f.settings.homeland, { enabled: true, tech: true });
+    f.state.beforeWrite = () => { f.settings.homeland.tech = false; };
+    assert.equal((await execute(f, 'tech', { automatic: true })).status, 'cancelled'); assert.equal(f.state.writes.length, 0);
+    f.state.beforeWrite = null; f.state.reject = 'HomelandTechUpRequest';
     assert.equal((await execute(f, 'tech')).status, 'rejected'); assert.equal(f.ledger.snapshot().uncertain, 0);
     f.state.reject = null; f.state.drop = 'after:HomelandTechUpRequest';
     assert.equal((await execute(f, 'tech')).status, 'confirmed');
   });
-  await test('自动化受总开关、细项和目标约束，免费任务完成后停止当日读取', async () => {
+  await test('自动化受总开关和细项控制，科技持续升至配置满级，免费任务完成后停止当日读取', async () => {
     const f = h.fixture(); assert.deepEqual(await runHomeland(f.client, h.config, f.options), []);
     Object.assign(f.settings.homeland, { enabled: true, freeStamina: true, freeBox: true });
     await runHomeland(f.client, h.config, f.options);
@@ -105,8 +110,20 @@ try {
     f.client.serverClockOffsetMs += 600000;
     await runHomeland(f.client, h.config, f.options); assert.equal(f.state.calls.length, calls);
     Object.assign(f.settings.homeland, { tech: true, targetTech: 1 });
-    await runHomeland(f.client, h.config, f.options); assert.equal(f.state.home.techLevel, 1);
-    assert.equal(f.state.writes.filter(row => row.name === 'HomelandTechUpRequest').length, 1);
+    await runHomeland(f.client, h.config, f.options); assert.equal(f.state.home.techLevel, 3);
+    assert.equal(f.state.writes.filter(row => row.name === 'HomelandTechUpRequest').length, 3);
+  });
+  await test('家园和科技按实际配置继续升级，可越过旧的 30 级与 180 级限制', async () => {
+    const f = h.fixture(), config = { ...h.config, tables: structuredClone(h.config.tables) };
+    config.tables.HomelandLevelCfg.data.push(...[30, 31, 32].map(level => ({ level, name: '新家园', capacity: 3000, cost: 0, playerLevel: 20, heroStar: [] })));
+    config.tables.HomelandTechCfg.data.push(...[181, 182].map(level => ({ level, name: '新科技', homelandLevel: 30, unlockCost: ['家园币', 50], attr: ['最终生命', 1500] })));
+    Object.assign(f.state.home, { level: 30, techLevel: 180 }); f.state.coins = 100;
+    Object.assign(f.settings.homeland, { enabled: true, tech: true, upgrade: true, targetTech: 180, targetLevel: 30 });
+    await runHomeland(f.client, config, f.options);
+    assert.equal(f.state.home.level, 32); assert.equal(f.state.home.techLevel, 182); assert.equal(f.state.coins, 0);
+    assert.equal(f.ledger.confirmedCounters().homelandCoins, 100);
+    assert.equal(f.state.writes.filter(row => row.name === 'HomelandLevelUpRequest').length, 2);
+    assert.equal(f.state.writes.filter(row => row.name === 'HomelandTechUpRequest').length, 2);
   });
   await test('昨日免费领取未知不冒充成功，新一天独立领取额度可继续', async () => {
     const f = h.fixture(); f.state.drop = 'DualCombineBuyStaminaRequest';

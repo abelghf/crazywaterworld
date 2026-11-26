@@ -221,7 +221,9 @@ export function planHomelandMerges(config, state, { takeWarehouse = false, wareh
         const feasible = buffered.filter(candidate => candidate.steps).sort((a, b) => a.stores - b.stores || a.steps.length - b.steps.length)[0];
         if (feasible) return { ...result, merges: feasible.steps.filter(step => step.kind === 'mergeOrders').length,
           stores: feasible.stores, next: feasible.steps[0] ?? null, operations: feasible.steps };
-        return { ...result, merges, reason: buffered[0].reason };
+        const maximumCells = state.cells.filter(cell => cell.state === 2 || cell.state === 1 && mergeableType(byId.get(cell.piece?.id))).length;
+        return { ...result, merges, reason: buffered[0].reason,
+          spaceNeeded: [...orderNeeds(order).values()].reduce((sum, num) => sum + num, 0) <= maximumCells ? Math.min(plan.need, maximumCells) : 0 };
       }
       return { ...result, merges, reason: `合成取料需要 ${plan.need} 个空位，当前 ${state.emptyCells} 个` };
     }

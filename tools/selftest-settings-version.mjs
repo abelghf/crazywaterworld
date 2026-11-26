@@ -167,12 +167,13 @@ try {
     }
   });
 
-  test('家园订单子开关与体力限制从旧文件、导入、旧页面保存和导出中移除', () => {
+  test('家园废弃子开关、资源限制和目标等级从旧文件、导入、旧页面保存和导出中移除', () => {
     const retired = { mergeOrders: false, produceOrders: false, buildProducers: false, takeWarehouse: false,
-      warehouseBuffer: false, keepStamina: 999999, dailyStaminaLimit: 0 };
-    for (const submitOrders of [false, true]) for (const version of [72, 75, 76, 77, SETTINGS_SCHEMA_VERSION]) {
+      warehouseBuffer: false, keepStamina: 999999, dailyStaminaLimit: 0,
+      keepCoins: 999999, dailyCoinLimit: 0, targetLevel: 1, targetTech: 0 };
+    for (const submitOrders of [false, true]) for (const version of [72, 75, 76, 77, 78, SETTINGS_SCHEMA_VERSION]) {
       const expected = defaultSettings();
-      Object.assign(expected.homeland, { enabled: true, submitOrders, useSupplies: true, keepCoins: 123, dailyCoinLimit: 456 });
+      Object.assign(expected.homeland, { enabled: true, submitOrders, useSupplies: true, tech: submitOrders, upgrade: !submitOrders });
       const legacy = structuredClone(expected); Object.assign(legacy.homeland, retired);
       fs.writeFileSync(file, JSON.stringify({ version, accounts: {
         home: { settingsVersion: version, revision: 8, settings: legacy },
@@ -867,7 +868,7 @@ try {
       expected.homeland = { enabled: false, freeStamina: false, freeBox: false, submitOrders: false,
         useSupplies: false,
         unlockFloors: false, clean: false, tech: false, upgrade: false,
-        keepCoins: 0, dailyCoinLimit: 500, targetLevel: 30, targetTech: 180, checkEverySeconds: 300 };
+        checkEverySeconds: 300 };
       expected.schedule.afkUpgrade = false;
       Object.assign(expected.weeklyActivity, { antiqueRecruitTickets: false, antiqueTicketLimit: 0 });
       expected.museum.targetFragments = [];
@@ -1004,7 +1005,7 @@ try {
     assert.equal(from70().schedule.seasonCardDaily, true);
   });
   test('版本1升级后重复迁移保持一致，保留有效的用户值', () => {
-    assert.equal(SETTINGS_SCHEMA_VERSION, 78);
+    assert.equal(SETTINGS_SCHEMA_VERSION, 79);
     const settings = legacySettings();
     settings.factory.checkEverySeconds = 270;
     settings.resources.diamondDailyLimit = 1234;

@@ -53,7 +53,7 @@ try {
   });
   await test('优先限时订单并把半锁定棋子作为目标，完全锁定格不参与', async () => {
     const f = setup(['鱼1', ['鱼1', 1], ['鱼1', 0]], [order('鱼2'), order('鱼2', 1, 1, { orderType: 1 })]);
-    const action = await mergeAction(f); assert.equal(action.orderSlot, 1);
+    const action = await mergeAction(f); assert.equal(action.forUnlock, true); assert.equal(action.orderSlot, null);
     await run(f);
     assert.deepEqual(f.state.orders.map(row => row.slot), [0]); assert.equal(f.state.cells[2].state, 0);
     const move = f.state.writes.find(row => row.name === 'DualCombineMoveRequest');

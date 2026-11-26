@@ -1,7 +1,7 @@
 export const HOMELAND_DEFAULTS = {
   enabled: false, freeStamina: false, freeBox: false, submitOrders: false,
   useSupplies: false, unlockFloors: false, clean: false, tech: false, upgrade: false,
-  keepCoins: 0, dailyCoinLimit: 500, targetLevel: 30, targetTech: 180, checkEverySeconds: 300,
+  checkEverySeconds: 300,
 };
 export const HOMELAND_ACTIONS = {
   freeStamina: '领取每日免费体力', freeBox: '领取工坊免费宝箱', submitOrders: '提交工坊订单',
@@ -18,7 +18,5 @@ export function homelandActionEnabled(pref, action) {
   if (action.forSupply) return pref.useSupplies === true;
   if (['submitOrders', 'mergeOrders', 'produceOrders', 'takeWarehouse', 'warehouseBuffer'].includes(action.kind))
     return pref.submitOrders === true;
-  return pref[action.kind] === true
-    && (action.kind !== 'upgrade' || action.target <= pref.targetLevel)
-    && (action.kind !== 'tech' || action.target <= pref.targetTech);
+  return pref[action.kind] === true;
 }

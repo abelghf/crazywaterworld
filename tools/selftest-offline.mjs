@@ -14,6 +14,7 @@ const cases = [
   ['selftest-homeland-buffer.mjs'],
   ['selftest-homeland-search.mjs'],
   ['selftest-homeland-production.mjs'],
+  ['selftest-homeland-board.mjs'],
   ['selftest-homeland-http.mjs'],
   ['selftest-start-console.mjs'],
   ['selftest-pet-leveling.mjs'],

@@ -1,5 +1,6 @@
 import { natural, positive, table } from './activity-actions.mjs';
 import { homelandMergeModel, planHomelandMerges } from './homeland-merge.mjs';
+import { planHomelandSpace } from './homeland-space.mjs';
 
 const ordinary = row => row && ['普通', '产品'].includes(row.type);
 
@@ -92,6 +93,8 @@ export function planHomelandProduction(config, state, mergePlans, traversal = {}
     // Reserve space for the next useful action only. Prefer unrelated pieces,
     // then high-level intermediates; stored products retain their UID and are
     // reconsidered by A* after every confirmed production or transfer.
+    const compact = planHomelandSpace(modelConfig, state, producer ? 1 : Math.min(...transfers.map(step => step.room)));
+    if (compact) return [{ ...result, next: compact }];
     if (!positive(state.warehouseCapacity)) return [{ ...result, reason: '仓库容量未确认，等待同步后腾位' }];
     if (state.warehouse.length >= state.warehouseCapacity) return [{ ...result, reason: '仓库已满，无法为生产腾位' }];
     const incoming = transfers[0]?.piece.id;
