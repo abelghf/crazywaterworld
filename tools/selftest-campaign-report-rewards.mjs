@@ -29,7 +29,7 @@ function fixture(reports = [letter(0)]) {
   const makeLedger = () => createUsageLedger('report-test', { file });
   const ledger = makeLedger();
   const makeClient = () => ({
-    async request(name, body, response) {
+    async request(name, body, response, _timeout, beforeSend) {
       if (name === 'CampaignReportsRequest') {
         assert.equal(response, 'CampaignReportsResponse');
         wire(name, body);
@@ -42,6 +42,8 @@ function fixture(reports = [letter(0)]) {
       }
       assert.equal(name, 'QuickGotCampaignReportRequest', '隔离客户端禁止调用无关操作');
       assert.equal(response, 'GotRewardResponse');
+      await state.beforeSend?.();
+      beforeSend?.();
       const sent = wire(name, body);
       const ids = (sent.campaignId ?? []).map(exactAutomationId);
       assert(ids.every(Boolean), '指定领取的 UID 必须精确且有效');
@@ -226,6 +228,23 @@ try {
     try { await f.run(); } catch (error) { assert.match(error.message, /暂停|关闭/); }
     assert.equal(f.state.writes.length, 0);
     assert.equal(f.ledger.snapshot().uncertain, 0);
+  });
+
+  await check('请求等待发送期间关闭开关，不发送且撤销预留', async () => {
+    const f = fixture();
+    let hookCalled = false;
+    f.options.beforeSend = () => { hookCalled = true; };
+    f.state.beforeSend = () => { f.state.enabled = false; };
+    await f.run();
+    assert.equal(f.state.writes.length, 0);
+    assert.equal(hookCalled, false);
+    assert.equal(Object.keys(f.ledger.keyRecords()).length, 0);
+    assert(f.events.some(event => event.status === 'rejected' && /关闭/.test(event.error)));
+    f.state.enabled = true;
+    f.state.beforeSend = null;
+    await f.run();
+    assert.equal(f.state.writes.length, 1);
+    assert.equal(hookCalled, true);
   });
 
   await check('已发送后暂停仍完成本批只读确认，不继续下一批', async () => {

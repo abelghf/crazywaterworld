@@ -25,7 +25,7 @@ export const settingsFile = () => path.join(dataDirectory(), 'automation-setting
 export const SETTINGS_FORMAT = 'crazywaterworld-automation';
 // 文件 version / 账号 settingsVersion 是格式编号，只随结构迁移调整；
 // revision 是每次保存递增的修订号，仅用于并发冲突检查，不能用作格式版本。
-export const SETTINGS_SCHEMA_VERSION = 79;
+export const SETTINGS_SCHEMA_VERSION = 80;
 const LEGACY_SETTINGS_FORMAT = 'crazywaterword-automation';
 const treasureQualityLabels = { ORANGE: '万吨货轮', PURPLE: '中型货轮', BLUE: '小型货轮' };
 const treasureChaseDefaults = {
@@ -257,7 +257,7 @@ const nativeFields = {
   tasks: ['loop.tasks', 'resident.rewards'],
 };
 export function applyNativeTask(settings, key, enabled) {
-  const result = copy(migrateVersion62Settings(settings));
+  const result = copy(migrateVersion79Settings(migrateVersion62Settings(settings)));
   if (removedScheduleKeys.has(key)) { delete result.schedule[key]; return result; }
   if (retiredAutomationTasks.has(key)) enabled = false;
   if (Object.hasOwn(result.schedule, key)) result.schedule[key] = enabled;
@@ -317,7 +317,7 @@ export function settingsFromLegacyNative(tasks, options) {
 }
 
 export function nativeTaskValues(settings, current) {
-  const result = { ...current, ...migrateVersion62Settings(settings).schedule };
+  const result = { ...current, ...migrateVersion79Settings(migrateVersion62Settings(settings)).schedule };
   delete result.weekFactory;
   delete result.vipDailyGift;
   for (const [key, fields] of Object.entries(nativeFields)) result[key] = fields.some(field => { const [group, name] = field.split('.'); return settings[group][name]; });
@@ -403,6 +403,7 @@ function validateCurrentSettings(input, { partial = false, catalog = null } = {}
   input = migrateVersion61Settings(input);
   input = migrateVersion62Settings(input);
   input = migrateVersion70Settings(input);
+  input = migrateVersion79Settings(input);
   input = migrateMerchantPreset(input, DEFAULT_SETTINGS.merchant);
   if (plain(input?.merchant) && !Object.hasOwn(input.merchant, 'periodPointerLimit')) {
     input = { ...input, merchant: { ...input.merchant, periodPointerLimit: DEFAULT_SETTINGS.merchant.periodPointerLimit } };
@@ -836,6 +837,7 @@ settingsMigrations.set(76, settings => plain(settings?.homeland)
   ? { ...settings, homeland: { buildProducers: false, useSupplies: false, ...settings.homeland } } : settings);
 settingsMigrations.set(77, simplifyHomelandSettings);
 settingsMigrations.set(78, simplifyHomelandSettings);
+settingsMigrations.set(79, migrateVersion79Settings);
 const supportedSettingsVersion = version => Number.isSafeInteger(version) && version >= 1;
 const entrySettingsVersion = entry => Object.hasOwn(entry, 'settingsVersion') ? entry.settingsVersion : 1;
 function newestSettingsVersion(store) {
@@ -971,7 +973,7 @@ function migrateVersion1Settings(settings, { source }) {
       if (!Object.hasOwn(input[group], field)) input[group][field] = copy(DEFAULT_SETTINGS[group][field]);
     }
   }
-  if (plain(input.schedule)) input.schedule = { ...DEFAULT_SETTINGS.schedule, worldOnlineRewards: false, ...input.schedule };
+  if (plain(input.schedule)) input.schedule = { ...DEFAULT_SETTINGS.schedule, worldOnlineRewards: false, ...migrateVersion79Settings(input).schedule };
   return input;
 }
 
@@ -1124,6 +1126,15 @@ function migrateVersion9Settings(settings) {
 
 function migrateVersion62Settings(settings) {
   return mergeRewardSwitch(settings, 'worldOnline', 'worldOnlineRewards');
+}
+
+// 旧战报开关仅在新字段缺失时迁移，保留用户明确保存的关闭选择。
+function migrateVersion79Settings(settings) {
+  if (!plain(settings?.schedule) || !Object.hasOwn(settings.schedule, 'campaignReports')) return settings;
+  const { campaignReports, ...schedule } = settings.schedule;
+  if (typeof campaignReports !== 'boolean') throw new SettingsError({ 'schedule.campaignReports': '开关值必须为 true 或 false' });
+  if (!Object.hasOwn(schedule, 'battleReportRewards')) schedule.battleReportRewards = campaignReports;
+  return { ...settings, schedule };
 }
 
 function mergeRewardSwitch(settings, legacyKey, currentKey) {

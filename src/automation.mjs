@@ -6,7 +6,7 @@ export const maxCompassSpinCount = 999;
 // 旧字段仅兼容导入，统一停用，不能在新模块关闭后恢复执行。
 // 装备由 forge.enabled 控制；联盟募兵、互助由 alliance.enabled 及对应细项控制；巨轮由 treasure.enabled 控制。
 export const migratedAutomationTasks = new Set(['museumCollect', 'museumExplore', 'petCollect', 'petBreed', 'radarAuto', 'radarRepair', 'museumRevenue', 'museumAchievements', 'worldBossDamage']);
-export const removedScheduleKeys = new Set([...migratedAutomationTasks, 'ticketRecruit', 'worldOnline']);
+export const removedScheduleKeys = new Set([...migratedAutomationTasks, 'ticketRecruit', 'worldOnline', 'campaignReports']);
 export const retiredAutomationTasks = new Set(['equipmentCollect', 'equipmentCraft', 'guildOrders', 'guildAidCollect', 'guildAidHelp', 'treasureLoot', ...removedScheduleKeys]);
 
 export const automationTasks = [
@@ -57,7 +57,6 @@ export const automationTasks = [
   ['weekOrderFinal', '不差钱商人最终奖励', '周期活动', false],
   ['weekOrderSubmit', '不差钱商人自动完成订单', '周期活动', false],
   ['vipDaily', 'VIP 每日免费奖励', '领奖', false],
-  ['campaignReports', '战报奖励（海盗战斗等）', '领奖', false],
   ['openRankRewards', '开服冲榜积分奖励', '领奖', false],
   ['pirateRankRewards', '剿匪榜达标奖励', '领奖', false],
   ['warRankRewards', '杀敌榜达标奖励', '领奖', false],
@@ -127,6 +126,10 @@ export function taskSettings(saved = {}) {
   // 旧、新世界 Boss 领奖开关原先按“任一开启”执行，读取旧任务时保留此选择。
   if (saved?.worldBossDamage === true) saved = { ...saved, worldBossRewards: true };
   if (saved?.worldOnline === true) saved = { ...saved, worldOnlineRewards: true };
+  // 战报只保留一个开关；明确关闭的新开关不能被旧值重新开启。
+  if (!Object.hasOwn(saved ?? {}, 'battleReportRewards') && typeof saved?.campaignReports === 'boolean') {
+    saved = { ...saved, battleReportRewards: saved.campaignReports };
+  }
   return Object.fromEntries(automationTasks.map(({ key, initial }) =>
     [key, retiredAutomationTasks.has(key) ? false : typeof saved?.[key] === 'boolean' ? saved[key] : initial]));
 }

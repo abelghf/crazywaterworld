@@ -80,7 +80,7 @@ try {
     for (const key of ['freeRecruit', 'dailyRewards', 'build', 'startProduce', 'autoDive', 'farm', 'stageAuto',
       'weekPass', 'weekGift', 'weekChipFree', 'compassReward', 'vipDaily', 'campaignReports', 'weekSupplyFree']) {
       const converted = settingsFromLegacyNative({ museumCollect: true, [key]: true });
-      assert(nativePreferenceEnabled(converted, key), key + ' 保持可执行');
+      assert(nativePreferenceEnabled(converted, key === 'campaignReports' ? 'battleReportRewards' : key), key + ' 保持可执行');
       assert.equal(converted.schedule.mail, false);
       assert.equal(converted.museum.enabled, true); assert.equal(converted.pet.enabled, false);
       assert(!Object.hasOwn(converted.museum, 'claim')); assert(!Object.hasOwn(converted.museum, 'explore'));

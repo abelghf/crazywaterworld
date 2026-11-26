@@ -126,7 +126,7 @@ export function rewardSchedule(client) {
         break;
       }
       case 'SCActivityActiveScoreUpdate': clearTask('festivalActive'); break;
-      case 'SCNewCampaignReport': clearTask('campaignReports'); break;
+      case 'SCNewCampaignReport': clearTask('battleReportRewards'); break;
       case 'SCOpenRankRedDot': clearTask('openRankRewards'); break;
       case 'SCAllActivity':
         clearTasks(activityTimeTasks);

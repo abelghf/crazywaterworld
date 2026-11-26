@@ -57,7 +57,7 @@ await test('VIP和两类免广告招募已接入真实整轮挂机入口',async(
  }
  const f=adFixture();await runLoop(f.c,p,{config:f.config,player:f.player,adChannel:{clientInfo:{appId:'14021170',channelId:'1400',originVersion:'74'},language:'zh_CN'},allowMutate:true,rounds:1,usageLedger:ledger(),isEnabled:k=>['heroAdRecruit','antiqueAdRecruit'].includes(k)});assert.deepEqual(f.recruits,{hero:3,antique:3});
 });
-await test('VIP 只记录一次检查结果，战报共用一次检查并回填已启用行', async () => {
+await test('VIP 与战报只记录一次检查结果，旧战报任务不能绕过新开关', async () => {
   const settings = defaultSettings();
   settings.activityAutomation.vip = settings.activityAutomation.pirates = true;
   for (const flags of [
@@ -65,6 +65,7 @@ await test('VIP 只记录一次检查结果，战报共用一次检查并回填�
     ['vipDaily', 'campaignReports'],
     ['vipDaily', 'campaignReports', 'battleReportRewards'],
   ]) {
+    settings.schedule.battleReportRewards = flags.includes('battleReportRewards');
     let reportReads = 0;
     const c = client(name => {
       assert.equal(name, 'CampaignReportsRequest');
@@ -77,19 +78,15 @@ await test('VIP 只记录一次检查结果，战报共用一次检查并回填�
       getSettings: () => settings, isEnabled: key => flags.includes(key),
       allowMutate: true, rounds: 1, usageLedger: ledger(),
     });
-    assert.equal(reportReads, 1);
+    assert.equal(reportReads, Number(flags.includes('battleReportRewards')));
     const schedule = rewardSchedule(c);
     assert.equal(schedule.status('vipDaily')?.text, '今日礼包已领取');
     assert.equal(schedule.status('vipDaily')?.state, 'waiting');
     assert(schedule.nextCheck('vipDaily') > schedule.now());
     assert.equal(schedule.status('vipDailyGift'), null);
     const message = '当前战报没有待领取奖励';
-    assert.equal(schedule.status('battleReportRewards')?.text, message);
-    if (flags.includes('campaignReports')) {
-      assert.equal(schedule.status('campaignReports')?.text, message);
-      assert.equal(schedule.status('campaignReports')?.state, 'waiting');
-      assert(schedule.nextCheck('campaignReports') > schedule.now());
-    } else assert.equal(schedule.status('campaignReports'), null);
+    assert.equal(schedule.status('battleReportRewards')?.text, flags.includes('battleReportRewards') ? message : undefined);
+    assert.equal(schedule.status('campaignReports'), null);
   }
 });
 await test('情报已完成奖励逐条领取，无需月卡批量接口，空类型不派遣',async()=>{

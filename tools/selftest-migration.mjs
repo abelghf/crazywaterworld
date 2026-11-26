@@ -34,7 +34,7 @@ const wakeups = [
   ['SCMuseumRevenueUpdate', ['museumRevenue']],
   ['SCTradeGuildTask', ['tradeTasks']],
   ['SCActivityActiveScoreUpdate', ['festivalActive']],
-  ['SCNewCampaignReport', ['campaignReports']],
+  ['SCNewCampaignReport', ['battleReportRewards']],
   ['SCOpenRankRedDot', ['openRankRewards']],
   ['SCAllActivity', ['festivalSign', 'festivalActive', 'festivalGifts', 'snowballFree', 'compassSpin', 'weekGift', 'weekTimes', 'weekPass', 'newbieLogin']],
 ];

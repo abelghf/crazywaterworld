@@ -102,6 +102,7 @@ export function nativePreferenceEnabled(settings, key) {
     arena: () => settings.loop.dailies && settings.dailies.enabled,
     pirate: () => settings.pirate?.enabled && settings.schedule.pirate,
     shop: () => settings.schedule.shop,
+    battleReportRewards: () => settings.schedule?.battleReportRewards === true,
   };
   if (map[key]) return !!map[key]();
   return worldPreferenceEnabled(settings, key);

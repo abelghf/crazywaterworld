@@ -46,6 +46,39 @@ function legacySettings() {
 }
 
 try {
+  test('战报统一开关迁移优先保留明确关闭，只有缺少新字段才继承旧选择', () => {
+    for (const legacy of [false, true]) for (const current of [undefined, false, true]) {
+      const old = defaultSettings();
+      old.schedule.campaignReports = legacy;
+      if (current === undefined) delete old.schedule.battleReportRewards;
+      else old.schedule.battleReportRewards = current;
+      const before = structuredClone(old);
+      const expected = current ?? legacy;
+      const migrated = importAutomationSettings({ format: SETTINGS_FORMAT, version: 79, settings: old });
+      assert.deepEqual(importAutomationSettings({ format: SETTINGS_FORMAT, version: 1, settings: old }), migrated, '版本1补全默认值前也保留旧战报选择');
+      assert.equal(migrated.schedule.battleReportRewards, expected);
+      assert(!Object.hasOwn(migrated.schedule, 'campaignReports'));
+      assert.deepEqual(validateSettings(old), migrated, '旧页面提交也应用相同优先级');
+      assert.deepEqual(old, before, '迁移不得改变原始配置');
+      const native = { campaignReports: legacy, ...(current === undefined ? {} : { battleReportRewards: current }) };
+      assert.equal(taskSettings(native).battleReportRewards, expected);
+      assert(!Object.hasOwn(taskSettings(native), 'campaignReports'));
+      assert.equal(settingsFromNative(native).schedule.battleReportRewards, expected);
+      assert.equal(nativeTaskValues(old, native).battleReportRewards, expected);
+      assert(!Object.hasOwn(nativeTaskValues(old, native), 'campaignReports'));
+      const disabled = applyNativeTask(migrated, 'battleReportRewards', false);
+      assert.deepEqual(applyNativeTask(disabled, 'campaignReports', true), disabled, '退役入口不能重开领取');
+      const account = 'reports-' + legacy + '-' + current;
+      saveAutomationSettings(account, migrated, { file, revision: 0 });
+      assert.deepEqual(loadAutomationSettings(account, { file }).settings, migrated);
+    }
+    assert(!automationTasks.some(task => task.key === 'campaignReports'));
+    assert(!automationControls.some(control => control.key === 'schedule.campaignReports'));
+    assert.equal(defaultSettings().schedule.battleReportRewards, false);
+    const malformed = defaultSettings(); malformed.schedule.campaignReports = 'true';
+    assert.throws(() => validateSettings(malformed), /开关/);
+  });
+
   test('世界Boss逐队阵容兼容旧配置，绑定验证与往返保存保留选择', () => {
     const old = defaultSettings(); old.worldBoss.fleetIds = ['1远征船', '2远征船'];
     old.worldBoss.enabled = true; delete old.worldBoss.fleetPresets;
@@ -870,6 +903,7 @@ try {
         unlockFloors: false, clean: false, tech: false, upgrade: false,
         checkEverySeconds: 300 };
       expected.schedule.afkUpgrade = false;
+      delete expected.schedule.campaignReports;
       Object.assign(expected.weeklyActivity, { antiqueRecruitTickets: false, antiqueTicketLimit: 0 });
       expected.museum.targetFragments = [];
       expected.museum.unlockCases = false;
@@ -1005,7 +1039,7 @@ try {
     assert.equal(from70().schedule.seasonCardDaily, true);
   });
   test('版本1升级后重复迁移保持一致，保留有效的用户值', () => {
-    assert.equal(SETTINGS_SCHEMA_VERSION, 79);
+    assert.equal(SETTINGS_SCHEMA_VERSION, 80);
     const settings = legacySettings();
     settings.factory.checkEverySeconds = 270;
     settings.resources.diamondDailyLimit = 1234;

@@ -64,6 +64,7 @@ await test('开放活动与其他新项目经过整轮执行入口，等待状�
  const keys=['pirateRankRewards','warRankRewards','festivalActiveRewards','battleReportRewards','worldBossRewards','weekSupplyFree','leagueCollect','leaguePassRewards'];
  const f=fixture(n=>{if(n==='OpenRankInfoRequest')return{progress:0,gotRewardId:[],endTime:now()+300};if(n==='CampaignReportsRequest')return{reports:[],total:0};if(n==='LeagueInfoRequest')return{roomDan:1,bonusItemNum:0,settleTime:now()+300};if(n==='LeagueBattlePassInfoRequest')return{score:0,got:[]};if(n==='WeekInfoRequest')return{activityTime:[]};if(n==='WorldBossInfoRequest')return{info:{bossId:0}};throw Error('意外请求 '+n);});f.client.festivals=[{activityId:99,type:'捞尸人联动活动',startTime:now()-60,endTime:now()+300,subActivity:[{subActivityType:11,dailyActive:{activeScore:0,claimedRewardId:0}}]}];
  const settings=defaultSettings();settings.loop.world=settings.loop.dailies=settings.loop.tasks=false;Object.assign(settings.activityAutomation,{openRank:true,pirates:true,festivalDaily:true,weekLottery:true});const entries=[];
+ for(const key of keys)settings.schedule[key]=true;
  await runLoop(f.client,protocol,{config:{tables:{}},player,rounds:1,allowMutate:true,isEnabled:k=>keys.includes(k),getSettings:()=>settings,usageLedger:f.ledger,onStep:e=>entries.push(e)});
  for(const key of keys){assert(entries.some(e=>e.taskKey===key),key);assert(rewardSchedule(f.client).status(key)?.checkedAt,key);assert(rewardSchedule(f.client).nextCheck(key)>now(),key);}
 });

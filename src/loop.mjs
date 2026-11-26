@@ -487,16 +487,15 @@ export async function runLoop(client, protocol, {
     const allowDaily = (id, action) => !(getSettings() && action.request === 'ClickGoldRequest' && !action.body.free) && enabled(dailyTaskKey(id, action));
     const allowWorld = kind => enabled(worldTaskKey(kind));
     const active = key => !!isEnabled && selected(key) && runtimeActive();
-    const aliases = { festivalActiveRewards:['festivalActive'], battleReportRewards:['campaignReports'],
+    const aliases = { festivalActiveRewards:['festivalActive'],
       weekSupplyFree:['weekChipFree','weekUniqueFree'],
       merchantRewards:['tradeTasks'], festivalFreeGift:['festivalGifts'],
       riverScore:['snowballFree'], riverHelp:['snowballFree'],
       pirateRankRewards:['openRankRewards'], warRankRewards:['openRankRewards'] };
-    // 战报旧开关在未保存详细设置时也走统一账本，与手动和推送领奖共享未知结果保护。
     const serviceEnabled = key => isActivityTaskAvailable(key, client) && nativePreferenceEnabled(getSettings(), key)
-      && (enabled(key) || Boolean((getSettings() || key === 'battleReportRewards') && aliases[key]?.some(enabled)));
+      && (enabled(key) || Boolean(getSettings() && aliases[key]?.some(enabled)));
     const serviceActive = key => isActivityTaskAvailable(key, client) && nativePreferenceEnabled(getSettings(), key)
-      && (active(key) || Boolean((getSettings() || key === 'battleReportRewards') && aliases[key]?.some(active)));
+      && (active(key) || Boolean(getSettings() && aliases[key]?.some(active)));
     async function checkWorldOnline() {
       if (worldOnlineNext() > Date.now()) return;
       // 读取失败时也留出退避时间。确定的开场、档位或重试时间由领取流程覆盖。
@@ -1180,12 +1179,9 @@ export async function runLoop(client, protocol, {
           if (!settings && key === 'weekHeroStar') continue;
           if (!settings && !usageLedger && key === 'vipDaily') continue;
           if (!serviceEnabled(key) || !rewards.due(key)) continue;
-          // 战报两个开关共享一次检查。
-          const checkCampaignReports = key === 'battleReportRewards' && active('campaignReports');
           let reported = false;
           const report = entry => {
             reported = true;
-            if (checkCampaignReports) observeStep('campaignReports', entry);
             extraReport({ ...entry, taskKey: key });
           };
           const label = automationTasks.find(task => task.key === key).label;

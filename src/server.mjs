@@ -1350,7 +1350,7 @@ export function createConsole({ host = '127.0.0.1', port = 17321, onLog, recover
         invalidateFleetReports(instance);
         // 推送领奖遵循当前挂机状态与活动开关，排队和发送前继续核对。
         const generation=session.generation;
-        const enabled=()=>current()&&generation===session.generation&&session.loop.running&&session.loop.tasks.campaignReports&&nativePreferenceEnabled(session.preferences,'campaignReports');
+        const enabled=()=>current()&&generation===session.generation&&session.loop.running&&session.loop.tasks.battleReportRewards&&nativePreferenceEnabled(session.preferences,'battleReportRewards');
         if(enabled()&&!session.reportClaim){
           session.reportClaim=enqueue(session,()=>claimReportRewards(instance,loadConfigSafe(),{
             enabled,ledger:usageFor(session),report:entry=>emit(session,entry.ok||entry.skipped?'info':'warn',

@@ -64,6 +64,7 @@ const bounded = promise => {
 };
 async function runReportLoop(client, ledger, flags, settings = null) {
   const entries = [];
+  if (settings) settings.schedule.battleReportRewards = flags.has('battleReportRewards');
   await runLoop(client, protocol, {
     config: { tables: {} }, player: { level: 21, worldId: 1001001 }, allowMutate: true, rounds: 1,
     isEnabled: key => flags.has(key), getSettings: () => settings, usageLedger: ledger, onStep: entry => entries.push(entry),
@@ -120,8 +121,9 @@ try {
   assert.equal(reportReads, 0);
   assert.equal(reportWrites, 0);
   session.loop.running = true;
-  session.loop.tasks.campaignReports = true;
+  session.loop.tasks.battleReportRewards = true;
   session.preferences.activityAutomation.pirates = true;
+  session.preferences.schedule.battleReportRewards = true;
   pushReport();
   assert(session.reportClaim, '新战报应进入账号的串行领奖队列');
   await session.reportClaim;
@@ -130,16 +132,25 @@ try {
   await session.reportClaim;
   assert.equal(reportWrites, 1, '已领取战报不应重复提交');
 
-  session.loop.tasks.campaignReports = false;
+  session.loop.tasks.battleReportRewards = false;
+  session.loop.tasks.campaignReports = true;
   reportRecords = [unclaimed(2)];
   const readsBeforeDisabled = reportReads;
   pushReport();
-  assert.equal(session.reportClaim, null, '关闭原战报开关后不启动推送领奖');
+  assert.equal(session.reportClaim, null, '关闭邮件战报开关后不启动推送领奖');
   assert.equal(reportReads, readsBeforeDisabled);
 
-  session.loop.tasks.campaignReports = true;
+  session.loop.tasks.battleReportRewards = true;
+  session.preferences.schedule.battleReportRewards = false;
+  pushReport();
+  assert.equal(session.reportClaim, null, '配置明确关闭时，旧任务与尚未同步的任务缓存均不能触发推送领奖');
+  assert.equal(reportReads, readsBeforeDisabled);
+  session.preferences.schedule.battleReportRewards = true;
+
+  session.loop.tasks.battleReportRewards = true;
   const previousPreferences = session.preferences;
   session.preferences = defaultSettings();
+  session.preferences.schedule.battleReportRewards = true;
   session.preferences.activityAutomation.pirates = false;
   pushReport();
   assert.equal(session.reportClaim, null, '关闭活动总开关后不启动推送领奖');
@@ -168,12 +179,24 @@ try {
   assert.equal(reportReads, readsBeforeStoppedQueue, '队列等待期间停止挂机，出队时不得读取领奖');
   assert.equal(reportWrites, 1);
   session.loop.running = true;
-  onReportRead = () => { session.loop.tasks.campaignReports = false; };
+  const disabledQueueGate = gate();
+  session.queueTail = disabledQueueGate.promise;
+  pushReport();
+  const disabledClaim = session.reportClaim;
+  assert(disabledClaim);
+  session.loop.tasks.battleReportRewards = false;
+  const readsBeforeDisabledQueue = reportReads;
+  disabledQueueGate.resolve();
+  await disabledClaim;
+  assert.equal(reportReads, readsBeforeDisabledQueue, '排队期间关闭邮件战报开关，旧任务仍开启也不得读取或领取');
+  assert.equal(reportWrites, 1);
+  session.loop.tasks.battleReportRewards = true;
+  onReportRead = () => { session.loop.tasks.battleReportRewards = false; };
   pushReport();
   await session.reportClaim;
   assert.equal(reportWrites, 1, '列表读取期间关闭开关，发送前必须停止');
   onReportRead = null;
-  session.loop.tasks.campaignReports = true;
+  session.loop.tasks.battleReportRewards = true;
   session.paused = true;
   pushReport();
   assert.equal(session.reportClaim, null, '暂停账号时不得因推送发起领奖');
@@ -188,7 +211,7 @@ try {
   pushReport();
   await session.reportClaim;
   assert.equal(reportWrites, 2, '模拟一次已发送但结果未知的推送领奖');
-  for (const keys of [['campaignReports'], ['battleReportRewards'], ['campaignReports', 'battleReportRewards']]) {
+  for (const keys of [['battleReportRewards'], ['campaignReports', 'battleReportRewards']]) {
     // 重新读取同账号的持久账本，验证跨入口和跨次运行的未知记录都能阻止重发。
     const entries = await runReportLoop(session.client, createUsageLedger('a'), new Set(keys));
     assert.equal(reportWrites, 2, keys.join('+') + ' 不得绕过推送领奖留下的未知记录');
@@ -217,7 +240,7 @@ try {
   const beforeNoConfirm = reportReads;
   assert.equal((await manualReport(false)).status, 400, '手动战报领取仍需明确确认');
   assert.equal(reportReads, beforeNoConfirm, '未确认不能读取或提交战报');
-  session.loop.tasks.campaignReports = false;
+  session.loop.tasks.battleReportRewards = false;
   session.loop.running = false;
   const fromPush = await manualReport();
   assert.equal(fromPush.status, 200);
@@ -241,7 +264,7 @@ try {
   assert.equal(manualUnknown.status, 200);
   assert(manualUnknown.data.results.some(entry => !entry.ok && entry.status === 'unknown'), '手动请求超时应报告结果未知');
   assert.equal(reportWrites, 4, '自动开关关闭时仍允许明确授权的手动领取');
-  for (const keys of [['campaignReports'], ['battleReportRewards'], ['campaignReports', 'battleReportRewards']]) {
+  for (const keys of [['battleReportRewards'], ['campaignReports', 'battleReportRewards']]) {
     const entries = await runReportLoop(session.client, createUsageLedger('a'), new Set(keys));
     assert(entries.some(entry => entry.skipped && /前次战报领取结果未确认/.test(entry.reason)), '重新加载持久账本后，挂机应保留手动未知记录');
     assert.equal(reportWrites, 4, keys.join('+') + ' 不可重发手动未知请求');
@@ -258,9 +281,9 @@ try {
   const readsWhileBlocked = reportReads;
   const duplicateReceived = receivedManual();
   const duplicateManual = manualReport();
-  session.loop.tasks.campaignReports = true;
+  session.loop.tasks.battleReportRewards = true;
   session.loop.running = true;
-  session.loop.tasks.campaignReports = true;
+  session.loop.tasks.battleReportRewards = true;
   session.preferences.activityAutomation.pirates = true;
   pushReport();
   const queuedPush = session.reportClaim;
@@ -325,21 +348,23 @@ try {
     const settings = detailed ? defaultSettings() : null;
     if (settings) settings.activityAutomation.pirates = true;
     const ledger = createUsageLedger('loop-reports-' + detailed, { file: path.join(dir, 'loop-reports-' + detailed + '.json') });
-    for (const keys of [['campaignReports'], ['battleReportRewards'], ['campaignReports', 'battleReportRewards']]) {
+    for (const keys of [['battleReportRewards'], ['campaignReports', 'battleReportRewards']]) {
       records.push(unclaimed(records.length + 1));
       const before = writes;
       const entries = await runReportLoop(client, ledger, new Set(keys), settings);
-      assert.equal(writes, before + 1, '新旧开关分别或同时开启，每轮只提交一次：' + detailed + '/' + keys.join('+'));
+      assert.equal(writes, before + 1, '邮件战报开关开启时，每轮只提交一次：' + detailed + '/' + keys.join('+'));
       assert(entries.some(entry => entry.taskKey === 'battleReportRewards' && entry.ok && entry.status === 'confirmed'), '实际挂机应报告已确认领取');
     }
     records.push(unclaimed(records.length + 1));
     const beforeDisabled = requests.length;
     await runReportLoop(client, ledger, new Set(), settings);
     assert.equal(requests.length, beforeDisabled, '两个战报开关都关闭时不应读取或领取');
-    const flags = new Set(['campaignReports']);
+    await runReportLoop(client, ledger, new Set(['campaignReports']), settings);
+    assert.equal(requests.length, beforeDisabled, '仅残留旧战报开关时不得绕过邮件战报关闭值');
+    const flags = new Set(['battleReportRewards']);
     beforeRead = () => flags.clear();
     await runReportLoop(client, ledger, flags, settings);
-    assert.equal(writes, 3, '旧开关在列表读取期间关闭，实际挂机不得继续发送');
+    assert.equal(writes, 2, '邮件战报开关在列表读取期间关闭，实际挂机不得继续发送');
   }
 } finally {
   await app.close();

@@ -95,7 +95,10 @@ export async function claimReportRewards(client,config,{enabled,ledger,report,be
         ledger, key: (all ? 'report-all:' : 'report-ids:') + signature([...ids].sort()),
         title: label + ' · 本批 ' + ids.length + ' 份', request,
         body: all ? { all: true } : { all: false, campaignId: ids.map(automationWireId) },
-        enabled, beforeSend, details: { claimIds: ids, all },
+        enabled, beforeSend: () => {
+          if (!enabled()) throw Object.assign(Error('战报领取已关闭或暂停'), { notSent: true });
+          beforeSend?.();
+        }, details: { claimIds: ids, all },
         report: entry => report(!all && entry.ok ? { ...entry, partial: true,
           reason: `已确认本批 ${ids.length} 份；${before.reason || '本次按已读取编号领取'}，其余战报待同步` } : entry),
         verify: async reply => {
