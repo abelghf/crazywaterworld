@@ -88,7 +88,10 @@ export function createLoopScheduler({
     try {
       while (active() && !done) {
         await run(async () => {
-          if (nextAt() <= now()) await runPending();
+          if (nextAt() <= now()) {
+            await runPending();
+            if (shouldYieldQueue()) return;
+          }
           while (active() && !done) {
             inMainStep = true;
             armReads();

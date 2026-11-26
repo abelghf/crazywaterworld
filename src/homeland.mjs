@@ -2,9 +2,10 @@ import { clock, dayOf, digest, natural, positive, table } from './activity-actio
 import { exactAutomationId, createActionGuard } from './automation-policy.mjs';
 import { toNumber } from './client.mjs';
 import { gameplayOpenDay, worldOpenDays } from './extra-rewards.mjs';
-import { HOMELAND_ACTIONS, HOMELAND_DEFAULTS, homelandEnabled } from './homeland-settings.mjs';
+import { HOMELAND_ACTIONS, HOMELAND_DEFAULTS, homelandEnabled, homelandActionEnabled } from './homeland-settings.mjs';
 import { planHomelandMerges, sortHomelandOrders } from './homeland-merge.mjs';
 import { planHomelandProduction } from './homeland-production.mjs';
+import { planHomelandSupplies } from './homeland-supplies.mjs';
 
 const COIN = '家园币', SHOP = 15;
 const requests = {
@@ -13,6 +14,10 @@ const requests = {
   takeWarehouse: ['DualCombineTakeFromWarehouseRequest', 'DualCombineTakeFromWarehouseResponse'],
   mergeOrders: ['DualCombineMoveRequest', 'DualCombineMoveResponse'],
   produceOrders: ['DualCombineProduceRequest', 'DualCombineProduceResponse'],
+  openSupplies: ['DualCombineProduceRequest', 'DualCombineProduceResponse'],
+  useSupplies: ['DualCombineUsePieceRequest', 'DualCombineUsePieceResponse'],
+  mergeSupplies: ['DualCombineMoveRequest', 'DualCombineMoveResponse'],
+  takeRewards: ['DualCombineTakeFromChestRequest'],
   warehouseBuffer: ['DualCombinePutToWarehouseRequest', 'DualCombinePutToWarehouseResponse'],
   unlockFloors: ['HomelandUnlockRequest'], clean: ['HomelandFinishTaskRequest'],
   tech: ['HomelandTechUpRequest'], upgrade: ['HomelandLevelUpRequest'],
@@ -39,10 +44,18 @@ const list = (value, label) => { if (!Array.isArray(value)) throw Error(`${label
 const check = options => { if (options.enabled && !options.enabled()) throw Object.assign(Error('家园操作已暂停或连接已更换'), { notSent: true }); };
 async function read(client, options, name, body = {}) {
   check(options);
-  const reply = await client.request(name + 'Request', body, name + 'Response');
+  const reply = await client.request(name + 'Request', body, name + 'Response', undefined, () => check(options));
   check(options);
   if (!reply || typeof reply !== 'object') throw Error('未收到' + name + '状态');
   return reply;
+}
+async function readBatch(client, options, queries) {
+  // Distinct response names may overlap. Drain failures too, so the account
+  // queue/read gate never moves on while another reply is still outstanding.
+  const results = await Promise.allSettled(queries.map(([name, body]) => read(client, options, name, body)));
+  const failed = results.find(result => result.status === 'rejected');
+  if (failed) throw failed.reason;
+  return results.map(result => result.value);
 }
 function available(client, config, player) {
   for (const name of ['Homeland', 'DualCombineInfo', 'CounterInfo', 'AllItem', 'AllResource', 'ShopInfo']) {
@@ -83,7 +96,11 @@ async function snapshot(client, config, options) {
   const techLevel = count(home.techLevel ?? 0, '科技等级');
   const task = list(home.task ?? [], '打扫进度').map(id => count(id, '打扫任务编号'));
   const feat = count(home.feat ?? 0, '家园功勋');
-  const workshop = await read(client, options, 'DualCombineInfo');
+  const next = table(config, 'HomelandLevelCfg').find(row => row.level === level + 1);
+  const [workshop, shop, counterInfo, heroInfo] = await readBatch(client, options, [
+    ['DualCombineInfo'], ['ShopInfo', { type: SHOP }], ['CounterInfo'],
+    ...(next?.heroStar?.length ? [['AllHero']] : []),
+  ]);
   const cells = list(workshop.cells, '工坊棋盘');
   const cellIds = cells.map(cell => count(cell.cellId, '棋盘格子'));
   if (new Set(cellIds).size !== cellIds.length || cells.some(cell => ![0, 1, 2].includes(cell.state))) throw Error('棋盘格子状态无效');
@@ -98,25 +115,26 @@ async function snapshot(client, config, options) {
     count(order.slot, '订单槽位'); count(order.orderId, '订单编号');
     if (!list(order.reqs, '订单需求').length || order.reqs.some(row => !positive(row.count) || typeof row.pieceCfgId !== 'string' || !row.pieceCfgId)) throw Error('订单需求无效');
   }
-  const shop = await read(client, options, 'ShopInfo', { type: SHOP });
   const products = list(shop.product, '工坊商店');
-  const counters = list((await read(client, options, 'CounterInfo')).counters, '累计消费');
+  const counters = list(counterInfo.counters, '累计消费');
   const matches = counters.filter(row => row.type === 'HOMELAND_COIN');
   if (matches.length > 1) throw Error('家园累计消费计数重复');
   const spent = matches.length ? count(matches[0].num, '家园累计消费') : 0;
-  const next = table(config, 'HomelandLevelCfg').find(row => row.level === level + 1);
-  let heroes = [];
-  if (next?.heroStar?.length) heroes = list((await read(client, options, 'AllHero')).heroes, '英雄星级');
-  const resources = list((await read(client, options, 'AllResource')).list, '资源库存');
+  const heroes = heroInfo ? list(heroInfo.heroes, '英雄星级') : [];
+  // Inventory must follow all business evidence, especially when settling a
+  // previously unknown spend. Only the two independent inventory reads overlap.
+  const [resourceInfo, itemInfo] = await readBatch(client, options, [['AllResource'], ['AllItem']]);
+  const resources = list(resourceInfo.list, '资源库存');
   const staminaRows = resources.filter(row => row.res === 8);
   if (staminaRows.length > 1) throw Error('工坊体力记录重复');
   const stamina = staminaRows.length ? count(staminaRows[0].amount, '工坊体力') : 0;
-  const items = list((await read(client, options, 'AllItem')).items, '家园币库存');
+  const items = list(itemInfo.items, '家园币库存');
   const coins = items.filter(row => row.itemId === COIN);
   if (coins.length > 1) throw Error('家园币库存记录重复');
   return { level, floor, techLevel, task, feat, board, cells: mergeCells, warehouse, warehouseCapacity, orders, products, spent, heroes,
     coins: coins.length ? count(coins[0].num, '家园币') : 0, stamina,
     freeStaminaTime: count(workshop.lastFreeStaminaTime ?? 0, '免费体力时间'),
+    chestCount: count(workshop.chestCount ?? 0, '奖励区数量'), newestPieceCfgId: workshop.newestPieceCfgId ?? '',
     emptyCells: cells.filter(cell => cell.state === 2 && !cell.piece).length,
     placed: list(home.orna ?? [], '家具').length, day: dayOf(clock(client)), now: clock(client),
   };
@@ -131,6 +149,18 @@ function businessConfirmed(expected, state) {
     case 'freeStamina': return state.freeStaminaTime > 0 && dayOf(state.freeStaminaTime) === expected.day;
     case 'freeBox': return state.day === expected.day && state.products.some(row => row.id === expected.target && row.buyTimes >= expected.bought + 1);
     case 'takeWarehouse': return !state.warehouse.some(row => row.uid === expected.target) && state.board.some(row => row.uid === expected.target);
+    case 'useSupplies': {
+      const source = state.cells.find(cell => cell.cellId === expected.piece.cellId);
+      if (!source || source.state !== 2 || source.piece || !unchangedExcept(expected, state, expected.piece.cellId)) return false;
+      const { resource, amount } = expected.reward;
+      return state[resource] >= expected.balanceBefore + amount && expected.receiptValid !== false;
+    }
+    case 'takeRewards': {
+      if (state.chestCount !== expected.chestBefore - 1 || digest(state.warehouse) !== expected.warehouseBefore) return false;
+      const created = newBoardPiece(expected, state);
+      return created?.piece.id === expected.pieceId;
+    }
+    case 'openSupplies':
     case 'produceOrders': {
       const before = expected.boardBefore, producer = expected.producer;
       if (!Array.isArray(before) || !producer) return false;
@@ -166,6 +196,7 @@ function businessConfirmed(expected, state) {
         && !state.cells.some(cell => cell.piece?.uid === expected.pieceUid)
         && state.warehouse.some(piece => piece.uid === expected.pieceUid && piece.id === expected.pieceId);
     }
+    case 'mergeSupplies':
     case 'mergeOrders': {
       const from = state.cells.find(cell => cell.cellId === expected.from.cellId), to = state.cells.find(cell => cell.cellId === expected.to.cellId);
       if (!from || from.state !== 2 || from.piece || !to || to.state !== 2 || to.piece?.id !== expected.nextId) return false;
@@ -183,6 +214,35 @@ function businessConfirmed(expected, state) {
     default: return false;
   }
 }
+function unchangedExcept(expected, state, cellId) {
+  return Array.isArray(expected.boardBefore) && expected.boardBefore.length === state.cells.length
+    && digest(state.warehouse) === expected.warehouseBefore
+    && expected.boardBefore.every(old => {
+      if (old.cellId === cellId) return true;
+      const cell = state.cells.find(row => row.cellId === old.cellId);
+      return cell && cell.state === old.state && (old.piece
+        ? cell.piece?.uid === old.piece.uid && cell.piece?.id === old.piece.id : !cell.piece);
+    });
+}
+function newBoardPiece(expected, state) {
+  if (!Array.isArray(expected.boardBefore) || expected.boardBefore.length !== state.cells.length) return null;
+  const added = [];
+  for (const old of expected.boardBefore) {
+    const cell = state.cells.find(row => row.cellId === old.cellId);
+    if (!cell || cell.state !== old.state) return null;
+    if (old.piece) { if (cell.piece?.uid !== old.piece.uid || cell.piece?.id !== old.piece.id) return null; }
+    else if (cell.piece) {
+      if (old.state !== 2 || expected.uidsBefore.includes(cell.piece.uid)) return null;
+      added.push(cell);
+    }
+  }
+  return added.length === 1 ? added[0] : null;
+}
+const boardEvidence = state => ({
+  boardBefore: state.cells.map(cell => ({ cellId: cell.cellId, state: cell.state, piece: cell.piece ? { uid: cell.piece.uid, id: cell.piece.id } : null })),
+  warehouseBefore: digest(state.warehouse),
+  uidsBefore: [...state.cells.flatMap(cell => cell.piece ? [cell.piece.uid] : []), ...state.warehouse.map(piece => piece.uid)],
+});
 const fullyConfirmed = (expected, state) => businessConfirmed(expected, state)
   && (!expected.coinCost || state.coins <= expected.coinsBefore - expected.coinCost);
 function recordsFor(options) {
@@ -194,7 +254,7 @@ const oldFreeClaim = (expected, state) => ['freeStamina', 'freeBox'].includes(ex
 // A pending production needs the complete board baseline. Retain only the
 // receipt and cost after confirmation, rather than a full board per click.
 const confirmedDetails = details => {
-  if (details?.expected?.kind !== 'produceOrders') return details;
+  if (!['produceOrders', 'openSupplies', 'useSupplies', 'takeRewards'].includes(details?.expected?.kind)) return details;
   const { kind, target, producer, staminaCost, receipt } = details.expected;
   return { ...details, expected: { kind, target, producer, staminaCost, ...(receipt ? { receipt } : {}) } };
 };
@@ -233,9 +293,12 @@ function plan(config, state, options) {
       reason ||= '当前协议缺少后续取料或合成操作';
     if (evidence.forProduction && requests.produceOrders.some(name => !options.protocol?.[name] && !options.clientProtocol?.[name]))
       reason ||= '当前协议缺少生产原料操作';
+    if (evidence.forSupply && [...requests.openSupplies, ...requests.useSupplies, ...requests.mergeSupplies].some(name => !options.protocol?.[name] && !options.clientProtocol?.[name]))
+      reason ||= '当前协议缺少补给生产、合并或领取操作';
     const id = `${kind}:${target}` + (['takeWarehouse', 'mergeOrders', 'warehouseBuffer'].includes(kind) ? `:${evidence.order}` : '');
-    actions.push({ id, kind, title: HOMELAND_ACTIONS[kind], detail, coinCost, staminaCost: evidence.staminaCost ?? 0, reason, token, body, expected, key,
-      forMerge: evidence.forMerge === true, forProduction: evidence.forProduction === true, orderSlot: evidence.orderSlot ?? null });
+    actions.push({ id, kind, target, title: HOMELAND_ACTIONS[kind], detail, coinCost, staminaCost: evidence.staminaCost ?? 0, reason, token, body, expected, key,
+      forMerge: evidence.forMerge === true, forProduction: evidence.forProduction === true,
+      forProducer: evidence.forProducer === true, forSupply: evidence.forSupply === true, orderSlot: evidence.orderSlot ?? null });
   };
   const current = table(config, 'HomelandLevelCfg').find(row => row.level === state.level);
   const next = table(config, 'HomelandLevelCfg').find(row => row.level === state.level + 1);
@@ -296,10 +359,10 @@ function plan(config, state, options) {
       status: recipe.status, lowerBound: recipe.lowerBound, reason: recipe.reason || (recipe.forProduction
         ? `原料不足，${pref.produceOrders ? '按订单逐件生产并继续合成' : '可手动补料，自动执行需开启「按订单生产原料」'}` : '') };
     if (!next) continue;
-    const evidence = { order: orderIdentity(recipe.order), orderSlot: recipe.slot, forMerge: true, forProduction: recipe.forProduction === true };
+    const evidence = { order: orderIdentity(recipe.order), orderSlot: recipe.slot, forMerge: true, forProduction: recipe.forProduction === true, forProducer: next.forProducer === true };
     if (next.kind === 'takeWarehouse') {
       const existing = actions.find(action => action.kind === 'takeWarehouse' && action.expected.target === next.piece.uid && action.orderSlot === recipe.slot);
-      if (existing) { existing.recipeStep = true; if (recipe.forProduction) existing.forProduction = true; }
+      if (existing && !next.forProducer) { existing.recipeStep = true; if (recipe.forProduction) existing.forProduction = true; }
       else
         add('takeWarehouse', next.piece.uid, { pieceUid: next.piece.uid }, `取出${pieceName(config, next.piece.id)}，用于合成订单 ${recipe.slot + 1}`, 0, '', evidence);
     } else if (next.kind === 'warehouseBuffer') {
@@ -345,12 +408,43 @@ function plan(config, state, options) {
     add('tech', tech.level, {}, `科技 ${tech.level} · ${tech.name}（${tech.camp || tech.career || '全部英雄'}）`, tech.unlockCost[1],
       state.level < tech.homelandLevel ? `需要家园 ${tech.homelandLevel} 级` : '');
   }
+  const coinNeed = actions.filter(action => ['clean', 'tech'].includes(action.kind) && pref[action.kind]
+    && (action.kind !== 'tech' || action.target <= pref.targetTech) && /家园币不足/.test(action.reason)
+    && used + action.coinCost <= pref.dailyCoinLimit).map(action => Math.max(0, pref.keepCoins + action.coinCost - state.coins));
+  const staminaNeed = pref.produceOrders && pref.submitOrders && pref.mergeOrders && usedStamina < pref.dailyStaminaLimit
+    && productionPlans.some(row => /工坊体力不足/.test(row.reason))
+    ? Math.max(1, pref.keepStamina + 1 - state.stamina) : 0;
+  const supply = planHomelandSupplies(config, state, pref, { stamina: staminaNeed, coins: coinNeed.length ? Math.min(...coinNeed) : 0 });
+  if (supply.next) {
+    const next = supply.next, evidence = { forSupply: true };
+    if (next.kind === 'mergeSupplies') {
+      const { from, to, nextId } = next;
+      add(next.kind, digest([from.uid, to.uid, from.id, nextId]), { fromCellId: from.cellId, toCellId: to.cellId },
+        `${pieceName(config, from.id)} ×2 → ${pieceName(config, nextId)}`, 0, '',
+        { ...evidence, from: { uid: from.uid, cellId: from.cellId, id: from.id }, to: { uid: to.uid, cellId: to.cellId, state: to.state }, nextId });
+    } else if (next.kind === 'takeWarehouse') {
+      add(next.kind, next.piece.uid, { pieceUid: next.piece.uid }, `取出${pieceName(config, next.piece.id)}用于补给`, 0, '', evidence);
+    } else if (next.kind === 'useSupplies') {
+      const { piece, reward } = next;
+      add(next.kind, piece.uid, { cellId: piece.cellId }, `领取${pieceName(config, piece.id)}：${reward.amount}${reward.resource === 'stamina' ? '点工坊体力' : '个家园币'}`,
+        0, '', { ...evidence, ...boardEvidence(state), piece, reward, balanceBefore: state[reward.resource] });
+    } else if (next.kind === 'openSupplies') {
+      const { producer, outputs, count, cd } = next;
+      add(next.kind, digest([producer, state.cells, counters.homelandProductions ?? 0]), { cellId: producer.cellId },
+        `打开${pieceName(config, producer.id)}，剩余 ${producer.produceLeft} 次`, 0, '',
+        { ...evidence, ...boardEvidence(state), producer, outputs, count, cd, staminaCost: 0 });
+    } else if (next.kind === 'takeRewards') {
+      add(next.kind, digest([state.chestCount, next.pieceId, state.cells, counters.homelandRewardTakes ?? 0]), {},
+        `从奖励区取出${pieceName(config, next.pieceId)}`, 0, '',
+        { ...evidence, ...boardEvidence(state), chestBefore: state.chestCount, pieceId: next.pieceId });
+    }
+  }
   return { actions, available: true, reason: '', level: state.level, name: current?.name ?? '尚未开启', floor: state.floor,
     techLevel: state.techLevel, coins: state.coins, spent: state.spent, stamina: state.stamina, placed: state.placed,
     capacity: Math.floor((current?.capacity ?? 0) / 100), nextLevel: next?.level ?? null, conditions,
     warehouse: { used: state.warehouse.length, capacity: state.warehouseCapacity },
     tech: tech ? { level: tech.level, name: tech.name, requirement: tech.homelandLevel, cost: tech.unlockCost[1], attribute: `${tech.attr?.[0]} +${tech.attr?.[1]}` } : null,
-    floors, orders, freeStaminaClaimed,
+    floors, orders, freeStaminaClaimed, chestCount: state.chestCount, supplyReason: supply.reason ?? '',
     freeBoxClaimed: freeProducts.length > 0 && freeProducts.every(row => row.limit > 0 && row.bought >= row.limit),
     pending: pending.map(([, row]) => row.details?.label ?? '家园操作'),
     budget: { used, limit: pref.dailyCoinLimit, keep: pref.keepCoins }, checkedAt: new Date().toISOString(),
@@ -383,15 +477,8 @@ export async function executeHomeland(client, config, options) {
   if (!action || action.token !== token || action.reason) return { status: 'rejected', message: action?.reason || '家园状态已变化，请刷新后重试' };
   const permitted = () => active()
     && (action.kind !== 'warehouseBuffer' || settingsOf(options).warehouseBuffer && settingsOf(options).takeWarehouse)
-    && (!options.automatic || homelandEnabled(options.getSettings())
-    && settingsOf(options)[action.kind] === true
-    && (action.kind !== 'takeWarehouse' || settingsOf(options).submitOrders === true)
-    && (action.kind !== 'mergeOrders' || settingsOf(options).submitOrders === true)
-    && (action.kind !== 'warehouseBuffer' || settingsOf(options).submitOrders === true)
-    && (!action.forMerge || settingsOf(options).mergeOrders === true && settingsOf(options).submitOrders === true)
-    && (!action.forProduction || settingsOf(options).produceOrders === true)
-    && (action.kind !== 'upgrade' || action.expected.target <= settingsOf(options).targetLevel)
-    && (action.kind !== 'tech' || action.expected.target <= settingsOf(options).targetTech));
+    && (!action.forProducer || settingsOf(options).buildProducers)
+    && (!options.automatic || homelandEnabled(options.getSettings()) && homelandActionEnabled(settingsOf(options), action));
   const [request, response] = requests[action.kind];
   const step = { kind: 'homeland', request, body: action.body, label: action.detail,
     costs: action.coinCost ? [{ id: COIN, num: action.coinCost }]
@@ -406,7 +493,8 @@ export async function executeHomeland(client, config, options) {
     const fresh = plan(config, final, { ...options, clientProtocol: client.protocol }).actions.find(row => row.id === id);
     if (!fresh || fresh.token !== token || fresh.reason) throw Object.assign(Error(fresh?.reason || '发送前家园状态已变化'), { notSent: true });
     hold = ledger.reserve(action.coinCost ? { homelandCoins: action.coinCost }
-      : action.kind === 'produceOrders' ? { homelandStamina: action.staminaCost, homelandProductions: 1 } : {},
+      : ['produceOrders', 'openSupplies'].includes(action.kind) ? { homelandStamina: action.staminaCost, homelandProductions: 1 }
+        : action.kind === 'takeRewards' ? { homelandRewardTakes: 1 } : {},
       { homelandCoins: settingsOf(options).dailyCoinLimit, homelandStamina: settingsOf(options).dailyStaminaLimit }, {},
       { uniqueKey: action.key, details: { expected: action.expected, label: action.detail } });
     const beforeSend = () => {
@@ -416,7 +504,7 @@ export async function executeHomeland(client, config, options) {
           || ledger.snapshot().counters.homelandCoins > latest.dailyCoinLimit))
         || (action.staminaCost && (final.stamina - action.staminaCost < latest.keepStamina
           || ledger.snapshot().counters.homelandStamina > latest.dailyStaminaLimit))) throw Object.assign(Error('开关、预算、日期或连接已变化'), { notSent: true });
-      if (['submitOrders', 'mergeOrders', 'takeWarehouse', 'warehouseBuffer', 'produceOrders'].includes(action.kind)) {
+      if (action.orderSlot !== null) {
         const order = final.orders.find(row => row.slot === action.orderSlot);
         if (!order || (count(order.expireTs ?? 0, '订单到期时间') > 0 && count(order.expireTs, '订单到期时间') <= clock(client))) throw Object.assign(Error('订单已到期'), { notSent: true });
       }
@@ -425,9 +513,17 @@ export async function executeHomeland(client, config, options) {
       attempted = true;
       if (response) {
         const reply = await client.request(request, action.body, response, 15000, beforeSend);
-        if (action.kind === 'produceOrders' && reply?.cellId === action.body.cellId && reply.newPiece?.piece) {
+        if (['produceOrders', 'openSupplies'].includes(action.kind) && reply?.cellId === action.body.cellId && reply.newPiece?.piece) {
           const piece = pieces([reply.newPiece.piece], '生产回执')[0];
           action.expected.receipt = { cellId: count(reply.newPiece.cellId, '产物格子'), uid: piece.uid, id: piece.id };
+          ledger.updateKeyDetails(action.key, { expected: action.expected, label: action.detail });
+        }
+        if (action.kind === 'useSupplies') {
+          const { reward } = action.expected;
+          const id = reward.resource === 'stamina' ? 'DUAL_COMBINE_STAMINA' : COIN;
+          const rows = reply?.reward?.asset;
+          action.expected.receiptValid = reply?.cell?.cellId === action.body.cellId && !reply.cell.piece && Array.isArray(rows)
+            && rows.filter(row => row.id === id).reduce((sum, row) => sum + toNumber(row.num), 0) === reward.amount;
           ledger.updateKeyDetails(action.key, { expected: action.expected, label: action.detail });
         }
       }
@@ -439,7 +535,7 @@ export async function executeHomeland(client, config, options) {
     }
     const after = await snapshot(client, config, { ...options, enabled: active });
     if (!fullyConfirmed(action.expected, after)) throw Error('等待游戏回读确认进度与库存');
-    if (action.kind === 'produceOrders') ledger.resolveKey(action.key, true, confirmedDetails({ expected: action.expected, label: action.detail }));
+    if (['produceOrders', 'openSupplies', 'useSupplies', 'takeRewards'].includes(action.kind)) ledger.resolveKey(action.key, true, confirmedDetails({ expected: action.expected, label: action.detail }));
     else ledger.confirm(hold);
     const result = { status: 'confirmed', ok: true, message: action.detail + '，已确认', label: action.detail };
     try { await options.guard.after(step, ticket, result); } catch { /* A failed observer cannot undo confirmed business and inventory evidence. */ }
@@ -454,38 +550,42 @@ export async function executeHomeland(client, config, options) {
 }
 
 const schedules = new WeakMap();
+// Server seconds; the loop converts this deadline with the current clock offset.
+export function homelandNextCheck(client, options) {
+  const settings = options.getSettings(), pref = settingsOf(options);
+  if (!homelandEnabled(settings) || !Object.keys(HOMELAND_ACTIONS).some(key => pref[key])
+    || client.connected === false || !options.enabled()) return Infinity;
+  const now = clock(client), previous = schedules.get(client);
+  return previous?.signature === digest([pref, dayOf(now)]) ? previous.next : now;
+}
 export async function runHomeland(client, config, options) {
-  const settings = options.getSettings(), pref = settingsOf(options), now = clock(client);
-  if (!homelandEnabled(settings) || !Object.keys(HOMELAND_ACTIONS).some(key => pref[key]) || !options.enabled()) return [];
-  const signature = digest([pref, dayOf(now)]), previous = schedules.get(client);
-  if (previous?.signature === signature && previous.next > now) return [];
+  const pref = settingsOf(options), now = clock(client);
+  if (homelandNextCheck(client, options) > now) return [];
+  const signature = digest([pref, dayOf(now)]);
   const result = [], report = entry => { result.push(entry); options.report?.({ ...entry, label: entry.message, taskKey: 'homeland.enabled' }); };
-  const dailyOnly = !['submitOrders', 'unlockFloors', 'clean', 'tech', 'upgrade'].some(key => pref[key]);
-  const completion = scopeOf(options.player) + 'daily:' + dayOf(now) + ':' + digest([pref.freeStamina, pref.freeBox]);
-  if (dailyOnly && options.ledger.hasDailyCompletion(completion)) return [];
+  const dailyOnly = !['submitOrders', 'unlockFloors', 'clean', 'tech', 'upgrade', 'useSupplies'].some(key => pref[key]);
+  const maxActions = positive(options.maxActions) ? Math.min(options.maxActions, 20) : 20;
+  const started = Date.now();
+  let resumeSoon = false;
   try {
-    for (let i = 0; i < 20 && options.enabled() && homelandEnabled(options.getSettings()); i++) {
+    const completion = scopeOf(options.player) + 'daily:' + dayOf(now) + ':' + digest([pref.freeStamina, pref.freeBox]);
+    if (dailyOnly && options.ledger.hasDailyCompletion(completion)) return [];
+    for (let i = 0; i < maxActions && options.enabled() && homelandEnabled(options.getSettings()); i++) {
       const reason = available(client, config, options.player);
       if (reason) { report({ skipped: true, message: reason }); break; }
       const state = await snapshot(client, config, options);
       reconcile(options, state);
       const view = plan(config, state, { ...options, clientProtocol: client.protocol });
       const current = settingsOf(options);
-      const priority = ['freeStamina', 'freeBox', 'submitOrders', 'mergeOrders', 'warehouseBuffer', 'takeWarehouse', 'produceOrders', 'upgrade', 'unlockFloors', 'clean', 'tech'];
-      const candidates = view.actions.filter(action => current[action.kind] === true
-        && (action.kind !== 'takeWarehouse' || current.submitOrders)
-        && (action.kind !== 'mergeOrders' || current.submitOrders)
-        && (action.kind !== 'warehouseBuffer' || current.submitOrders && current.takeWarehouse)
-        && (!action.forMerge || current.mergeOrders && current.submitOrders)
-        && (!action.forProduction || current.produceOrders)
-        && (action.kind !== 'upgrade' || action.expected.target <= current.targetLevel)
-        && (action.kind !== 'tech' || action.expected.target <= current.targetTech));
+      const priority = ['freeStamina', 'freeBox', 'submitOrders', 'mergeOrders', 'mergeSupplies', 'useSupplies', 'openSupplies', 'takeRewards', 'warehouseBuffer', 'takeWarehouse', 'produceOrders', 'upgrade', 'unlockFloors', 'clean', 'tech'];
+      const candidates = view.actions.filter(action => homelandActionEnabled(current, action));
       const action = candidates.filter(action => !action.reason).sort((a, b) => Number(a.forProduction) - Number(b.forProduction)
         || priority.indexOf(a.kind) - priority.indexOf(b.kind)
         || Number(b.recipeStep || b.forMerge) - Number(a.recipeStep || a.forMerge))[0];
       if (!action) {
         const waiting = candidates.map(row => row.reason);
         if (current.submitOrders && current.mergeOrders) waiting.push(...view.orders.map(row => row.synthesis?.reason));
+        if (current.useSupplies) waiting.push(view.supplyReason);
         if (dailyOnly && !view.pending.length && (!current.freeStamina || view.freeStaminaClaimed)
           && (!current.freeBox || view.freeBoxClaimed)) options.ledger.markDailyCompletion(completion);
         report({ skipped: true, status: view.pending.length ? 'pending' : 'waiting', message: view.pending.length
@@ -496,7 +596,15 @@ export async function runHomeland(client, config, options) {
         guard: createActionGuard(client, options.getSettings, options.ledger, { player: options.player, config, enabled: options.enabled }) });
       report(outcome);
       if (outcome.status !== 'confirmed') break;
+      if (i + 1 === maxActions || Date.now() - started >= (options.maxBatchMs ?? Infinity) || options.shouldYieldQueue?.()) {
+        resumeSoon = true;
+        break;
+      }
     }
-  } finally { schedules.set(client, { signature, next: clock(client) + pref.checkEverySeconds }); }
+  } finally {
+    // The next batch rereads and replans; no board, action or token crosses a
+    // queue boundary. Idle/error/pending outcomes retain the normal interval.
+    schedules.set(client, { signature, next: clock(client) + (resumeSoon ? 1 : pref.checkEverySeconds) });
+  }
   return result;
 }

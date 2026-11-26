@@ -53,6 +53,8 @@ export function parseHomeland(value: unknown) {
     capacity: count(data.capacity),
     nextLevel: data.nextLevel === null ? null : count(data.nextLevel),
     freeStaminaClaimed: flag(data.freeStaminaClaimed),
+    chestCount: count(data.chestCount),
+    supplyReason: text(data.supplyReason),
     checkedAt: text(data.checkedAt),
     pending: array(data.pending).map(text),
     budget: {
@@ -92,6 +94,7 @@ export function parseHomeland(value: unknown) {
       return {
         id: text(row.id),
         kind: text(row.kind),
+        forSupply: flag(row.forSupply),
         title: text(row.title),
         detail: text(row.detail),
         coinCost: count(row.coinCost),

@@ -5,6 +5,7 @@ import { autoRerollStatus, normalizeRequirements, startAutoReroll, stopAutoRerol
 import { planDiscountShop } from './discount-shop-automation.mjs';
 import { SHOP_CATALOG, createShopState, readShop, buyShopProduct, refreshDiscountShop } from './shops.mjs';
 import { readHomeland, executeHomeland } from './homeland.mjs';
+import { homelandActionEnabled } from './homeland-settings.mjs';
 import { serveClientAsset } from './ui-assets.mjs';
 import { normalizeConsoleHost, consoleAccessHints, consoleUrl } from './console-address.mjs';
 import { createConsoleVersion, renderVersionedPage, consoleVersionError } from './console-version.mjs';
@@ -2808,11 +2809,7 @@ export function createConsole({ host = '127.0.0.1', port = 17321, onLog, recover
             notes.push(`家园 ${view.level} 级，科技 ${view.techLevel} 级；家园币 ${view.coins}，累计消费 ${view.spent}。`);
             if (!settings.loop.world || !settings.homeland.enabled) notes.push('基地执行总开关或家园总开关未开启');
             else for (const action of view.actions) {
-              if (!settings.homeland[action.kind] || action.kind === 'takeWarehouse' && !settings.homeland.submitOrders) continue;
-              if (action.kind === 'mergeOrders' && !settings.homeland.submitOrders || action.forMerge && (!settings.homeland.mergeOrders || !settings.homeland.submitOrders)) continue;
-              if (action.forProduction && !settings.homeland.produceOrders) continue;
-              if (action.kind === 'warehouseBuffer' && (!settings.homeland.submitOrders || !settings.homeland.takeWarehouse)) continue;
-              if (action.kind === 'tech' && view.techLevel >= settings.homeland.targetTech || action.kind === 'upgrade' && view.level >= settings.homeland.targetLevel) continue;
+              if (!homelandActionEnabled(settings.homeland, action)) continue;
               if (action.reason) notes.push(action.detail + '：' + action.reason);
               else actions.push({ label: action.detail, kind: 'homeland', costs: action.coinCost ? [{ name: '家园币', num: action.coinCost }]
                 : action.staminaCost ? [{ name: '工坊体力', num: action.staminaCost }] : [] });
@@ -2822,6 +2819,7 @@ export function createConsole({ host = '127.0.0.1', port = 17321, onLog, recover
                 if (order.synthesis?.reason) notes.push(`订单 ${order.slot + 1}：${order.synthesis.reason}`);
                 else if (order.synthesis?.steps > 0) notes.push(`订单 ${order.slot + 1}：${order.synthesis.status === 'optimal' ? '备料最少' : '可行方案'} ${order.synthesis.steps} 步${order.synthesis.status === 'feasible' ? '，尚未证明步数最少' : ''}`);
               }
+            if (settings.homeland.useSupplies && view.supplyReason) notes.push(view.supplyReason);
           }
           json({ checkedAt: new Date().toISOString(), usage: usageFor(session).snapshot(), scopeLabel: '家园', counts: {}, actions, notes: [...new Set(notes)] });
           return;

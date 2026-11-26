@@ -1,17 +1,19 @@
 import { natural, positive, table } from './activity-actions.mjs';
-import { homelandMergeModel } from './homeland-merge.mjs';
+import { homelandMergeModel, planHomelandMerges } from './homeland-merge.mjs';
 
 const ordinary = row => row && ['普通', '产品'].includes(row.type);
 
 // Production is stochastic. Keep the deterministic A* solution whenever one
 // exists; otherwise take one useful step and plan again from the server reply.
 // Exact products reserved for all orders remain available for delivery.
-export function planHomelandProduction(config, state, pref, mergePlans, usedStamina = 0) {
-  const { byId, previous, stock, halves, requests } = homelandMergeModel(config, state, pref.takeWarehouse, pref.warehouseBuffer);
-  const producers = state.cells.filter(cell => cell.state === 2 && byId.get(cell.piece?.id)?.type === '生产器');
+export function planHomelandProduction(config, state, pref, mergePlans, usedStamina = 0, traversal = {}) {
+  const modelConfig = traversal.modelConfig ?? config;
+  const { byId, previous, stock, halves, requests } = homelandMergeModel(modelConfig, state, pref.takeWarehouse, pref.warehouseBuffer);
+  const actual = new Map(table(config, 'DualCombinePieceCfg').map(row => [row.pieceId, row]));
+  const producers = state.cells.filter(cell => cell.state === 2 && actual.get(cell.piece?.id)?.type === '生产器');
   const configs = table(config, 'DualCombineProduceCfg'), libraries = table(config, 'DualCombineProduceLibCfg');
   const types = [...byId.values()].filter(ordinary).sort((a, b) => b.level - a.level);
-  return requests.flatMap(request => {
+  return requests.filter(request => traversal.slot === undefined || request.order.slot === traversal.slot).flatMap(request => {
     const recipe = mergePlans.find(row => row.slot === request.order.slot);
     if (recipe?.status !== 'unreachable') return [];
     const result = { slot: request.order.slot, order: request.order, next: null, reason: '' };
@@ -79,8 +81,15 @@ export function planHomelandProduction(config, state, pref, mergePlans, usedStam
     candidates.sort((a, b) => b.score - a.score || b.gain - a.gain || a.producer.cellId - b.producer.cellId);
     const producer = candidates[0];
     if (producer && state.emptyCells > 0) return [{ ...result, next: producer }];
-    if (!producer && !transfers.length) return [{ ...result, reason: blocked[0]
-      || (producers.length ? '没有能补齐当前缺料的已解锁生产器' : '棋盘上没有已解锁的生产器') }];
+    if (!producer && !transfers.length) {
+      if (pref.buildProducers && !blocked.length) {
+        const built = planProducerChain(config, state, pref, missing, usedStamina, traversal);
+        if (built?.next) return [{ ...result, ...built, next: { ...built.next, forProducer: true } }];
+        if (built?.reason) return [{ ...result, reason: built.reason }];
+      }
+      return [{ ...result, reason: blocked[0]
+        || (producers.length ? '没有能补齐当前缺料的已解锁生产器' : '棋盘上没有已解锁的生产器') }];
+    }
     // Reserve space for the next useful action only. Prefer unrelated pieces,
     // then high-level intermediates; stored products retain their UID and are
     // reconsidered by A* after every confirmed production or transfer.
@@ -96,4 +105,61 @@ export function planHomelandProduction(config, state, pref, mergePlans, usedStam
     if (!parked) return [{ ...result, reason: '没有可暂存的普通棋子，等待整理棋盘后生产' }];
     return [{ ...result, next: { kind: 'warehouseBuffer', piece: { ...parked.piece, cellId: parked.cellId } } }];
   });
+}
+
+function planProducerChain(config, state, pref, missing, usedStamina, traversal) {
+  const path = traversal.path ?? [], budget = traversal.budget ?? { left: 48 };
+  if (path.length >= 8 || budget.left <= 0) return { reason: '生产器依赖规划达到搜索上限，等待下次检查' };
+  const pieces = table(config, 'DualCombinePieceCfg'), byId = new Map(pieces.map(row => [row.pieceId, row]));
+  const configs = table(config, 'DualCombineProduceCfg'), libraries = table(config, 'DualCombineProduceLibCfg');
+  const sources = configs.filter(cfg => byId.get(cfg.produceid)?.type === '生产器' && !path.includes(cfg.produceid)
+    && [cfg.cost, cfg.count, cfg.cd].every(natural)
+    && libraries.some(row => row.libId === cfg.libId && positive(row.weight) && positive(missing.get(row.pieceId))))
+    .sort((a, b) => byId.get(a.produceid).level - byId.get(b.produceid).level || a.cost - b.cost || a.produceid.localeCompare(b.produceid));
+  const candidates = [], deferred = [];
+  for (const source of sources) {
+    if (--budget.left < 0) break;
+    const target = byId.get(source.produceid);
+    // A synthetic goal may merge only the predecessor chain of this required
+    // producer. Other producers remain fixed. Part-used finite producers are
+    // preserved rather than throwing away their remaining charges by upgrading.
+    const chain = new Set([target.pieceId]);
+    let cursor = target;
+    while (cursor) {
+      const parents = pieces.filter(row => row.nextId === cursor.pieceId && row.pieceGroup === cursor.pieceGroup && row.level + 1 === cursor.level);
+      if (parents.length !== 1) break;
+      cursor = parents[0];
+      if (chain.has(cursor.pieceId)) break;
+      chain.add(cursor.pieceId);
+    }
+    const modelConfig = { ...config, tables: { ...config.tables, DualCombinePieceCfg: { data: pieces.map(row =>
+      chain.has(row.pieceId) && row.type === '生产器' ? { ...row, type: '普通' } : row) } } };
+    const keep = piece => {
+      const cfg = configs.find(row => row.produceid === piece.id);
+      return chain.has(piece.id) && cfg?.count > 0 && piece.produceLeft !== cfg.count;
+    };
+    const slot = Math.max(-1, ...state.orders.map(order => order.slot)) + 1;
+    const plannedState = { ...state,
+      cells: state.cells.map(cell => cell.piece && keep(cell.piece) ? { ...cell, state: 0 } : cell),
+      warehouse: state.warehouse.filter(piece => !keep(piece)),
+      orders: [...state.orders, { slot, orderId: 0, reqs: [{ pieceCfgId: target.pieceId, count: 1 }] }],
+    };
+    // Retain excluded warehouse occupancy; such pieces cannot be consumed or
+    // fetched as part of the synthetic goal.
+    if (positive(plannedState.warehouseCapacity)) plannedState.warehouseCapacity -= state.warehouse.length - plannedState.warehouse.length;
+    const plans = planHomelandMerges(modelConfig, plannedState, { ...pref, targetSlot: slot, searchLimits: { maxExpanded: 1500, maxStates: 5000, maxMilliseconds: 15 } });
+    const plan = plans.find(row => row.slot === slot);
+    if (plan?.next) candidates.push({ next: plan.next, steps: plan.steps ?? Infinity, reason: `先备好${target.name}，再生产订单原料` });
+    else if (plan?.status === 'unreachable') deferred.push({ modelConfig, plannedState, plans, slot, target });
+  }
+  if (candidates.length) return candidates.sort((a, b) => a.steps - b.steps)[0];
+  let blockedReason = '';
+  for (const item of deferred) {
+    if (budget.left <= 0) break;
+    const next = planHomelandProduction(config, item.plannedState, pref, item.plans, usedStamina,
+      { modelConfig: item.modelConfig, slot: item.slot, path: [...path, item.target.pieceId], budget })[0];
+    if (next?.next) return { next: next.next, reason: `先为${item.target.name}备料，再衔接订单生产` };
+    if (/体力|预算|冷却/.test(next?.reason)) blockedReason ||= next.reason;
+  }
+  return sources.length ? { reason: blockedReason || (budget.left <= 0 ? '生产器依赖规划达到搜索上限，等待下次检查' : '缺少合成所需生产器的材料或可用空间') } : null;
 }

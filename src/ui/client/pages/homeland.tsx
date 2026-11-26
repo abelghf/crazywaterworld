@@ -355,6 +355,8 @@ function Homeland({ account }: { account: string }) {
                     <p className={styles.help}>
                       每日免费体力：
                       {data.freeStaminaClaimed ? "已领取" : "可领取"}
+                      <span aria-hidden="true"> · </span>奖励区{" "}
+                      {data.chestCount} 件
                     </p>
                   </div>
                 </div>
@@ -362,9 +364,13 @@ function Homeland({ account }: { account: string }) {
                   {data.actions
                     .filter(
                       (row) =>
-                        row.kind === "freeStamina" || row.kind === "freeBox",
+                        row.kind === "freeStamina" ||
+                        row.kind === "freeBox" ||
+                        row.forSupply,
                     )
-                    .map((row) => actionButton(row))}
+                    .map((row) =>
+                      actionButton(row, row.forSupply ? row.detail : undefined),
+                    )}
                 </div>
               </CardContent>
             </Card>
@@ -436,8 +442,8 @@ function Homeland({ account }: { account: string }) {
             </Card>
             <p className={styles.footnote}>
               工坊仓库 {data.warehouse.used} /{" "}
-              {data.warehouse.capacity ?? "容量待同步"}。
-              宝箱领取后进入游戏工坊奖励区。暂存物品按后续订单需要取回。
+              {data.warehouse.capacity ?? "容量待同步"}。{data.supplyReason}{" "}
+              暂存物品按后续订单需要取回。
               备料步数按当前订单、仓库权限与成品保留规则计算。
               生产产物可能随机，每次生产后重新规划。 今日生产体力{" "}
               {data.staminaBudget.used} / {data.staminaBudget.limit}，保留{" "}

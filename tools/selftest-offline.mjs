@@ -8,6 +8,8 @@ const root = path.resolve(import.meta.dirname, '..');
 const temporary = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'cw-offline-'));
 const cases = [
   ['selftest-homeland.mjs'],
+  ['selftest-homeland-async.mjs'],
+  ['selftest-homeland-supplies.mjs'],
   ['selftest-homeland-merge.mjs'],
   ['selftest-homeland-buffer.mjs'],
   ['selftest-homeland-search.mjs'],

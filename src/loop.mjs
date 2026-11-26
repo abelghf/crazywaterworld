@@ -56,7 +56,7 @@ import { hasResidentMaterialRules } from './resident-materials.mjs';
 import { surveyBaseAutomation, planBaseAutomation, observeBaseAutomationPlan, runBaseAutomation, baseDemands } from './base-automation.mjs';
 import { hasBaseWork } from './automation-settings.mjs';
 import { runMuseumDisplay } from './museum-display.mjs';
-import { runHomeland } from './homeland.mjs';
+import { runHomeland, homelandNextCheck } from './homeland.mjs';
 import { validateRuntimeSettings, guardRuntimeActions } from './settings-runtime.mjs';
 import { assertResourcesReady } from './resource-store.mjs';
 import { treasureAutomationEnabled, runTreasureLoot } from './treasure-loot.mjs';
@@ -213,6 +213,8 @@ export async function runLoop(client, protocol, {
       assertRuntime();
       return result;
     }) });
+  const homelandOptions = { getSettings, enabled: () => scheduler.active() && runtimeActive() };
+  const homelandNext = () => homelandNextCheck(client, homelandOptions) * 1000 - (client.serverClockOffsetMs || 0);
   let activityVersion = 0;
   // 海商王走商已有独立时钟，由 merchantNext 接续，不重复提前消耗主轮。
   const activityConfigured = key => key !== 'merchantTrade' && nativePreferenceEnabled(getSettings(), key) && (!isEnabled || isEnabled(key));
@@ -387,7 +389,7 @@ export async function runLoop(client, protocol, {
   scheduler.addCleanup(() => watchFleetMaintenance(client).hold([]));
   // Main-round checkpoints and the idle wait consult the same fleet deadlines.
   const mainScanNext = () => Math.min(treasureScan.nextAt(), cityWarScan.nextAt(), radarScan.nextAt(), resourceFieldsNext());
-  scheduler.listen(client, 'pong', () => scheduler.wakeIfEarlier(Math.min(treasureScan.nextAt(), cityWarScan.nextAt(), worldOnlineNext())));
+  scheduler.listen(client, 'pong', () => scheduler.wakeIfEarlier(Math.min(treasureScan.nextAt(), cityWarScan.nextAt(), worldOnlineNext(), homelandNext())));
   const dispatchNext = () => dispatchSettingsPending ? 0 : Math.min(
     mainScanNext(), siliconNext(),
     fleetMaintenanceEnabled(getSettings()) ? maintenanceAt : Infinity,
@@ -754,6 +756,20 @@ export async function runLoop(client, protocol, {
         report: entry => serviceReport('world', '硅矿')({ ...entry, taskKey: 'silicon.enabled' }) }); }
       catch (error) { phaseFailure('world', '硅矿检查', error, 'silicon.enabled'); }
       finally { siliconAt = version === siliconVersion ? Date.now() + siliconInterval(getSettings()) : 0; }
+    }
+    async function checkHomeland() {
+      if (homelandNext() > Date.now()) return;
+      try {
+        await runHomeland(client, config, { ...homelandOptions, player, ledger: usageLedger,
+          maxActions: 4, maxBatchMs: 2000, shouldYieldQueue,
+          report(entry) {
+            summary.world.results.push(entry);
+            if (entry.status === 'confirmed') summary.world.planned++;
+            stepLog('world')({ ...entry, title: entry.message });
+            rewards?.observe('homeland.enabled', entry.message, entry.status === 'pending' ? 'pending' : entry.status === 'confirmed' ? 'ok' : 'waiting');
+          } });
+      } catch (error) { phaseFailure('world', '家园', error, 'homeland.enabled'); }
+      finally { rewards?.expect('homeland.enabled', homelandNextCheck(client, homelandOptions)); }
     }
     async function checkGuildShip() {
       if (!scheduler.active() || guildShipNext() > Date.now()) return;
@@ -1536,19 +1552,7 @@ export async function runLoop(client, protocol, {
         } catch (error) { phaseFailure('world', '博物馆自动上架', error); }
       }
       yield;
-      if (allowMutate && getSettings()?.loop.world && getSettings()?.homeland?.enabled) {
-        try {
-          await runHomeland(client, config, { player, getSettings, ledger: usageLedger,
-            enabled: () => !stop.aborted && runtimeActive() && client.connected,
-            report(entry) {
-              summary.world.results.push(entry);
-              if (entry.status === 'confirmed') summary.world.planned++;
-              stepLog('world')({ ...entry, title: entry.message });
-              rewards?.observe('homeland.enabled', entry.message, entry.status === 'pending' ? 'pending' : entry.status === 'confirmed' ? 'ok' : 'waiting');
-              rewards?.expect('homeland.enabled', rewards.now() + (getSettings()?.homeland?.checkEverySeconds ?? 300));
-            } });
-        } catch (error) { phaseFailure('world', '家园', error, 'homeland.enabled'); }
-      }
+      await checkHomeland();
       yield;
       const heroSettings = getHeroSettings();
       if (heroSettings?.loop.heroes && heroSettings.heroes.enabled
@@ -1575,12 +1579,13 @@ export async function runLoop(client, protocol, {
       if (sweepAfterDispatch) await checkPirateSweeps();
     }
     await scheduler.runSteps(mainSteps(), {
-      nextAt: () => Math.min(guildShipNext(), mainScanNext(), worldOnlineNext(), meritNext()),
+      nextAt: () => Math.min(guildShipNext(), mainScanNext(), worldOnlineNext(), meritNext(), homelandNext()),
       runPending: async () => {
         await checkGuildShip();
         await checkMeritDue();
         if (mainScanNext() <= Date.now()) await checkDispatch();
         await checkWorldOnline();
+        await checkHomeland();
       },
       afterStep: () => checkFactoryDue({ checkpoint: true }),
     });
@@ -1603,7 +1608,7 @@ export async function runLoop(client, protocol, {
             weeklyDeadline ? weeklyDeadline * 1000 - (client.serverClockOffsetMs || 0) : Infinity);
           const activityAt = activityVersion !== roundActivityVersion ? 0
             : nextActivityBoundary(client, activityConfigured, roundStartedMs);
-          const wakeAt = Math.min(nextRound, activityAt, weeklyAt, factorySchedule.nextAt(), dispatchNext(), guildShipNext(), extendedNext(), merchantNext(), appointmentNext(), worldOnlineNext(), meritNext(),
+          const wakeAt = Math.min(nextRound, activityAt, weeklyAt, factorySchedule.nextAt(), dispatchNext(), guildShipNext(), extendedNext(), merchantNext(), appointmentNext(), worldOnlineNext(), meritNext(), homelandNext(),
             isEnabled && enabled('upgrade') ? upgradeAt : Infinity,
             antiqueEnabled(getSettings()) ? antiqueAt : Infinity, nextAfkCheck());
           if (wakeAt > Date.now()) await scheduler.waitUntil(wakeAt);
@@ -1617,6 +1622,7 @@ export async function runLoop(client, protocol, {
           await scheduler.runDue('dispatch', dispatchNext, checkDispatch);
           await scheduler.runDue('worldOnlineRewards', worldOnlineNext, checkWorldOnline);
           await scheduler.runDue('seasonMerit', meritNext, checkMeritDue);
+          await scheduler.runDue('homeland', homelandNext, checkHomeland);
           const checkUpgrade = !!isEnabled && enabled('upgrade') && upgradeAt <= Date.now();
           if (factorySchedule.due() || checkUpgrade) {
             await scheduler.runDue('factory', () => Math.min(factorySchedule.nextAt(),

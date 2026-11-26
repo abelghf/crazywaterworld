@@ -26,15 +26,21 @@ export const homelandTables = {
     ...[1, 2, 3, 4].map(level => ({ pieceId: '鱼' + level, pieceGroup: '鱼', type: level < 3 ? '普通' : '产品',
       name: ['鱼', '生鱼片', '鱼饼', '鱼丸'][level - 1], level, nextId: level < 4 ? '鱼' + (level + 1) : '', price: level })),
     ...[1, 2].map(level => ({ pieceId: '钩' + level, pieceGroup: '钩', type: '生产器', name: '生产器', level, nextId: level === 1 ? '钩2' : '' })),
-    ...[1, 2].map(level => ({ pieceId: '体力瓶' + level, pieceGroup: '体力', type: '可使用', name: '体力瓶', level, nextId: level === 1 ? '体力瓶2' : '' })),
+    ...[2, 6, 15, 40, 100].map((amount, index) => ({ pieceId: '体力瓶' + (index + 1), pieceGroup: '体力', type: '可使用', name: `${index + 1}级体力瓶`,
+      level: index + 1, nextId: index < 4 ? '体力瓶' + (index + 2) : '', desc: `点击收集${amount}点体力。` })),
+    ...[2, 6, 14, 30, 62].map((amount, index) => ({ pieceId: '金币' + (index + 1), pieceGroup: '金币', type: '可使用', name: `${index + 1}级家园币`,
+      level: index + 1, nextId: index < 4 ? '金币' + (index + 2) : '', desc: `点击收集${amount}个家园币。` })),
+    { pieceId: '体力箱1', pieceGroup: '体力箱', type: '生产器', name: '体力箱', level: 1, nextId: '' },
   ],
   DualCombineProduceCfg: [
     { produceid: '钩1', libId: '钩1', cost: 1, count: 0, cd: 0 },
     { produceid: '钩2', libId: '钩2', cost: 1, count: 2, cd: 0 },
+    { produceid: '体力箱1', libId: '体力箱1', cost: 0, count: 5, cd: 0 },
   ],
   DualCombineProduceLibCfg: [
     { libId: '钩1', pieceId: '鱼1', weight: 90 }, { libId: '钩1', pieceId: '鱼2', weight: 10 },
     { libId: '钩2', pieceId: '鱼2', weight: 100 },
+    { libId: '体力箱1', pieceId: '体力瓶1', weight: 100 },
   ],
 };
 const configPack = () => Object.entries(homelandTables).map(([name, data], i) => [i, name, { data }]);
@@ -58,6 +64,7 @@ export function createHomelandClient(protocol, id = 1, shared) {
     return protocol[name].decode(protocol[name].encode(value).finish());
   };
   function apply(name, body) {
+    const tables = state.tables ?? homelandTables;
     if (name === 'DualCombineBuyStaminaRequest') { assert.equal(body.isDailyFree, true); state.lastFree = Math.floor((Date.now() + client.serverClockOffsetMs) / 1000); state.stamina += 100; return { lastFreeStaminaTime: state.lastFree, buyStaminaTimes: 0 }; }
     if (name === 'BuyShopProductRequest') { assert.deepEqual({ type: body.type, id: body.id, num: body.num }, { type: 15, id: 3, num: 1 }); state.bought++; return {}; }
     if (name === 'HomelandTechUpRequest') { state.home.techLevel++; state.coins -= 50; state.spent += 50; return {}; }
@@ -81,23 +88,41 @@ export function createHomelandClient(protocol, id = 1, shared) {
       const from = state.cells.find(row => row.cellId === body.fromCellId), to = state.cells.find(row => row.cellId === body.toCellId);
       assert(from && to && from !== to && from.state === 2 && [1, 2].includes(to.state));
       assert(from.piece && to.piece && from.piece.pieceCfgId === to.piece.pieceCfgId);
-      const cfg = homelandTables.DualCombinePieceCfg.find(row => row.pieceId === from.piece.pieceCfgId); assert(cfg?.nextId);
+      const cfg = tables.DualCombinePieceCfg.find(row => row.pieceId === from.piece.pieceCfgId); assert(cfg?.nextId);
       const uid = state.mergeUid === 'source' ? from.piece.uid : state.mergeUid === 'new' ? (state.nextUid = (state.nextUid ?? 10000) + 1) : to.piece.uid;
       delete from.piece; to.state = 2; to.piece = { uid, pieceCfgId: cfg.nextId };
+      const producer = tables.DualCombineProduceCfg.find(row => row.produceid === cfg.nextId);
+      if (producer) Object.assign(to.piece, { produceLeft: producer.count || -1, produceCdTs: 0 });
       return { cells: [from, to] };
     }
     if (name === 'DualCombineProduceRequest') {
       const produceCell = state.cells.find(row => row.cellId === body.cellId);
       assert(produceCell?.piece && produceCell.state === 2);
-      const cfg = homelandTables.DualCombineProduceCfg.find(row => row.produceid === produceCell.piece.pieceCfgId); assert(cfg);
+      const cfg = tables.DualCombineProduceCfg.find(row => row.produceid === produceCell.piece.pieceCfgId); assert(cfg);
       assert((produceCell.piece.produceCdTs ?? 0) <= Math.floor((Date.now() + client.serverClockOffsetMs) / 1000));
       assert(state.stamina >= cfg.cost);
       const newPiece = state.cells.find(row => row.state === 2 && !row.piece); assert(newPiece);
-      const pieceCfgId = state.drops?.shift() ?? (cfg.produceid === '钩2' ? '鱼2' : '鱼1');
+      const pieceCfgId = state.drops?.shift() ?? tables.DualCombineProduceLibCfg.find(row => row.libId === cfg.libId)?.pieceId;
       newPiece.piece = { pieceCfgId, uid: (state.nextUid = (state.nextUid ?? 10000) + 1) };
       state.stamina -= cfg.cost;
       if (cfg.count) { assert(produceCell.piece.produceLeft > 0); if (--produceCell.piece.produceLeft === 0) delete produceCell.piece; }
       return { cellId: body.cellId, produceCell, newPiece };
+    }
+    if (name === 'DualCombineTakeFromChestRequest') {
+      const cell = state.cells.find(row => row.state === 2 && !row.piece); assert(cell && state.chest?.length);
+      cell.piece = { uid: (state.nextUid = (state.nextUid ?? 10000) + 1), pieceCfgId: state.chest.shift() };
+      const cfg = tables.DualCombineProduceCfg.find(row => row.produceid === cell.piece.pieceCfgId);
+      if (cfg) Object.assign(cell.piece, { produceLeft: cfg.count || -1, produceCdTs: 0 });
+      return {};
+    }
+    if (name === 'DualCombineUsePieceRequest') {
+      const cell = state.cells.find(row => row.cellId === body.cellId); assert(cell?.piece && cell.state === 2);
+      const id = cell.piece.pieceCfgId;
+      const reward = state.rewards?.[id] ?? (/^体力瓶[1-5]$/.test(id) ? { resource: 'stamina', amount: [2, 6, 15, 40, 100][Number(id.slice(-1)) - 1] }
+        : /^金币[1-5]$/.test(id) ? { resource: 'coins', amount: [2, 6, 14, 30, 62][Number(id.slice(-1)) - 1] } : null); assert(reward);
+      state[reward.resource] += reward.amount; delete cell.piece;
+      return { cell, reward: { asset: [{ type: reward.resource === 'stamina' ? 1 : 2,
+        id: reward.resource === 'stamina' ? 'DUAL_COMBINE_STAMINA' : '家园币', num: reward.amount }] } };
     }
     if (name === 'DualCombineSubmitOrderRequest') {
       const order = state.orders.find(row => row.slot === body.slot); assert(order);
@@ -122,11 +147,11 @@ export function createHomelandClient(protocol, id = 1, shared) {
   };
   client.request = async (name, body, response, timeout, beforeSend) => {
     state.calls.push(name); round(name, body);
-    if (['DualCombineBuyStaminaRequest', 'DualCombineTakeFromWarehouseRequest', 'DualCombinePutToWarehouseRequest', 'DualCombineMoveRequest', 'DualCombineProduceRequest'].includes(name)) return round(response, await write(name, body, beforeSend));
+    if (['DualCombineBuyStaminaRequest', 'DualCombineTakeFromWarehouseRequest', 'DualCombinePutToWarehouseRequest', 'DualCombineMoveRequest', 'DualCombineProduceRequest', 'DualCombineUsePieceRequest'].includes(name)) return round(response, await write(name, body, beforeSend));
     await state.beforeRead?.(name);
     let value;
     if (name === 'HomelandRequest') value = state.home;
-    else if (name === 'DualCombineInfoRequest') value = { cells: state.cells, warehouse: { pieces: state.warehouse, warehouseCap: state.warehouseCapacity, buyTimes: 0 }, orders: state.orders, lastFreeStaminaTime: state.lastFree, chestCount: state.bought, buyStaminaTimes: 0 };
+    else if (name === 'DualCombineInfoRequest') value = { cells: state.cells, warehouse: { pieces: state.warehouse, warehouseCap: state.warehouseCapacity, buyTimes: 0 }, orders: state.orders, lastFreeStaminaTime: state.lastFree, chestCount: state.chest?.length ?? state.bought, newestPieceCfgId: state.chest?.[0] ?? '', buyStaminaTimes: 0 };
     else if (name === 'CounterInfoRequest') value = { counters: [{ type: 'HOMELAND_COIN', num: state.spent }] };
     else if (name === 'AllHeroRequest') value = { heroes: [{ heroId: '测试英雄', star: 5 }] };
     else if (name === 'AllResourceRequest') value = { list: [1, 3, 4, 5, 6, 7, 8].map(res => ({ res, amount: res === 8 ? state.stamina : 1000 })) };

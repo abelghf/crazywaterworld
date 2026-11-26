@@ -105,4 +105,20 @@ try {
   assert.equal(a.state.writes.length, beforeProduction + 1);
   assert.equal((await read()).staminaBudget.used, 1);
   console.log('通过：生产草稿与体力成本预览只读、旧配置不生产、生产账号隔离及重复点击仅消耗一次体力');
+  a.state.cells = [{ cellId: 0, state: 2, piece: { uid: 800, pieceCfgId: '体力瓶5' } }, { cellId: 1, state: 2 }];
+  a.state.orders = []; a.state.stamina = 0;
+  const supplies = ok(await h.api('settings')), beforeSupplies = a.state.writes.length;
+  assert(!ok(await h.api('settings/preview', { category: 'homeland', settings: supplies.settings })).actions.some(row => /领取5级体力瓶/.test(row.label)));
+  supplies.settings.homeland.useSupplies = true;
+  supplies.settings.homeland.buildProducers = true;
+  supplies.settings.homeland.submitOrders = false;
+  assert(ok(await h.api('settings/preview', { category: 'homeland', settings: supplies.settings })).actions.some(row => /领取5级体力瓶/.test(row.label)));
+  assert.equal(a.state.writes.length, beforeSupplies);
+  ok(await h.api('settings', { settings: supplies.settings, revision: supplies.revision, baseRevision: supplies.baseRevision }));
+  const use = (await read()).actions.find(row => row.kind === 'useSupplies'); assert(use);
+  denied(await h.api('homeland/action', body(use), 'b'));
+  const collected = await Promise.all([h.api('homeland/action', body(use)), h.api('homeland/action', body(use))]);
+  assert.equal(collected.filter(row => row.data.status === 'confirmed').length, 1);
+  assert.equal(a.state.stamina, 100); assert.equal(a.state.writes.length, beforeSupplies + 1);
+  console.log('通过：补给独立预览与开关保存、账号隔离、重复点击只领取一次体力');
 } finally { await h.close(); }

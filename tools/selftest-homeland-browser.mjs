@@ -109,6 +109,8 @@ try {
   assert.equal((await h.api('settings')).data.settings.homeland.freeStamina, false);
   assert.equal(posts.length, 3, '保存总开关不执行游戏操作');
   assert.doesNotMatch(await settings.textContent(), /尚未选择执行动作/);
+  assert(await settings.locator('#config-field-homeland-takeWarehouse').isVisible(), '仓库取料独立展示，补给无需先展开交单设置');
+  assert(await settings.locator('#config-field-homeland-takeWarehouse').isEnabled());
   for (const key of ['submitOrders', 'mergeOrders']) {
     await page.locator('#config-state').filter({ hasText: '配置已同步' }).waitFor();
     const toggle = settings.locator('#config-field-homeland-' + key);
@@ -135,6 +137,16 @@ try {
     assert.equal((await h.api('settings')).data.settings.homeland[key], true);
   }
   assert.equal(posts.length, 3, '保存自动合成开关不立即执行游戏操作');
+  for (const key of ['buildProducers', 'useSupplies']) {
+    await page.locator('#config-state').filter({ hasText: '配置已同步' }).waitFor();
+    const toggle = settings.locator('#config-field-homeland-' + key);
+    if (!await toggle.isVisible()) await settings.getByRole('button', { name: '按订单生产原料，展开下级设置' }).click();
+    const [savedToggle] = await Promise.all([
+      page.waitForResponse(response => new URL(response.url()).pathname === '/api/settings' && response.request().method() === 'POST'), toggle.click(),
+    ]);
+    assert.equal(savedToggle.status(), 200);
+    assert.equal((await h.api('settings')).data.settings.homeland[key], true);
+  }
   await page.setViewportSize({ width: 320, height: 900 });
   assert(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), '配置页不能横向溢出');
   await page.screenshot({ path: path.join(output, 'settings-320.png'), fullPage: true });
@@ -193,6 +205,19 @@ try {
   await panel.getByText('当前没有工坊订单，稍后刷新查看。').waitFor();
   assert.equal(state.stamina, 8); assert.equal(posts.length, 8);
   console.log('通过：生产开关保存、手机端体力费用与非最优状态、双击防重、生产后合成并交单');
+  state.cells = [{ cellId: 0, state: 2, piece: { uid: 1200, pieceCfgId: '体力瓶5' } }, { cellId: 1, state: 2 }];
+  state.stamina = 0; state.orders = []; state.warehouse = [];
+  await panel.getByRole('button', { name: '刷新家园', exact: true }).click();
+  const useSupply = panel.getByRole('button', { name: '领取5级体力瓶：100点工坊体力', exact: true });
+  await useSupply.waitFor();
+  assert(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1));
+  await page.screenshot({ path: path.join(output, 'supplies-320.png'), fullPage: true });
+  const used = page.waitForResponse(response => new URL(response.url()).pathname === '/api/homeland/action');
+  await useSupply.evaluate(button => { button.click(); button.click(); });
+  assert.equal((await used).status(), 200);
+  await useSupply.waitFor({ state: 'detached' });
+  assert.equal(state.stamina, 100); assert.equal(posts.length, 9);
+  console.log('通过：新开关保存、手机端补给展示与单步领取、双击只增加一次体力');
   assert.equal(errors.length, 0, errors.join('\n'));
   console.log('通过：360/320 像素布局、家园配置保存且不连带开启细项、无页面脚本错误');
 } finally { if (browser) await browser.close(); await h.close(); }

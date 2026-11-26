@@ -154,9 +154,10 @@ export function homelandMergeModel(config, state, takeWarehouse = false, warehou
   return { byId, previous, stock, halves, requests };
 }
 
-export function planHomelandMerges(config, state, { takeWarehouse = false, warehouseBuffer = false, searchLimits } = {}) {
+export function planHomelandMerges(config, state, { takeWarehouse = false, warehouseBuffer = false, searchLimits, targetSlot } = {}) {
   const { byId, previous, stock, halves, requests } = homelandMergeModel(config, state, takeWarehouse, warehouseBuffer);
-  const estimates = requests.map(({ order, reserved, missing }) => {
+  const selected = targetSlot === undefined ? requests : requests.filter(request => request.order.slot === targetSlot);
+  const estimates = selected.map(({ order, reserved, missing }) => {
     const result = { slot: order.slot, order, merges: 0, stores: 0, next: null, reason: '' };
     const total = [...stock.values(), ...halves.values()].reduce((sum, rows) => sum + rows.length, 0);
     if (missing.reduce((sum, row) => sum + row.num, 0) > total) return { ...result, reason: '现有棋子不足，等待补充材料' };
@@ -226,7 +227,7 @@ export function planHomelandMerges(config, state, { takeWarehouse = false, wareh
     }
     return { ...result, merges, next: plan.steps[0] ?? null, operations: plan.steps };
   });
-  return requests.map((request, index) => {
+  return selected.map((request, index) => {
     const { operations, ...estimate } = estimates[index];
     const result = searchHomelandOrder({ byId, previous, state, request, requests, takeWarehouse, warehouseBuffer, searchLimits }, operations);
     return { ...estimate, ...result, reason: result.status === 'limited' ? '规划达到检查上限，尚未找到完整方案，等待整理棋盘后重试'
