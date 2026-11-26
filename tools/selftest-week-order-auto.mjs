@@ -7,7 +7,7 @@ import { createDeclaredProtocol } from './fixtures/declared-protocol.mjs';
 
 const directory = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'cw-week-order-auto-'));
 process.env.CW_DATA_DIR = directory;
-const { runAutomaticWeekOrder, runWeekOrder, readWeekOrder } = await import('../src/activities.mjs');
+const { runAutomaticWeekOrder, runWeekOrder, readWeekOrder, activityView } = await import('../src/activities.mjs');
 const { defaultSettings, createUsageLedger } = await import('../src/automation-settings.mjs');
 const { runLoop } = await import('../src/loop.mjs');
 
@@ -131,6 +131,42 @@ async function check(name, work) {
 }
 
 try {
+  await check('本期完成数量按有效奖励去重，完成及缺配置时保留真实进度', async () => {
+    const f = fixture();
+    let view = await readWeekOrder(f.client, undefined, f.config);
+    assert.equal(view.completedCount, 0);
+    assert.equal(view.totalCount, 3);
+    f.state.order.gotRwdId = [1, 1, 2, 999];
+    view = await readWeekOrder(f.client, undefined, f.config);
+    assert.equal(view.completedCount, 2);
+    assert.equal(view.totalCount, 3);
+    assert.equal(view.finished, false);
+    let activity = await activityView(f.client, [], f.config);
+    assert.equal(activity.order.completedCount, 2);
+    assert.equal(activity.order.totalCount, 3);
+    f.state.order.gotRwdId = [1, 2, 3];
+    view = await readWeekOrder(f.client, undefined, f.config);
+    assert.equal(view.completedCount, 3);
+    assert.equal(view.finalReady, true);
+    activity = await activityView(f.client, [], f.config);
+    assert.equal(activity.order.completedCount, 3);
+    assert.equal(activity.order.totalCount, 3);
+    assert.equal(activity.order.finalReady, true);
+    f.state.order.isGotFinal = true;
+    f.state.order.gotRwdId = [];
+    view = await readWeekOrder(f.client, undefined, f.config);
+    assert.equal(view.completedCount, 3);
+    assert.equal(view.finished, true);
+    f.state.order.isGotFinal = false;
+    f.state.order.gotRwdId = [1, 1, 2];
+    delete f.config.tables.WeekOrderRwdCfg;
+    view = await readWeekOrder(f.client, undefined, f.config);
+    assert.equal(view.completedCount, 2);
+    assert.equal(view.totalCount, null);
+    view = await readWeekOrder(f.client, [], f.config);
+    assert.equal(view.completedCount, undefined, '未开放时不沿用上期完成数量');
+  });
+
   await check('默认关闭自动提交和钻石补料，旧配置也不会自行花钻石', async () => {
     const defaults = defaultSettings();
     assert.equal(defaults.schedule.weekOrderSubmit, false);

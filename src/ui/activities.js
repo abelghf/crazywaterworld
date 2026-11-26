@@ -269,6 +269,7 @@ function renderActivityDetail() {
   const previousSettings = box.querySelector('.activity-settings');
   const settingsKind = activitySettingsKind(row);
   panel.classList.toggle('guild-ship-panel', settingsKind === 'guild-ship');
+  panel.classList.toggle('week-order-panel', settingsKind === 'week-order');
   const saving = [savingMerchantSettings, savingHeroRaidSettings, savingSeaMerchantSettings, savingGuildShipSettings, savingActivityAutomation]
     .some(pending => pending.has(current));
   const keepSettings = !saving && previousSettings?.dataset.kind === settingsKind && editingActivitySettings(previousSettings);
@@ -278,6 +279,7 @@ function renderActivityDetail() {
     for (const child of [...box.children]) if (child !== previousSettings) child.remove();
   } else clear(box);
   clear($('activities-order'));
+  clear($('activities-progress')).hidden = true;
   if (!row) return;
   panel.setAttribute('aria-labelledby', $('activity-tabs').querySelector('[aria-selected=true]').id);
   $('activity-title').textContent = row.group ? row.group + ' · ' + row.name : row.name;
@@ -316,7 +318,8 @@ function renderActivityDetail() {
     }
     return;
   }
-  if (!isSeaMerchantActivity(row)) {
+  if (row.weekType === 5) renderWeekOrderProgress();
+  if (!isSeaMerchantActivity(row) && row.weekType !== 5) {
     for (const line of activitiesData.status?.[row.id]?.lines ?? []) box.appendChild(el('p', null, line));
   }
   if (row.weekType === 4) {
@@ -331,7 +334,7 @@ function renderActivityDetail() {
   const tasks = (row.taskKeys || []).map(key => activitiesData.eventTasks.find(task => task.key === key)).filter(Boolean);
   for (const task of tasks) {
     if (isSeaMerchantActivity(row)) continue;
-    if (row.weekType === 5 && task.key === 'weekOrderSubmit') continue;
+    if (row.weekType === 5 && (task.key === 'weekOrderSubmit' || task.key === 'weekOrderFinal')) continue;
     renderActivityTask(box, row, task);
   }
   if (!tasks.length && row.weekType !== 5 && row.weekType !== 6 && !isHeroRaidActivity(row) && !isSeaMerchantActivity(row) && !isGuildShipActivity(row) && !row.automation) box.appendChild(el('p', 'dim', '当前活动暂未接入单次操作，可在游戏内参与。'));
@@ -474,7 +477,7 @@ function renderWeekChip(box, row) {
 function renderActivityTask(box, row, task) {
   const account = activitiesAccount, key = account + ':' + row.id + ':' + task.key;
   const item = el('div', 'activity-task');
-  item.appendChild(el('strong', null, task.label));
+  item.appendChild(el('strong', null, task.key === 'weekOrderFinal' ? '最终奖励' : task.label));
   const descriptions = {
     evilExpel: '清理当前可驱除的邪祟，并领取已达标的累计奖励。',
     edict: '完成当前解符对局；没有对局时，最多消耗 1 份贡品开局。',
@@ -497,7 +500,8 @@ function renderActivityTask(box, row, task) {
     weekHeroStar: '领取两位英雄星级都已达标的档位。',
     weekChipFree: '领取本期免费礼包。',
     weekUniqueFree: '领取本期免费礼包，翻牌需要手动选择目标，不自动进行。',
-    weekOrderFinal: '全部档位完成后领取最终奖励。',
+    weekOrderFinal: activitiesData.order?.finalReady ? '本期订单已全部完成，可以领取奖励。'
+      : activitiesData.order?.finished ? '本期最终奖励已领取。' : '完成本期全部订单后可领取。',
     weekOrderSubmit: '材料备齐后提交一次商人订单。',
     openRankRewards: '领取各个开服冲榜已达标的积分奖励。排名奖励由游戏在活动结束后发放。',
   };
@@ -506,7 +510,8 @@ function renderActivityTask(box, row, task) {
   const button = smallButton(pendingActivities.has(key) ? '执行中…' : task.key === 'edict' ? '解符一次（最多 1 份贡品）' : task.key === 'weekOrderSubmit' ? '提交商人订单' : task.key === 'weekOrderFinal' ? '领取最终奖励' : '执行一次');
   button.dataset.activityRun = task.key;
   button.disabled = pendingActivities.has(key) || snapshot.connected !== true || snapshot.paused || disconnected.has(account)
-    || activityLifecycle(row) !== 'active' || activitiesData.catalogOnly;
+    || activityLifecycle(row) !== 'active' || activitiesData.catalogOnly
+    || (task.key === 'weekOrderFinal' && !activitiesData.order?.finalReady);
   const spinInput = task.key === 'compassSpin' ? spinCountInput(account) : null;
   button.onclick = async () => {
     if (button.disabled || account !== current || snapshot.paused || disconnected.has(account) || pendingActivities.has(key)) return;
@@ -679,7 +684,9 @@ function renderMerchantSettings(box) {
     return;
   }
   const settings = merchantSettingsData.settings;
-  const section = el('div', 'activity-settings');
+  const section = el('div', 'activity-settings week-order-settings');
+  section.appendChild(el('h3', 'week-order-section-title', '自动设置'));
+  const fields = el('div', 'week-order-settings-grid');
   for (const [key, label] of [
     ['enabled', '开启自动挂机'],
     ['autoSubmit', '自动完成商人订单'],
@@ -696,11 +703,13 @@ function renderMerchantSettings(box) {
       if (current === account && !toggle.disabled) return saveMerchantSetting(key, !settings[key]);
     };
     row.append(toggle, el('span', null, label));
-    section.appendChild(row);
+    fields.appendChild(row);
   }
-  section.appendChild(el('p', 'dim', '钻石补料受全局钻石开关、每日预算和保留量限制。'));
+  section.appendChild(fields);
+  section.appendChild(el('p', 'dim week-order-hint', '钻石补料受全局钻石开关、每日预算和保留量限制。'));
   const status = el('p', 'dim', savingMerchantSettings.has(account) ? '正在保存…' : merchantSettingsStatus);
   status.setAttribute('role', 'status');
+  status.hidden = !status.textContent;
   section.appendChild(status);
   box.appendChild(section);
 }
@@ -1121,16 +1130,43 @@ async function saveGuildShipSetting(key, value) {
   }
 }
 
+function renderWeekOrderProgress() {
+  const section = $('activities-progress'), order = activitiesData.order;
+  section.hidden = false;
+  const stats = el('div', 'week-order-progress'), metric = el('dl'), value = el('dd');
+  const completed = Number.isSafeInteger(order?.completedCount) ? order.completedCount : null;
+  const total = Number.isSafeInteger(order?.totalCount) && order.totalCount > 0 ? order.totalCount : null;
+  value.append(el('span', 'week-order-count', completed === null ? '—' : String(completed)),
+    el('span', 'week-order-unit', total === null ? ' 单' : ' / ' + total + ' 单'));
+  metric.append(el('dt', null, '已完成订单'), value);
+  stats.appendChild(metric);
+  if (completed !== null && total !== null) {
+    const meter = el('progress', 'week-order-meter');
+    meter.max = total;
+    meter.value = Math.min(completed, total);
+    meter.setAttribute('aria-label', '本期订单完成进度');
+    meter.setAttribute('aria-valuetext', '已完成 ' + completed + ' 单，共 ' + total + ' 单');
+    stats.appendChild(meter);
+  }
+  stats.appendChild(el('p', 'dim', completed === null ? '订单进度待同步，请刷新活动。'
+    : total === null ? '本期累计完成 · 总数待同步' : '本期累计完成'));
+  section.appendChild(stats);
+}
+
 function renderActivityOrder() {
   const materials = clear($('activities-order')), data = activitiesData;
   if (data.order?.materials.length && !data.order.finished) {
-    materials.appendChild(el('p', 'dim', data.order.ready
-      ? '商人订单材料已齐，已预留整单用量，可提交订单或开启自动运行。'
-      : '商人订单尚缺材料，可按下方报价购买，也可由已开启的自动完成按配置补料。'));
-    const submit = smallButton('提交整单');
+    const heading = el('div', 'week-order-heading'), copy = el('div');
+    copy.appendChild(el('h3', 'week-order-section-title', '当前订单'));
+    copy.appendChild(el('p', 'dim', data.order.ready
+      ? '商人订单材料已齐，可提交整单。'
+      : '商人订单尚缺材料，可按下方报价购买，或由自动完成按配置补料。'));
+    const submit = smallButton('提交整单', false, true);
     submit.disabled = !data.order.ready;
     submit.onclick = () => confirmWeekOrderAction('submit');
-    materials.appendChild(submit);
+    heading.appendChild(copy);
+    heading.appendChild(submit);
+    materials.appendChild(heading);
     materials.appendChild(table(['材料', '需要', '库存', '还缺', '生产地点', '当前状态', '钻石购买'], data.order.materials.map(row => {
       const cost = row.price * row.missing, buy = smallButton(cost + ' 钻');
       buy.onclick = () => confirmWeekOrderAction('buy', { itemId: row.id, quantity: row.missing, cost });
@@ -1177,7 +1213,7 @@ async function refreshActivities() {
     setConsoleValue('activities', 'selectedActivity', activitySelections.get(account) || null);
     clear($('activity-tabs'));
     $('activity-panel').hidden = true;
-    for (const id of ['activities-list', 'activities-order']) clear($(id));
+    for (const id of ['activities-list', 'activities-order', 'activities-progress']) clear($(id));
     setConsoleValue('activities', 'merchantSettingsOwner', account);
     setConsoleValue('activities', 'merchantSettingsData', null);
     setConsoleValue('activities', 'merchantSettingsStatus', '');

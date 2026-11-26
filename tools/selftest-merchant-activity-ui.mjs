@@ -527,6 +527,35 @@ await test('活动详情仅呈现一套商人设置，回读原账号保存值',
   assert(!f.node('activities-list').textContent.includes('游戏配置'));
 });
 
+await test('商人订单展示真实完成数量和待同步状态，移除手动最终奖励区', async () => {
+  const f = fixture();
+  Object.assign(f.activities.order, { completedCount: 12, totalCount: 32 });
+  await f.api.refresh(); f.api.selectMerchant();
+  const progress = f.node('activities-progress');
+  assert.equal(progress.hidden, false);
+  assert.match(progress.textContent, /已完成订单12 \/ 32 单/);
+  assert.equal(progress.querySelector('progress').value, 12);
+  assert.equal(progress.querySelector('[data-activity-run=weekOrderFinal]'), null);
+  assert(!progress.textContent.includes('最终奖励'));
+  assert.equal(f.input('autoFinal').getAttribute('aria-checked'), 'true');
+  Object.assign(f.activities.order, { completedCount: 32, finished: true, finalReady: true, materials: [] });
+  await f.api.refresh();
+  assert.equal(progress.querySelector('progress').value, 32);
+  assert.equal(progress.querySelector('[data-activity-run=weekOrderFinal]'), null);
+  f.activities.order.finalReady = false;
+  await f.api.refresh();
+  assert.equal(progress.querySelector('progress').value, 32);
+  assert(!progress.textContent.includes('最终奖励'));
+  f.activities.order = null;
+  f.activities.orderError = '读取失败';
+  await f.api.refresh();
+  assert.match(progress.textContent, /已完成订单—/);
+  assert.equal(progress.querySelector('progress'), null);
+  f.context.snapshot.connected = false;
+  await f.api.refresh(); f.api.selectMerchant();
+  assert.equal(progress.hidden, true, '离线配置不保留上次订单进度');
+});
+
 await test('三个开关直接保存单字段并回读，关闭自动完成仍保留补料选择', async () => {
   const f = fixture();
   await f.api.refresh(); f.api.selectMerchant();

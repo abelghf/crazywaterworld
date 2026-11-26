@@ -209,7 +209,7 @@ export function activitiesPage() {
       <section id="activity-panel" role="tabpanel" tabIndex={0} hidden>
         <Card><CardHeader><div className="activity-heading"><CardTitle id="activity-title" /><span id="activity-kind" /></div><p id="activity-end" className="dim" /></CardHeader>
           <CardContent className="activity-content">
-            <div id="activity-detail"><div id="activities-list" className="activity-body" /><div id="activities-order" /></div>
+            <div id="activity-detail"><div id="activities-progress" hidden /><div id="activities-list" className="activity-body" /><div id="activities-order" /></div>
           </CardContent>
         </Card>
       </section>

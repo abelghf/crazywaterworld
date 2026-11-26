@@ -142,10 +142,15 @@ export async function readWeekOrder(client, week, config) {
   const current = active.find(row => row.type === 5);
   if (!current) return { needed, finished: false };
   const order = normalize(await client.request('WeekOrderInfoRequest', {}, 'WeekOrderInfoResponse'));
-  if (order?.isGotFinal) return { needed, finished: true };
   const prizes = config?.tables?.WeekOrderRwdCfg?.data?.filter(row => row.periodId === current.period && row.rwdId > 0);
+  const rewardIds = new Set(prizes?.map(row => row.rwdId));
+  const completedIds = new Set((order?.gotRwdId ?? []).filter(id => Number.isSafeInteger(id) && id > 0
+    && (!rewardIds.size || rewardIds.has(id))));
+  const progress = { completedCount: order?.isGotFinal && rewardIds.size ? rewardIds.size : completedIds.size,
+    totalCount: rewardIds.size || null };
+  if (order?.isGotFinal) return { needed, finished: true, ...progress };
   if (prizes?.length && prizes.every(row => order?.gotRwdId?.includes(row.rwdId))) {
-    return { needed, finished: true, finalReady: true };
+    return { needed, finished: true, finalReady: true, ...progress };
   }
   if (!order?.order?.length) throw new Error('未能确认当前商人订单的材料清单');
   for (const item of order.order) {
@@ -155,7 +160,7 @@ export async function readWeekOrder(client, week, config) {
   const identity = [current.period, current.startTime, current.endTime, order.gotRwdId, [...needed]];
   const orderKey = createHash('sha256').update(JSON.stringify(identity)).digest('hex');
   const evidence={period:current.period,startTime:current.startTime,endTime:current.endTime,rewards:[...(order.gotRwdId??[])]};
-  return { needed, finished: false, orderKey, evidence };
+  return { needed, finished: false, orderKey, evidence, ...progress };
 }
 
 // An order's requirements may be refreshed without completing it. Only an
@@ -433,8 +438,8 @@ async function activityDetails(client, config, week, activities, {
   }
   if (!week.some(row => row.type === 5)) return { activities, lottery, lotteryError, order: null };
   try {
-    const { needed, finished, finalReady, orderKey, evidence } = await readOrder();
-    if (finished) return { activities, lottery, lotteryError, order: { materials: [], finished, finalReady } };
+    const { needed, finished, finalReady, orderKey, evidence, completedCount, totalCount } = await readOrder();
+    if (finished) return { activities, lottery, lotteryError, order: { materials: [], finished, finalReady, completedCount, totalCount } };
     const stock = await readInventory();
 
     const materials = Array.from(needed, ([id, required]) => {
@@ -445,7 +450,7 @@ async function activityDetails(client, config, week, activities, {
         sources: config?.materialSources?.(id) ?? [], name: displayMaterial(config, id), required, owned,
         missing: Math.max(0, required - owned) };
     });
-    return { activities, lottery, lotteryError, order: { materials, finished, orderKey, evidence, ready: materials.every(m => m.missing === 0) } };
+    return { activities, lottery, lotteryError, order: { materials, finished, orderKey, evidence, completedCount, totalCount, ready: materials.every(m => m.missing === 0) } };
   } catch (error) {
     return { activities, lottery, lotteryError, order: null, orderError: error.message };
   }
