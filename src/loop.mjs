@@ -642,6 +642,8 @@ export async function runLoop(client, protocol, {
     }
     async function checkMerchant() {
       if (!merchantMonitor.due() || Date.now() < merchantRunAfter || !merchantActive()) return;
+      merchantMonitor.startRun(serverNowSeconds());
+      const actionSeconds = merchantMonitor.actionSeconds(getSettings());
       // 先推进下次检查，读取失败也不能在同一毫秒不断重新排队。
       merchantMonitor.defer(serverNowSeconds() + merchantMonitorSeconds(getSettings()));
       const label = automationTasks.find(task => task.key === 'merchantTrade').label;
@@ -660,12 +662,13 @@ export async function runLoop(client, protocol, {
           ledger: usageLedger, scheduler: rewards, settings: getSettings,
           get everyMs() { return getEveryMs() + workSeconds * 1000; },
           get merchantCadenceSeconds() {
-            return Math.min(Math.ceil(getEveryMs() / 1000), merchantMonitorSeconds(getSettings())) + workSeconds;
+            return actionSeconds;
           },
           enabled: merchantActive, report });
         if (!reported) report({ label, skipped: true, reason: '已检查，等待下一次海商王状态变化' });
       } catch (error) { report({ label, ok: false, error: error.message }); }
       finally {
+        merchantMonitor.finishRun();
         merchantRunAfter = Date.now() + 10_000;
         // 防抢窗口和确认到港后的采购可早于十秒推送节流，仍由同一串行队列执行。
         const priorityAt = merchantMonitor.priorityAt || Infinity, now = serverNowSeconds();

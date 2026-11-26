@@ -3,7 +3,7 @@ import { claimOnce } from './extra-free-rewards.mjs';
 import { checkedAction, clock, dayOf, digest, hasReward, moduleOpen, natural, positive, read, table, waiting, windowOpen } from './activity-actions.mjs';
 import { claimPass } from './seasonal-activities.mjs';
 import { observeFreePointers } from './merchant-free-pointers.mjs';
-import { merchantSpeedMode, merchantActionSeconds, merchantFinalCargoStart, merchantOpeningCargo, merchantPointerSeconds, merchantSettings, merchantTiming, planMerchant } from './merchant-planner.mjs';
+import { merchantSpeedMode, merchantActionSeconds, merchantDailyCloseWindow, merchantFinalCargoStart, merchantOpeningCargo, merchantPointerSeconds, merchantSettings, merchantTiming, planMerchant } from './merchant-planner.mjs';
 import { merchantClosingRoute, readMerchantDockBudget, runMerchantSpeed } from './merchant-speed.mjs';
 import { merchantActionMatches, merchantActionState, merchantFingerprint as fingerprint, quantity } from './merchant-action-state.mjs';
 import { rewardData } from './missing-rewards.mjs';
@@ -77,7 +77,8 @@ async function readMerchantPlan(config, event, state, time, ask, voyage, options
     openingCargoPids: voyage.openingCargoPids }, policy = merchantSettings(options.settings);
   let plan = planMerchant(config, event, state, marketSnapshot, effective, plannedAt, voyage.visited, inputs);
   // 当天来不及自然跑完一程时，试一程用针赶在收盘前成交的航次。库存或额度核对不过就照原计划隔夜或等待。
-  if (!voyage.openingCargoPids?.length && (plan.kind === 'wait' || plan.exploration || plan.mode === 'OVERNIGHT') && policy.autoSpeedUp && merchantSpeedMode(policy.speedUpMode) === 'goal' && !policy.fullCargoRoutes &&
+  if (!voyage.openingCargoPids?.length && (plan.kind === 'wait' || plan.exploration || plan.mode === 'OVERNIGHT') && policy.autoSpeedUp &&
+    (merchantSpeedMode(policy.speedUpMode) === 'goal' || merchantDailyCloseWindow(config, event, policy, plannedAt)?.active) && !policy.fullCargoRoutes &&
     timing.tradingOpen && positive(timing.travelSeconds) && positive(per) &&
     state.player?.profit < Math.min(MERCHANT_PROFIT_GOAL, policy.profitLimit || Infinity) &&
     plannedAt + timing.travelSeconds + (1 + 2 * (marketSnapshot.goods?.length ?? 0) + (state.player.goods?.length ?? 0)) * step >= timing.tradeEndTime) {
@@ -348,7 +349,16 @@ async function runMerchantActivity(client, config, ctx, quoteRevision) {
     }
     return;
   }
-  const onOutcome = data => recordMerchantTrade(ctx.ledger, { event, ...data, time: data.time ?? clock(client) });
+  const onOutcome = data => {
+    const now = clock(client), after = data.after;
+    if (!data.replay && data.status === 'confirmed' && allowed() &&
+      ['TradeBuyRequest', 'TradeSellRequest', 'TradeCargoUpgradeRequest'].includes(data.expected?.request) &&
+      after?.cargo?.moveEndTime <= now && (!after.cargo.moveToCityId || after.cargo.moveToCityId === after.cargo.cityId))
+      watchMerchant(client).observe({ event, state: { cargo: after.cargo,
+        player: { coins: after.coins, profit: after.profit, goods: after.goods } }, time: now, config,
+        settings: ctx.settings?.(), continuedTrade: true });
+    return recordMerchantTrade(ctx.ledger, { event, ...data, time: data.time ?? now });
+  };
   ctx = Object.assign(Object.create(ctx), { onMerchantOutcome: onOutcome });
   watchMerchant(client).observe({ event, state: info, time: clock(client), config, settings: ctx.settings?.() });
   // 已确认业务证据先持久化；统计写入失败或崩溃后仅补录，不重发游戏请求。
@@ -357,7 +367,7 @@ async function runMerchantActivity(client, config, ctx, quoteRevision) {
       record.details.journalRecorded || !record.details.before || !record.details.after) continue;
     try {
       onOutcome({ actionKey: key, expected: record.details.expected, before: record.details.before, after: record.details.after,
-        attemptedAt: record.details.attemptedAt, time: record.details.confirmedAt, actualDiamondSpent: record.details.actualDiamondSpent, status: 'confirmed' });
+        attemptedAt: record.details.attemptedAt, time: record.details.confirmedAt, actualDiamondSpent: record.details.actualDiamondSpent, status: 'confirmed', replay: true });
       ctx.ledger.resolveKey(key, true, { ...record.details, journalRecorded: true });
     } catch (error) { waiting(ctx, '已确认成交的统计暂未补录：' + error.message); }
   }
@@ -389,7 +399,7 @@ async function runMerchantActivity(client, config, ctx, quoteRevision) {
   if (!profitReached && !unloading && await upgrade()) return;
   const policyStamp = JSON.stringify(policy);
   const actionSeconds = () => positive(ctx.merchantCadenceSeconds)
-    ? Math.max(60, ctx.merchantCadenceSeconds)
+    ? ctx.merchantCadenceSeconds
     : merchantActionSeconds(ctx.settings?.(), Math.ceil((ctx.everyMs ?? 0) / 1000));
   const actionInterval = actionSeconds();
   const snapshot = (state, history = voyage(state)) => readMerchantPlan(config, event, state, clock(client),
@@ -408,6 +418,7 @@ async function runMerchantActivity(client, config, ctx, quoteRevision) {
   if (!allowed()) return waiting(ctx, '开关、账号或活动状态已变化');
   if (profitReached && !openingCargo) return waiting(ctx, '已达本期累计利润上限，本港共享已检查，领奖仍按独立开关执行');
   if (plan.kind === 'wait') return waiting(ctx, plan.reason);
+  const fleetRevision = watchMerchant(client).fleetRevision;
   const fresh = await getState();
   if (fresh.period !== event.period || !allowed()) return waiting(ctx, '期数或活动状态已变化');
   const verified = await snapshot(fresh);
@@ -426,6 +437,7 @@ async function runMerchantActivity(client, config, ctx, quoteRevision) {
     scope, before: state, label: verified.label, retainEvidence: true, attemptedAt: clock(client), onOutcome, now: () => clock(client),
     allowed: () => allowed() && (plan.kind === 'move' || tradingHours(config, clock(client))) &&
       epoch() === currentEpoch && quoteRevision?.() === verified.quoteRevision &&
+      (plan.kind === 'sell' || watchMerchant(client).fleetRevision === fleetRevision) &&
       JSON.stringify(merchantSettings(ctx.settings?.()?.merchant)) === policyStamp &&
       digest(ctx.ledger?.merchantEdits?.(verified.intelScope) ?? {}) === verified.intelVersion &&
       actionSeconds() === actionInterval &&
@@ -492,6 +504,7 @@ async function runMerchantActivity(client, config, ctx, quoteRevision) {
         const now = clock(client);
         const finalStart = merchantFinalCargoStart(merchantTiming(config, event, now), event, policy, current.player?.goods, plan.destination);
         const expedite = ['race', 'full'].includes(policy.speedUpMode) || (finalStart !== null && now >= finalStart) ||
+          (!verified.plannedOpening && merchantDailyCloseWindow(config, event, policy, now)?.active) ||
           (merchantSpeedMode(policy.speedUpMode) === 'goal' && current.player?.profit < Math.min(MERCHANT_PROFIT_GOAL, policy.profitLimit || Infinity));
         if (expedite || finalStart !== null)
           watchMerchant(client).observe({ event, state: current, time: now, config, settings: ctx.settings?.(), expedite });

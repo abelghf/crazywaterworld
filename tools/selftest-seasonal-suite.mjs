@@ -501,9 +501,10 @@ await test('同批货无利润寻价跨刷新与重载后不往返，换新货�
   assert.notEqual(legs[0].details.expected.cargoSignature, legs[1].details.expected.cargoSignature);
 });
 await test('动作预留后跨过整船采购或多批出售截止，取消发送且不遗留待确认记录', async () => {
-  for (const kind of ['buy', 'move']) {
+  for (const cadence of [10, 60]) for (const kind of ['buy', 'move']) {
     const f = setup();
-    f.client.tradeWindow.endTime = f.now + 7200 + (kind === 'buy' ? 190 : 130);
+    f.settings.merchant.monitorSeconds = cadence;
+    f.client.tradeWindow.endTime = f.now + 7200 + (kind === 'buy' ? 3 : 2) * cadence + 10;
     if (kind === 'move') {
       f.state.trade.player.coins = 0;
       f.state.trade.player.goods = [
@@ -535,7 +536,7 @@ await test('每轮间隔五分钟时停止来不及完成的采购，展示预�
   f.client.tradeWindow.endTime = f.now + 7200 + 190;
   const preview = () => merchantProgress(f.config, f.client.tradeWindow, f.state.trade, f.player, f.now,
     async name => name === 'TradeGuildRadar' ? f.state.radar : f.state.markets[f.state.trade.cargo.cityId], f.ledger, f.settings);
-  assert.match(await preview(), /计划买入：/, '一分钟轮询下此窗口足够采购、航行和出售');
+  assert.match(await preview(), /计划买入：/, '默认10秒估计下此窗口足够采购、航行和出售');
   f.settings.loop.everySeconds = 300;
   f.settings.merchant.monitorSeconds = 300;
   assert.doesNotMatch(await preview(), /计划买入：/, '五分钟轮询不能继续使用每步一分钟估计');
@@ -851,6 +852,7 @@ await test('贸易入口在采购或出售前先用实际余额升满，下一�
 });
 await test('自然航程仅够处理一批时按可实现高收益子集选港并到港售出', async () => {
   const f = setup();
+  f.settings.merchant.monitorSeconds = 60;
   f.settings.merchant.liquidationMinutes = 0;
   f.client.tradeWindow.endTime = f.now + 7200 + 90;
   f.state.trade.player.coins = 0;
@@ -876,6 +878,7 @@ await test('自然航程仅够处理一批时按可实现高收益子集选港�
 });
 await test('收盘前仅够买卖一种货时，按自然航行完成最高收益批次', async () => {
   const f = setup();
+  f.settings.merchant.monitorSeconds = 60;
   f.client.serverClockOffsetMs += (7 * 3600 + 56 * 60 + 45) * 1000;
   f.state.radar.radar[1].specGoodsId = 1008;
   f.state.markets[10].goods = [{ goodsId: 1001, price: 40, stock: 59900 }, { goodsId: 1004, price: 30, stock: 59700 }];
@@ -1073,6 +1076,7 @@ await test('买入回包丢失后玩家已换港出清，重启后从空船恢�
   assert.equal(journal.buys + journal.sells + journal.realizedProfit, 0);
   f.state.markets[20].goods[0].price = 30;
   f.state.radar.radar[0].rareGoodsId = 1001;
+  f.state.radar.radar[0].specGoodsId = 1002; // 恢复采购要有合适销港，不能把同货同时标成特产和紧缺。
   assert.doesNotMatch(await progress(), /前次操作|等待自动走商复核/);
   await run();
   assert.equal(f.state.writes.length, 2);
@@ -1127,6 +1131,27 @@ await test('发单复核时本港价格或库存有推送，本轮停止，下�
   assert.equal(f.state.trade.player.goods[0].buyPrice, 30);
   assert.equal(f.client.listenerCount('message'), 0);
 });
+await test('采购复核发现销港特产冲突则取消，确认买入后换港仍受现有货物约束', async () => {
+  const f = setup();
+  let radarReads = 0;
+  f.state.onRead = name => {
+    if (name !== 'TradeGuildRadar' || ++radarReads !== 2) return;
+    Object.assign(f.state.radar.radar[1], { specGoodsId: 1001, rareGoodsId: 1002 });
+  };
+  await f.run(merchantActivity, 'merchantTrade');
+  assert.deepEqual(f.state.writes, []);
+  assert.match(f.reports.at(-1).reason, /目的港已变化/);
+  f.state.onRead = null;
+  Object.assign(f.state.radar.radar[1], { specGoodsId: 1002, rareGoodsId: 1001 });
+  await f.run(merchantActivity, 'merchantTrade');
+  assert.equal(f.sent('TradeBuyRequest').length, 1);
+  assert(f.state.trade.player.goods.length > 0);
+  Object.assign(f.state.radar.radar[1], { specGoodsId: 1001, rareGoodsId: 1002 });
+  f.state.radar.radar.push({ cityId: 30, specGoodsId: 1003, rareGoodsId: 1001 });
+  await f.run(merchantActivity, 'merchantTrade');
+  assert.equal(f.sent('TradeMoveRequest').length, 1);
+  assert.equal(f.sent('TradeMoveRequest')[0].body.mvToCityId, 30);
+});
 await test('买入瞬间变价，按回包、批次数量与实际扣款核账', async () => {
   for (const price of [30, 43]) {
     const f = setup();
@@ -1163,7 +1188,8 @@ await test('预设走商在途遵守零针或库存加速，冲刺达标后仍�
     f.state.trade.cargo.cargoLv = 5;
     await run();
     assert.equal(f.sent('TradeSellRequest').length, 1);
-    f.state.markets[20].goods[0].price = 30;
+    f.state.markets[20] = { isReport: true, specGoodsId: 1002, rareGoodsId: 1001,
+      goods: [{ goodsId: 1002, price: 30, stock: 100 }] }; // 返程买20港特产，销往紧缺它的10港。
     await run();
     await run();
     assert.equal(f.sent('TradeMoveRequest').length, 2);
@@ -1262,10 +1288,10 @@ await test('手动选择省针追赶时，末日 21:15 从空船购货，用成�
   assert.equal(f.state.stock['海商王加速'], 7);
 });
 await test('次日仍开市的 20:30 改跑收盘前加速航次，当天成交，没有针时照常隔夜', async () => {
-  for (const pins of [10, 0]) {
+  for (const speedUpMode of ['goal', 'dailyClose', 'targetFirst']) for (const pins of [10, 0]) {
     const f = setup(), at = f.now + 8.5 * 3600; // 北京时间 20:30，自然航行 22:30 才到。
     const run = () => f.run(merchantActivity, 'merchantTrade');
-    Object.assign(f.settings.merchant, merchantPresets.find(p => p.id === 'sprint').settings.merchant, { speedUpMode: 'goal' });
+    Object.assign(f.settings.merchant, merchantPresets.find(p => p.id === 'sprint').settings.merchant, { speedUpMode });
     f.client.serverClockOffsetMs = at * 1000 - Date.now();
     f.state.stock['海商王加速'] = pins;
     await run();

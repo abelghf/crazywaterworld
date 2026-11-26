@@ -114,6 +114,7 @@ export function recordMerchantSnapshot(ledger, { event, state, market, radar, ti
   const journal = loadJournal(ledger, event);
   if (journal.snapshots.some(entry => entry.id === id)) return { recorded: false, reason: '本采样周期已有相同观察', id };
   const entry = { type: 'snapshot', id, event, time, marketEpoch: epoch, state: observed, settings: policy, actionSeconds: interval,
+    actionSecondsSource: 'planning-estimate',
     market: { ...marketData, observedAt, period: event.period, startTime: event.startTime, source: 'visited-port', confidence: 'observed' },
     radar: { ...radarData, observedAt: time, source: radarData.radar.some(port => port.manualIntel) ? 'guild-radar-with-manual-intel' : 'guild-radar',
       reportedAt: null, confidence: 'signal-only' } };

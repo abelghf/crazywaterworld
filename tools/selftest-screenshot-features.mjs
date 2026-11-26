@@ -80,13 +80,20 @@ try {
     }
     for (const change of [f => { f.settings.merchant.autoBuyPointers = false; }, f => f.balance(799),
       f => { f.settings.merchant.pointerDailyDiamondLimit = 799; },
-      f => { f.state.worldCargo[0].cargo.moveEndTime = at + 30; }, // 补购后下一轮已经追不上。
+      f => { f.state.worldCargo[0].cargo.moveEndTime = at + f.settings.merchant.monitorSeconds - 1; }, // 补购后下一轮已经追不上。
       f => f.hook(name => { if (name === 'TradeInfoRequest') f.state.worldCargo[0].cargo.moveToCityId = 30; })]) {
       const f = fixture();
       f.settings.merchant.speedUpMode = 'race';
       change(f);
       await f.run();
       assert.deepEqual(f.writes(), []);
+    }
+    for (const cadence of [10, 60]) {
+      const f = fixture();
+      Object.assign(f.settings.merchant, { speedUpMode: 'race', monitorSeconds: cadence });
+      f.state.worldCargo[0].cargo.moveEndTime = at + 30;
+      await f.run();
+      assert.deepEqual(f.writes(), cadence === 10 ? [{ name: 'TradeBuySpeedItemRequest', body: { buyNum: 4 } }] : []);
     }
   });
   await test('新增模块消费默认关闭，真实配置目录校验和独立参数持久化',()=>{
@@ -157,9 +164,10 @@ try {
       const f = fixture(); change(f); await f.run(); assert.deepEqual(f.writes(), []);
     }
   });
-  await test('库存足以达标时直接用针，差一币时按已开启的预算只补一根', async () => {
-    for (const gap of [3500, 3606]) {
+  await test('按实际成交节奏判断是否补针，已有针够达标或补购后赶不上均不多买', async () => {
+    for (const cadence of [10, 60]) for (const gap of [3500, 3606]) {
       const f = fixture(); f.stock(1);
+      f.settings.merchant.monitorSeconds = cadence;
       f.settings.merchant.estimateDiscountPercent = 10;
       f.event.endTime = at + 2700;
       f.state.cargo.moveEndTime = at + 4410;
@@ -167,13 +175,16 @@ try {
       f.state.player.goods.push({ ...f.state.player.goods[0], pid: 2, num: 1 });
       f.state.player.profit = 50_000_000 - gap;
       await f.run();
-      assert.deepEqual(f.writes().map(c => [c.name, c.body]), gap === 3500
+      assert.deepEqual(f.writes().map(c => [c.name, c.body]), cadence === 10 || gap === 3500
         ? [['TradeSpeedRequest', { useNum: 1 }]] : [['TradeBuySpeedItemRequest', { buyNum: 1 }]]);
     }
-    const f = fixture(); f.state.worldCargo = [];
-    f.event.endTime = at + 90;
-    assert.equal(f.writes().length, 0);
-    await f.run(); assert.deepEqual(f.writes(), [], '购针占本轮，下一轮已来不及卖货');
+    for (const cadence of [10, 60]) {
+      const f = fixture(); f.state.worldCargo = [];
+      f.settings.merchant.monitorSeconds = cadence;
+      f.event.endTime = at + cadence * 1.5;
+      assert.equal(f.writes().length, 0);
+      await f.run(); assert.deepEqual(f.writes(), [], '购针占本轮，下一轮已来不及卖货');
+    }
   });
   await test('自然领先、自己的船、外盟船和异港船都不会触发抢货消费',async()=>{
     for(const alter of [f=>f.state.worldCargo[0].cargo.moveEndTime=f.state.cargo.moveEndTime+120,
@@ -182,12 +193,15 @@ try {
       const f=fixture();alter(f);await f.run();assert.deepEqual(f.writes(),[]);
     }
   });
-  await test('空舱抢货只用改变顺位的最少指针，已有指针足够时直接使用',async()=>{
-    const f=fixture();f.state.player.goods=[];f.state.cargo.moveEndTime=at+1320;f.stock(3);
-    f.state.cargo.moveStartTime=f.state.cargo.moveEndTime-7200;
-    f.state.worldCargo.unshift({...f.state.worldCargo[0],playerId:'99998',
-      cargo:{...f.state.worldCargo[0].cargo,moveEndTime:at+10}});
-    await f.run();assert.deepEqual(f.writes().map(c=>[c.name,c.body]),[['TradeSpeedRequest',{useNum:1}]]);
+  await test('空舱抢货只用改变顺位的最少指针，赶不上最早一艘时不能忽略它',async()=>{
+    for (const lead of [10, 30]) {
+      const f=fixture();f.state.player.goods=[];f.state.cargo.moveEndTime=at+1320;f.stock(3);
+      f.state.cargo.moveStartTime=f.state.cargo.moveEndTime-7200;
+      f.state.worldCargo.unshift({...f.state.worldCargo[0],playerId:'99998',
+        cargo:{...f.state.worldCargo[0].cargo,moveEndTime:at+lead}});
+      await f.run();
+      assert.deepEqual(f.writes().map(c=>[c.name,c.body]), lead === 30 ? [['TradeSpeedRequest',{useNum:1}]] : []);
+    }
   });
   await test('只允许用背包指针与只准补一根分别按用户额度执行',async()=>{
     for(const [speed,buy,have,expected] of [

@@ -1115,12 +1115,12 @@ await test('海商王开关、整数、选择与时间逐项保存，非法输�
   const f = fixture();
   await f.api.refresh(); f.api.selectSea();
   await f.setSea('merchant.profitLimit', 123456);
-  await f.setSea('merchant.speedUpMode', 'arrival');
+  await f.setSea('merchant.speedUpMode', 'dailyClose');
   await f.setSea('merchant.firstDepartureMode', 'time');
   await f.setSea('merchant.firstDepartureTime', '09:15');
   await f.setSea('schedule.merchantRewards');
   await f.setSea('schedule.tradeTasks');
-  const expected = f.seaSettings({ profitLimit: 123456, speedUpMode: 'arrival', firstDepartureMode: 'time', firstDepartureTime: '09:15' },
+  const expected = f.seaSettings({ profitLimit: 123456, speedUpMode: 'dailyClose', firstDepartureMode: 'time', firstDepartureTime: '09:15' },
     { merchantRewards: false, tradeTasks: false }).settings;
   assert.deepEqual(f.seaSaved.get('merchant-a').settings, expected);
   const count = f.state.calls.filter(call => call.method === 'POST').length;
@@ -1130,7 +1130,7 @@ await test('海商王开关、整数、选择与时间逐项保存，非法输�
   assert.equal(f.state.calls.filter(call => call.method === 'POST').length, count);
   assert.equal(f.seaInput('merchant.profitLimit').valueAsNumber, 123456);
   assert.equal(f.seaInput('merchant.firstDepartureTime').value, '09:15');
-  assert.equal(f.seaInput('merchant.speedUpMode').value, 'arrival');
+  assert.equal(f.seaInput('merchant.speedUpMode').value, 'dailyClose');
   assert.deepEqual(f.seaSaved.get('merchant-b'), f.seaSettings({ profitLimit: 100 }, { merchantRewards: false }, 3));
 });
 

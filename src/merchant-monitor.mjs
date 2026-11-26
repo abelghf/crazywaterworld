@@ -1,5 +1,5 @@
 // 海商王推送仅使快照失效并唤醒现有串行调度，不在监听器中发送任何协议。
-import { merchantFinalCargoStart, merchantPointerSeconds, merchantTiming } from './merchant-planner.mjs';
+import { merchantDailyCloseWindow, merchantFinalCargoStart, merchantPointerSeconds, merchantTiming } from './merchant-planner.mjs';
 import { exactAutomationId } from './automation-policy.mjs';
 
 const watchers = new WeakMap();
@@ -9,7 +9,7 @@ const nowOf = client => Math.floor((Date.now() + (client.serverClockOffsetMs || 
 const eventKey = event => [event?.period ?? 0, event?.startTime ?? 0, event?.endTime ?? 0].join(':');
 export function merchantMonitorSeconds(settings) {
   const seconds = settings?.merchant?.monitorSeconds ?? settings?.monitorSeconds;
-  return positive(seconds) ? Math.max(10, Math.min(300, seconds)) : 60;
+  return positive(seconds) ? Math.max(10, Math.min(300, seconds)) : 10;
 }
 
 export function watchMerchant(client) {
@@ -18,6 +18,10 @@ export function watchMerchant(client) {
   let nextAt = 0, event = null, cityId = null, market = null, ports = new Set(), dirty = false, revision = 0;
   let attached = false, destination = null, fleetRevision = 0, quoteRevision = 0, quoteReaders = 0;
   let priorityAt = 0;
+  const durations = [], tradeDurations = [], delays = [];
+  let runStarted = 0, traded = false;
+  const sample = (values, value) => { values.push(Math.max(0, value)); if (values.length > 32) values.shift(); };
+  const upper = values => values.length ? [...values].sort((a, b) => a - b)[Math.ceil(values.length * 0.9) - 1] : 0;
   const inboundShips = new Set();
   const notify = reason => {
     for (const listener of listeners) { try { listener({ reason, revision, nextCheckAt: nextAt }); } catch {} }
@@ -33,12 +37,13 @@ export function watchMerchant(client) {
         quoteRevision++;
         invalidate('本港价格或联盟库存已变化');
       }
-    } else if (name === 'SCTradeCargoMove' && positive(destination)) {
+    } else if (name === 'SCTradeCargoMove') {
       const voyage = body?.cargo?.cargo;
       const shipId = exactAutomationId(body?.cargo?.playerId);
       const wasInbound = inboundShips.delete(shipId);
       if (shipId && voyage?.moveToCityId === destination) inboundShips.add(shipId);
-      if (wasInbound || voyage?.moveToCityId === destination || voyage?.cityId === destination) {
+      if (wasInbound || voyage?.moveToCityId === destination || voyage?.cityId === destination ||
+        ports.has(voyage?.moveToCityId) || ports.has(voyage?.cityId)) {
         fleetRevision++;
         invalidate('目的港商船航程已变化');
       }
@@ -50,7 +55,8 @@ export function watchMerchant(client) {
       invalidate('海商王活动期次或时间已变化');
     }
   };
-  const onClose = () => { event = null; cityId = null; destination = null; market = null; ports.clear(); inboundShips.clear(); priorityAt = 0; invalidate('连接已关闭'); };
+  const onClose = () => { event = null; cityId = null; destination = null; market = null; ports.clear(); inboundShips.clear();
+    durations.length = tradeDurations.length = delays.length = 0; priorityAt = 0; invalidate('连接已关闭'); };
   const attach = () => {
     if (attached) return;
     client.on?.('message', onMessage); client.on?.('close', onClose); attached = true;
@@ -61,6 +67,20 @@ export function watchMerchant(client) {
     off?.('message', onMessage); off?.('close', onClose); attached = false;
   };
   const monitor = {
+    startRun(time = nowOf(client)) {
+      if (nextAt > 0 && time >= nextAt) sample(delays, time - nextAt);
+      runStarted = Date.now();
+      traded = false;
+    },
+    finishRun() {
+      const elapsed = Math.max(1, Math.ceil((Date.now() - runStarted) / 1000));
+      sample(durations, elapsed);
+      if (traded) sample(tradeDurations, elapsed);
+    },
+    actionSeconds(settings) {
+      // 首次采用监控配置；已有样本按一轮实际读写耗时、排队延迟及一秒接续估算。
+      return durations.length ? Math.max(upper(durations), upper(tradeDurations)) + upper(delays) + 1 : merchantMonitorSeconds(settings);
+    },
     async trackQuotes(work) {
       quoteReaders++; attach();
       try { return await work(() => quoteRevision); }
@@ -82,6 +102,7 @@ export function watchMerchant(client) {
     invalidate,
     observe(input = {}) {
       const time = valid(input.time) ? input.time : nowOf(client);
+      if (input.continuedTrade) traded = true;
       if (eventKey(event) !== eventKey(input.event)) { market = null; destination = null; ports.clear(); inboundShips.clear(); }
       event = input.event ? { period: input.event.period, startTime: input.event.startTime, endTime: input.event.endTime } : null;
       const cargo = input.state?.cargo;
@@ -118,6 +139,10 @@ export function watchMerchant(client) {
       if (positive(event?.endTime) && event.endTime > time) deadlines.push(event.endTime);
       if (input.config) {
         const timing = merchantTiming(input.config, event, time);
+        const close = merchantDailyCloseWindow(input.config, event, settings, time);
+        if (close && positive(destination) && cargo?.moveEndTime > time)
+          priorityAt = Math.min(priorityAt || Infinity, close.active ? Math.min(cargo.moveEndTime,
+            time + merchantMonitorSeconds(input.settings)) : close.refreshAt);
         const finalStart = merchantFinalCargoStart(timing, event, settings, input.state?.player?.goods, destination);
         if (finalStart !== null && cargo?.moveEndTime > Math.max(time, finalStart)) {
           const checkAt = time < finalStart ? finalStart : cargo.moveEndTime;
@@ -126,7 +151,7 @@ export function watchMerchant(client) {
         if (positive(timing.nextRefreshAt) && timing.nextRefreshAt > time) deadlines.push(timing.nextRefreshAt);
         if (positive(timing.tradeStartTime) && timing.tradeStartTime > time) deadlines.push(timing.tradeStartTime);
       }
-      if (input.openingBatchRemoved || (settings?.autoSpeedUp && input.expedite)) priorityAt = time + 1;
+      if (input.continuedTrade || input.openingBatchRemoved || (settings?.autoSpeedUp && input.expedite)) priorityAt = time + 1;
       if (priorityAt) deadlines.push(priorityAt);
       if (positive(input.plan?.nextCheckAt) && input.plan.nextCheckAt > time) {
         deadlines.push(input.plan.nextCheckAt);
@@ -138,7 +163,8 @@ export function watchMerchant(client) {
       return nextAt;
     },
     snapshot() { return { event: event && { ...event }, cityId, market: market && structuredClone(market),
-      ports: [...ports], invalidated: dirty, nextCheckAt: nextAt, revision }; }
+      ports: [...ports], invalidated: dirty, nextCheckAt: nextAt, revision,
+      cadence: { samples: durations.length, requestSecondsP90: Math.max(upper(durations), upper(tradeDurations)), queueSecondsP90: upper(delays) } }; }
   };
   watchers.set(client, monitor);
   return monitor;

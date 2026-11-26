@@ -3,6 +3,7 @@ export function merchantPresetSettings(defaults, version = 'current') {
   const legacy = version === true || version === 'legacy';
   const current = !legacy && version !== 'v70';
   const common = { ...defaults, enabled: true, fullCargoRoutes: false, autoUpgrade: true, autoShareIntel: true,
+    monitorSeconds: current ? 10 : 60,
     estimateDiscountPercent: 10, autoBuyPointers: false, pointerDailyDiamondLimit: 0, profitLimit: 0,
     knownPortChains: !legacy, minPurchaseReturnPercent: legacy ? 0 : 5, firstDepartureWaitMinutes: legacy ? 29 : 0 };
   return {
