@@ -829,6 +829,7 @@ try {
       expected.merchant.knownPortChains = true;
       expected.merchant.minPurchaseReturnPercent = 0;
       expected.merchant.speedUpIntelPorts = 0;
+      expected.merchant.closeBeforeRest = true;
       expected.guildShip.checkEverySeconds = 60;
       expected.afk = { claimIntervalHours: 0 };
       expected.seasonMerit = { enabled: false, targetRank: 0, leadMinutes: 0 };
@@ -863,6 +864,27 @@ try {
     const invalid = structuredClone(legacy);
     invalid.settings.merchant.fullCargoRoutes = 'false';
     assert.throws(() => importAutomationSettings(invalid), error => !!error.fields?.['merchant.fullCargoRoutes']);
+  });
+  test('第75版收市开关缺项默认开启，显式关闭及原策略、额度跨保存保留', () => {
+    for (const value of [undefined, false, true]) {
+      const old = defaultSettings();
+      Object.assign(old.merchant, { speedUpMode: 'eventFree', autoSpeedUp: false, dailyPointerLimit: 7, periodPointerLimit: 19 });
+      if (value === undefined) delete old.merchant.closeBeforeRest;
+      else old.merchant.closeBeforeRest = value;
+      const expected = structuredClone(old);
+      expected.merchant.closeBeforeRest = value ?? true;
+      const entry = { revision: 5, settingsVersion: 75, settings: old };
+      fs.writeFileSync(file, JSON.stringify({ version: 75, accounts: { ship: entry, other: entry } }));
+      const bytes = fs.readFileSync(file);
+      const loaded = loadRecoverableAutomationSettings('ship', { file, expected: true });
+      assert.equal(loaded.recovery, undefined);
+      assert.deepEqual(loaded.settings, expected);
+      assert.deepEqual(fs.readFileSync(file), bytes, '读取迁移不改写文件');
+      assert.deepEqual(importAutomationSettings({ format: SETTINGS_FORMAT, version: 75, settings: old }), expected);
+      saveAutomationSettings('ship', loaded.settings, { file, revision: loaded.revision });
+      assert.deepEqual(loadAutomationSettings('ship', { file }).settings, expected);
+      assert.deepEqual(JSON.parse(fs.readFileSync(file)).accounts.other, entry);
+    }
   });
   test('第51版自设指针收益门槛可从存档、导出文件和旧页面草稿中移除', () => {
     const expected = defaultSettings();
@@ -950,7 +972,7 @@ try {
     assert.equal(from70().schedule.seasonCardDaily, true);
   });
   test('版本1升级后重复迁移保持一致，保留有效的用户值', () => {
-    assert.equal(SETTINGS_SCHEMA_VERSION, 75);
+    assert.equal(SETTINGS_SCHEMA_VERSION, 76);
     const settings = legacySettings();
     settings.factory.checkEverySeconds = 270;
     settings.resources.diamondDailyLimit = 1234;

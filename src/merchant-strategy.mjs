@@ -1,6 +1,6 @@
 import { clock, dayOf, natural, positive, read, table, waiting, windowOpen } from './activity-actions.mjs';
 import { refreshOrderMaterialSpends } from './order-reservations.mjs';
-import { merchantTiming } from './merchant-planner.mjs';
+import { merchantDailyCloseWindow, merchantTiming } from './merchant-planner.mjs';
 import { watchMerchant } from './merchant-monitor.mjs';
 import { merchantActionState, merchantFingerprint } from './merchant-action-state.mjs';
 
@@ -52,7 +52,8 @@ export function merchantStrategyPlan(plan, config, event, state, policy, time, l
         '首趟等待盈利商品或共享商情，稍后按参考价配货或换港寻价', nextCheckAt: at };
     }
   }
-  if ((plan.kind === 'move' || swap) && !plan.plannedOpening && policy.speedUpMode === 'arrival' && today.some(record =>
+  const closingLeg = positive(plan.accelerationRequired) && merchantDailyCloseWindow(config, event, policy, time)?.active;
+  if ((plan.kind === 'move' || swap) && !plan.plannedOpening && !closingLeg && policy.speedUpMode === 'arrival' && today.some(record =>
     merchantTiming(config, event, record.details.expected.start).marketEpoch === timing.marketEpoch))
     return { kind: 'wait', reason: '本次刷新周期已经出航，等待下一次刷新', nextCheckAt: timing.nextRefreshAt };
   return plan;

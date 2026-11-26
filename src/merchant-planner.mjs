@@ -23,6 +23,7 @@ export const MERCHANT_DEFAULTS = Object.freeze({
   maxLossPercent: 0,
   minExpectedProfit: 1,
   autoSpeedUp: false,
+  closeBeforeRest: true,
   keepPointers: 0,
   speedUpMode: 'deadline', guardLastPointer: false, speedUpMaxPerLeg: 4, monitorSeconds: 10,
   refreshWindowMinutes: 8, dailyPointerLimit: 28, periodPointerLimit: -1, speedUpIntelPorts: 0, autoBuyPointers: false, pointerDailyDiamondLimit: 0,
@@ -36,7 +37,7 @@ export function merchantSpeedMode(value = MERCHANT_DEFAULTS.speedUpMode) {
 }
 
 export const merchantDailyCloseEnabled = settings => settings?.autoSpeedUp === true &&
-  ['dailyClose', 'targetFirst'].includes(settings.speedUpMode);
+  (settings.closeBeforeRest ?? MERCHANT_DEFAULTS.closeBeforeRest) === true;
 
 // 以配置中当天最后一次开市内刷新为起点；活动夜间结束时，末日仍是最后一个实际交易日。
 export function merchantDailyCloseWindow(config, event, settings, time) {
@@ -519,7 +520,7 @@ export function planMerchant(config, event, state, market, radar, time, visited 
   // 更早航次留下的滞销批次仍可留仓，不能堵住其他货物的正常出售。
   const carriesLocalSpecialtyConflict = port => player.goods.some(b => b.cityId === cargo.cityId && b.goodsId === port.specGoodsId);
   const closing = positive(options.closingPointers) && settings.autoSpeedUp &&
-    (merchantSpeedMode(settings.speedUpMode) === 'goal' || settings.speedUpMode === 'dailyClose' && dailyClose?.active);
+    (merchantSpeedMode(settings.speedUpMode) === 'goal' || dailyClose?.active);
   const travel = closing ? Math.max(actionSeconds, timing.travelSeconds - options.closingPointers * merchantPointerSeconds(config)) :
     timing.travelSeconds ?? Infinity;
   const arrival = time + travel;
