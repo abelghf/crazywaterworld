@@ -21,6 +21,7 @@ const config = [
   'tools/selftest-resource-updater.mjs',
   'tools/selftest-protocol-dropin.mjs',
   'tools/selftest-protocol-updates.mjs',
+  'tools/selftest-protocol-v77.mjs',
   'tools/selftest-protocol-refresh-http.mjs',
   'tools/selftest-settings-runtime.mjs',
   'tools/selftest-unified-action-migration.mjs',

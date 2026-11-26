@@ -39,6 +39,7 @@ const cases = [
   ['selftest-console-version-http.mjs'],
   ['selftest-console-version-ui.mjs'],
   ['selftest-protocol-updates.mjs'],
+  ['selftest-protocol-v77.mjs'],
   ['selftest-protocol-dropin.mjs'],
   ['selftest-protocol-refresh-http.mjs'],
   ['selftest-resource-version.mjs'],
