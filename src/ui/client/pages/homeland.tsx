@@ -444,10 +444,9 @@ function Homeland({ account }: { account: string }) {
               工坊仓库 {data.warehouse.used} /{" "}
               {data.warehouse.capacity ?? "容量待同步"}。{data.supplyReason}{" "}
               暂存物品按后续订单需要取回。
-              备料步数按当前订单、仓库权限与成品保留规则计算。
+              备料步数按当前订单、可用空间与成品保留规则计算。
               生产产物可能随机，每次生产后重新规划。 今日生产体力{" "}
-              {data.staminaBudget.used} / {data.staminaBudget.limit}，保留{" "}
-              {data.staminaBudget.keep}。
+              {data.staminaUsed}，按实际剩余体力继续生产。
             </p>
           </section>
 

@@ -2814,7 +2814,7 @@ export function createConsole({ host = '127.0.0.1', port = 17321, onLog, recover
               else actions.push({ label: action.detail, kind: 'homeland', costs: action.coinCost ? [{ name: '家园币', num: action.coinCost }]
                 : action.staminaCost ? [{ name: '工坊体力', num: action.staminaCost }] : [] });
             }
-            if (settings.loop.world && settings.homeland.enabled && settings.homeland.submitOrders && settings.homeland.mergeOrders)
+            if (settings.loop.world && settings.homeland.enabled && settings.homeland.submitOrders)
               for (const order of view.orders) {
                 if (order.synthesis?.reason) notes.push(`订单 ${order.slot + 1}：${order.synthesis.reason}`);
                 else if (order.synthesis?.steps > 0) notes.push(`订单 ${order.slot + 1}：${order.synthesis.status === 'optimal' ? '备料最少' : '可行方案'} ${order.synthesis.steps} 步${order.synthesis.status === 'feasible' ? '，尚未证明步数最少' : ''}`);

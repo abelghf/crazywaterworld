@@ -12,7 +12,7 @@ function setup(board = ['鱼4', '鱼1'], bag = ['鱼1'], request = order('鱼2')
   f.state.cells = board.map((id, cellId) => ({ cellId, state: 2, ...(id ? { piece: { uid: cellId + 1, pieceCfgId: id } } : {}) }));
   f.state.warehouse = bag.map((pieceCfgId, i) => ({ uid: 100 + i, pieceCfgId }));
   f.state.warehouseCapacity = capacity; f.state.orders = [request];
-  Object.assign(f.settings.homeland, { enabled: true, submitOrders: true, mergeOrders: true, takeWarehouse: true, warehouseBuffer: true });
+  Object.assign(f.settings.homeland, { enabled: true, submitOrders: true });
   return f;
 }
 const read = f => readHomeland(f.client, h.config, f.options);
@@ -27,14 +27,12 @@ const finish = async f => {
 let passed = 0;
 const test = async (name, fn) => { await fn(); passed++; console.log('通过：' + name); };
 try {
-  await test('73 版升级保留原合成开关，中转默认关闭且独立保存', async () => {
-    const f = setup(); delete f.settings.homeland.warehouseBuffer;
+  await test('73 版保留订单开关，旧中转选项不再影响完整订单流程', async () => {
+    const f = setup(); f.settings.homeland.warehouseBuffer = false;
     const upgraded = importAutomationSettings({ format: SETTINGS_FORMAT, version: 73, settings: f.settings });
-    assert.equal(upgraded.homeland.mergeOrders, true); assert.equal(upgraded.homeland.warehouseBuffer, false);
-    upgraded.homeland.warehouseBuffer = true;
-    assert.equal(importAutomationSettings(exportAutomationSettings(upgraded)).homeland.warehouseBuffer, true);
-    upgraded.homeland.warehouseBuffer = 1;
-    assert.throws(() => exportAutomationSettings(upgraded));
+    assert.equal(upgraded.homeland.submitOrders, true); assert(!Object.hasOwn(upgraded.homeland, 'warehouseBuffer'));
+    assert.deepEqual(importAutomationSettings(exportAutomationSettings(upgraded)), upgraded);
+    await finish(f);
   });
   await test('满棋盘暂存一件闲置物后合成交单，后续订单按需取回', async () => {
     const f = setup(); const view = await read(f);
@@ -77,7 +75,7 @@ try {
     for (const f of [full, unknown, producer, bottle, tooMany, incomplete]) { await run(f); assert.equal(f.state.writes.length, 0); }
   });
   await test('所有父开关、发送前暂停和订单到期阻止存入，容量变化与陈旧棋子拒绝', async () => {
-    for (const key of ['enabled', 'submitOrders', 'mergeOrders', 'takeWarehouse', 'warehouseBuffer']) {
+    for (const key of ['enabled', 'submitOrders']) {
       const f = setup(); f.settings.homeland[key] = false; await run(f); assert.equal(f.state.writes.length, 0, key);
       const g = setup(); const action = await buffer(g);
       g.state.beforeWrite = () => { g.settings.homeland[key] = false; };

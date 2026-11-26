@@ -37,7 +37,6 @@ export function parseHomeland(value: unknown) {
   if (!flag(data.available))
     return { available: false as const, reason: text(data.reason) };
   const budget = record(data.budget);
-  const staminaBudget = record(data.staminaBudget);
   const warehouse = record(data.warehouse);
   const tech = data.tech === null ? null : record(data.tech);
   return {
@@ -62,11 +61,7 @@ export function parseHomeland(value: unknown) {
       limit: count(budget.limit),
       keep: count(budget.keep),
     },
-    staminaBudget: {
-      used: count(staminaBudget.used),
-      limit: count(staminaBudget.limit),
-      keep: count(staminaBudget.keep),
-    },
+    staminaUsed: count(data.staminaUsed),
     warehouse: {
       used: count(warehouse.used),
       capacity: warehouse.capacity === null ? null : count(warehouse.capacity),

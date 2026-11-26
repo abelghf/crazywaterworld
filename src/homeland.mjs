@@ -285,8 +285,7 @@ function plan(config, state, options) {
       if (used + coinCost > pref.dailyCoinLimit) reason ||= '今日家园币预算不足';
     }
     if (evidence.staminaCost) {
-      if (state.stamina - evidence.staminaCost < pref.keepStamina) reason ||= '工坊体力不足或低于保留量';
-      if (usedStamina + evidence.staminaCost > pref.dailyStaminaLimit) reason ||= '今日工坊生产体力预算不足';
+      if (state.stamina < evidence.staminaCost) reason ||= '工坊体力不足';
     }
     if (requests[kind].some(name => !options.protocol?.[name] && !options.clientProtocol?.[name])) reason ||= '当前协议缺少此操作';
     if (kind === 'warehouseBuffer' && [...requests.takeWarehouse, ...requests.mergeOrders].some(name => !options.protocol?.[name] && !options.clientProtocol?.[name]))
@@ -348,8 +347,8 @@ function plan(config, state, options) {
     }
     return { slot: order.slot, limited: order.orderType === 1, expiresAt, requirements: needs, ready: ready && !expired, synthesis: null };
   });
-  const mergePlans = planHomelandMerges(config, state, { takeWarehouse: pref.takeWarehouse, warehouseBuffer: pref.warehouseBuffer });
-  const productionPlans = planHomelandProduction(config, state, pref, mergePlans, usedStamina);
+  const mergePlans = planHomelandMerges(config, state, { takeWarehouse: true, warehouseBuffer: true });
+  const productionPlans = planHomelandProduction(config, state, mergePlans);
   for (const recipe of mergePlans.map(merge => {
     const production = productionPlans.find(row => row.slot === merge.slot);
     return production ? { ...merge, ...production, status: 'production', steps: null, lowerBound: null, forProduction: true } : merge;
@@ -357,7 +356,7 @@ function plan(config, state, options) {
     const order = orders.find(row => row.slot === recipe.slot), next = recipe.next;
     order.synthesis = { merges: recipe.merges, stores: recipe.stores, takes: recipe.takes, steps: recipe.steps,
       status: recipe.status, lowerBound: recipe.lowerBound, reason: recipe.reason || (recipe.forProduction
-        ? `原料不足，${pref.produceOrders ? '按订单逐件生产并继续合成' : '可手动补料，自动执行需开启「按订单生产原料」'}` : '') };
+        ? '原料不足，按订单逐件生产并继续合成' : '') };
     if (!next) continue;
     const evidence = { order: orderIdentity(recipe.order), orderSlot: recipe.slot, forMerge: true, forProduction: recipe.forProduction === true, forProducer: next.forProducer === true };
     if (next.kind === 'takeWarehouse') {
@@ -411,10 +410,8 @@ function plan(config, state, options) {
   const coinNeed = actions.filter(action => ['clean', 'tech'].includes(action.kind) && pref[action.kind]
     && (action.kind !== 'tech' || action.target <= pref.targetTech) && /家园币不足/.test(action.reason)
     && used + action.coinCost <= pref.dailyCoinLimit).map(action => Math.max(0, pref.keepCoins + action.coinCost - state.coins));
-  const staminaNeed = pref.produceOrders && pref.submitOrders && pref.mergeOrders && usedStamina < pref.dailyStaminaLimit
-    && productionPlans.some(row => /工坊体力不足/.test(row.reason))
-    ? Math.max(1, pref.keepStamina + 1 - state.stamina) : 0;
-  const supply = planHomelandSupplies(config, state, pref, { stamina: staminaNeed, coins: coinNeed.length ? Math.min(...coinNeed) : 0 });
+  const staminaNeed = pref.submitOrders && productionPlans.some(row => /工坊体力不足/.test(row.reason)) ? 1 : 0;
+  const supply = planHomelandSupplies(config, state, { stamina: staminaNeed, coins: coinNeed.length ? Math.min(...coinNeed) : 0 });
   if (supply.next) {
     const next = supply.next, evidence = { forSupply: true };
     if (next.kind === 'mergeSupplies') {
@@ -448,7 +445,7 @@ function plan(config, state, options) {
     freeBoxClaimed: freeProducts.length > 0 && freeProducts.every(row => row.limit > 0 && row.bought >= row.limit),
     pending: pending.map(([, row]) => row.details?.label ?? '家园操作'),
     budget: { used, limit: pref.dailyCoinLimit, keep: pref.keepCoins }, checkedAt: new Date().toISOString(),
-    staminaBudget: { used: usedStamina, limit: pref.dailyStaminaLimit, keep: pref.keepStamina },
+    staminaUsed: usedStamina,
   };
 }
 const publicView = view => ({ ...view, actions: view.actions.map(({ body, expected, key, ...action }) => action) });
@@ -476,8 +473,6 @@ export async function executeHomeland(client, config, options) {
   const action = view.actions.find(row => row.id === id);
   if (!action || action.token !== token || action.reason) return { status: 'rejected', message: action?.reason || '家园状态已变化，请刷新后重试' };
   const permitted = () => active()
-    && (action.kind !== 'warehouseBuffer' || settingsOf(options).warehouseBuffer && settingsOf(options).takeWarehouse)
-    && (!action.forProducer || settingsOf(options).buildProducers)
     && (!options.automatic || homelandEnabled(options.getSettings()) && homelandActionEnabled(settingsOf(options), action));
   const [request, response] = requests[action.kind];
   const step = { kind: 'homeland', request, body: action.body, label: action.detail,
@@ -495,15 +490,14 @@ export async function executeHomeland(client, config, options) {
     hold = ledger.reserve(action.coinCost ? { homelandCoins: action.coinCost }
       : ['produceOrders', 'openSupplies'].includes(action.kind) ? { homelandStamina: action.staminaCost, homelandProductions: 1 }
         : action.kind === 'takeRewards' ? { homelandRewardTakes: 1 } : {},
-      { homelandCoins: settingsOf(options).dailyCoinLimit, homelandStamina: settingsOf(options).dailyStaminaLimit }, {},
+      { homelandCoins: settingsOf(options).dailyCoinLimit }, {},
       { uniqueKey: action.key, details: { expected: action.expected, label: action.detail } });
     const beforeSend = () => {
       const latest = settingsOf(options);
       if (!permitted() || (action.expected.day !== undefined && dayOf(clock(client)) !== action.expected.day)
         || (action.coinCost && (final.coins - action.coinCost < latest.keepCoins
           || ledger.snapshot().counters.homelandCoins > latest.dailyCoinLimit))
-        || (action.staminaCost && (final.stamina - action.staminaCost < latest.keepStamina
-          || ledger.snapshot().counters.homelandStamina > latest.dailyStaminaLimit))) throw Object.assign(Error('开关、预算、日期或连接已变化'), { notSent: true });
+        || (action.staminaCost && final.stamina < action.staminaCost)) throw Object.assign(Error('开关、资源、预算、日期或连接已变化'), { notSent: true });
       if (action.orderSlot !== null) {
         const order = final.orders.find(row => row.slot === action.orderSlot);
         if (!order || (count(order.expireTs ?? 0, '订单到期时间') > 0 && count(order.expireTs, '订单到期时间') <= clock(client))) throw Object.assign(Error('订单已到期'), { notSent: true });
@@ -584,7 +578,7 @@ export async function runHomeland(client, config, options) {
         || Number(b.recipeStep || b.forMerge) - Number(a.recipeStep || a.forMerge))[0];
       if (!action) {
         const waiting = candidates.map(row => row.reason);
-        if (current.submitOrders && current.mergeOrders) waiting.push(...view.orders.map(row => row.synthesis?.reason));
+        if (current.submitOrders) waiting.push(...view.orders.map(row => row.synthesis?.reason));
         if (current.useSupplies) waiting.push(view.supplyReason);
         if (dailyOnly && !view.pending.length && (!current.freeStamina || view.freeStaminaClaimed)
           && (!current.freeBox || view.freeBoxClaimed)) options.ledger.markDailyCompletion(completion);

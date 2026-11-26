@@ -23,8 +23,8 @@ export function homelandSupplyBox(config, id) {
     ? { ...cfg, outputs: outputs.map(row => row.pieceId) } : null;
 }
 
-export function planHomelandSupplies(config, state, pref, { stamina = 0, coins = 0 } = {}) {
-  const { byId, stock } = homelandMergeModel(config, state, pref.takeWarehouse, pref.warehouseBuffer);
+export function planHomelandSupplies(config, state, { stamina = 0, coins = 0 } = {}) {
+  const { byId, stock } = homelandMergeModel(config, state, true, true);
   const items = [...stock.values()].flat().filter(piece => homelandSupplyReward(byId.get(piece.id)))
     .map(piece => ({ piece, row: byId.get(piece.id), reward: homelandSupplyReward(byId.get(piece.id)) }));
   const board = items.filter(item => item.piece.location === 'board');

@@ -109,44 +109,21 @@ try {
   assert.equal((await h.api('settings')).data.settings.homeland.freeStamina, false);
   assert.equal(posts.length, 3, '保存总开关不执行游戏操作');
   assert.doesNotMatch(await settings.textContent(), /尚未选择执行动作/);
-  assert(await settings.locator('#config-field-homeland-takeWarehouse').isVisible(), '仓库取料独立展示，补给无需先展开交单设置');
-  assert(await settings.locator('#config-field-homeland-takeWarehouse').isEnabled());
-  for (const key of ['submitOrders', 'mergeOrders']) {
+  const retired = ['mergeOrders', 'produceOrders', 'buildProducers', 'takeWarehouse', 'warehouseBuffer', 'keepStamina', 'dailyStaminaLimit'];
+  for (const key of retired) assert.equal(await settings.locator('#config-field-homeland-' + key).count(), 0, key);
+  for (const key of ['submitOrders', 'useSupplies']) {
     await page.locator('#config-state').filter({ hasText: '配置已同步' }).waitFor();
     const toggle = settings.locator('#config-field-homeland-' + key);
-    if (key === 'mergeOrders' && !await toggle.isVisible()) await settings.getByRole('button', { name: '自动提交工坊订单，展开下级设置' }).click();
     assert.equal(await toggle.getAttribute('aria-checked'), 'false');
-    const [savedToggle] = await Promise.all([
-      page.waitForResponse(response => new URL(response.url()).pathname === '/api/settings' && response.request().method() === 'POST'),
-      toggle.click(),
-    ]);
-    assert.equal(savedToggle.status(), 200);
-    assert.equal((await h.api('settings')).data.settings.homeland[key], true);
-  }
-  assert.equal((await h.api('settings')).data.settings.homeland.takeWarehouse, false);
-  for (const key of ['takeWarehouse', 'warehouseBuffer', 'produceOrders']) {
-    await page.locator('#config-state').filter({ hasText: '配置已同步' }).waitFor();
-    const toggle = settings.locator('#config-field-homeland-' + key);
-    if (!await toggle.isVisible()) await settings.getByRole('button', { name: '按订单需求自动合成，展开下级设置' }).click();
-    assert.equal(await toggle.getAttribute('aria-checked'), 'false');
-    const [savedToggle] = await Promise.all([
-      page.waitForResponse(response => new URL(response.url()).pathname === '/api/settings' && response.request().method() === 'POST'),
-      toggle.click(),
-    ]);
-    assert.equal(savedToggle.status(), 200);
-    assert.equal((await h.api('settings')).data.settings.homeland[key], true);
-  }
-  assert.equal(posts.length, 3, '保存自动合成开关不立即执行游戏操作');
-  for (const key of ['buildProducers', 'useSupplies']) {
-    await page.locator('#config-state').filter({ hasText: '配置已同步' }).waitFor();
-    const toggle = settings.locator('#config-field-homeland-' + key);
-    if (!await toggle.isVisible()) await settings.getByRole('button', { name: '按订单生产原料，展开下级设置' }).click();
     const [savedToggle] = await Promise.all([
       page.waitForResponse(response => new URL(response.url()).pathname === '/api/settings' && response.request().method() === 'POST'), toggle.click(),
     ]);
     assert.equal(savedToggle.status(), 200);
-    assert.equal((await h.api('settings')).data.settings.homeland[key], true);
+    const storedSettings = (await h.api('settings')).data.settings.homeland;
+    assert.equal(storedSettings[key], true);
+    for (const field of retired) assert(!Object.hasOwn(storedSettings, field));
   }
+  assert.equal(posts.length, 3, '保存订单总开关不立即执行游戏操作');
   await page.setViewportSize({ width: 320, height: 900 });
   assert(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), '配置页不能横向溢出');
   await page.screenshot({ path: path.join(output, 'settings-320.png'), fullPage: true });
@@ -182,7 +159,7 @@ try {
   await panel.getByText(/工坊仓库 2 \/ 5/).waitFor();
   assert.equal(posts.length, 4);
   assert.equal(state.writes.filter(row => row.name === 'DualCombinePutToWarehouseRequest').length, 1);
-  console.log('通过：仓库中转开关保存、手机计划与容量展示、单步暂存和回读刷新');
+  console.log('通过：订单默认支持仓库中转、手机计划与容量展示、单步暂存和回读刷新');
   state.cells = [{ cellId: 0, state: 2, piece: { uid: 900, pieceCfgId: '钩1' } }, { cellId: 1, state: 2 }, { cellId: 2, state: 2 }];
   state.warehouse = []; state.stamina = 10;
   state.orders = [{ slot: 0, orderId: 15, reqs: [{ pieceCfgId: '鱼2', count: 1 }] }];
@@ -196,7 +173,7 @@ try {
   const produced = page.waitForResponse(response => new URL(response.url()).pathname === '/api/homeland/action');
   await produceButton.evaluate(button => { button.click(); button.click(); });
   assert.equal((await produced).status(), 200);
-  await panel.getByText(/今日生产体力 1 \/ 500/).waitFor();
+  await panel.getByText(/今日生产体力 1，按实际剩余体力继续生产/).waitFor();
   assert.equal(posts.length, 5); assert.equal(state.stamina, 9);
   assert.equal(state.writes.filter(row => row.name === 'DualCombineProduceRequest').length, 1);
   await produceButton.click();
@@ -204,7 +181,7 @@ try {
   await panel.getByRole('button', { name: '提交订单', exact: true }).click();
   await panel.getByText('当前没有工坊订单，稍后刷新查看。').waitFor();
   assert.equal(state.stamina, 8); assert.equal(posts.length, 8);
-  console.log('通过：生产开关保存、手机端体力费用与非最优状态、双击防重、生产后合成并交单');
+  console.log('通过：订单默认生产、手机端体力费用与非最优状态、双击防重、生产后合成并交单');
   state.cells = [{ cellId: 0, state: 2, piece: { uid: 1200, pieceCfgId: '体力瓶5' } }, { cellId: 1, state: 2 }];
   state.stamina = 0; state.orders = []; state.warehouse = [];
   await panel.getByRole('button', { name: '刷新家园', exact: true }).click();
@@ -217,7 +194,7 @@ try {
   assert.equal((await used).status(), 200);
   await useSupply.waitFor({ state: 'detached' });
   assert.equal(state.stamina, 100); assert.equal(posts.length, 9);
-  console.log('通过：新开关保存、手机端补给展示与单步领取、双击只增加一次体力');
+  console.log('通过：简化开关保存、手机端补给展示与单步领取、双击只增加一次体力');
   assert.equal(errors.length, 0, errors.join('\n'));
   console.log('通过：360/320 像素布局、家园配置保存且不连带开启细项、无页面脚本错误');
 } finally { if (browser) await browser.close(); await h.close(); }

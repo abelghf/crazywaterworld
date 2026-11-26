@@ -6,9 +6,9 @@ const ordinary = row => row && ['普通', '产品'].includes(row.type);
 // Production is stochastic. Keep the deterministic A* solution whenever one
 // exists; otherwise take one useful step and plan again from the server reply.
 // Exact products reserved for all orders remain available for delivery.
-export function planHomelandProduction(config, state, pref, mergePlans, usedStamina = 0, traversal = {}) {
+export function planHomelandProduction(config, state, mergePlans, traversal = {}) {
   const modelConfig = traversal.modelConfig ?? config;
-  const { byId, previous, stock, halves, requests } = homelandMergeModel(modelConfig, state, pref.takeWarehouse, pref.warehouseBuffer);
+  const { byId, previous, stock, halves, requests } = homelandMergeModel(modelConfig, state, true, true);
   const actual = new Map(table(config, 'DualCombinePieceCfg').map(row => [row.pieceId, row]));
   const producers = state.cells.filter(cell => cell.state === 2 && actual.get(cell.piece?.id)?.type === '生产器');
   const configs = table(config, 'DualCombineProduceCfg'), libraries = table(config, 'DualCombineProduceLibCfg');
@@ -71,8 +71,7 @@ export function planHomelandProduction(config, state, pref, mergePlans, usedStam
       if (!natural(cell.piece.produceCdTs) || !remainingKnown) reason = '生产器次数或冷却状态未同步';
       else if (cell.piece.produceCdTs > state.now) reason = `生产器冷却中，剩余 ${Math.ceil(cell.piece.produceCdTs - state.now)} 秒`;
       else if (cfg.count > 0 && cell.piece.produceLeft === 0) reason = '生产器次数已用完，等待游戏同步';
-      else if (state.stamina - cfg.cost < pref.keepStamina) reason = '工坊体力不足或低于保留量';
-      else if (usedStamina + cfg.cost > pref.dailyStaminaLimit) reason = '今日工坊生产体力预算不足';
+      else if (state.stamina < cfg.cost) reason = '工坊体力不足';
       if (reason) { blocked.push(reason); continue; }
       candidates.push({ kind: 'produceOrders', producer: { ...cell.piece, cellId: cell.cellId },
         staminaCost: cfg.cost, count: cfg.count, cd: cfg.cd,
@@ -82,8 +81,8 @@ export function planHomelandProduction(config, state, pref, mergePlans, usedStam
     const producer = candidates[0];
     if (producer && state.emptyCells > 0) return [{ ...result, next: producer }];
     if (!producer && !transfers.length) {
-      if (pref.buildProducers && !blocked.length) {
-        const built = planProducerChain(config, state, pref, missing, usedStamina, traversal);
+      if (!blocked.length) {
+        const built = planProducerChain(config, state, missing, traversal);
         if (built?.next) return [{ ...result, ...built, next: { ...built.next, forProducer: true } }];
         if (built?.reason) return [{ ...result, reason: built.reason }];
       }
@@ -93,8 +92,6 @@ export function planHomelandProduction(config, state, pref, mergePlans, usedStam
     // Reserve space for the next useful action only. Prefer unrelated pieces,
     // then high-level intermediates; stored products retain their UID and are
     // reconsidered by A* after every confirmed production or transfer.
-    if (!pref.takeWarehouse || !pref.warehouseBuffer)
-      return [{ ...result, reason: '棋盘空间不足，请开启仓库取料与中转或整理棋盘' }];
     if (!positive(state.warehouseCapacity)) return [{ ...result, reason: '仓库容量未确认，等待同步后腾位' }];
     if (state.warehouse.length >= state.warehouseCapacity) return [{ ...result, reason: '仓库已满，无法为生产腾位' }];
     const incoming = transfers[0]?.piece.id;
@@ -107,7 +104,7 @@ export function planHomelandProduction(config, state, pref, mergePlans, usedStam
   });
 }
 
-function planProducerChain(config, state, pref, missing, usedStamina, traversal) {
+function planProducerChain(config, state, missing, traversal) {
   const path = traversal.path ?? [], budget = traversal.budget ?? { left: 48 };
   if (path.length >= 8 || budget.left <= 0) return { reason: '生产器依赖规划达到搜索上限，等待下次检查' };
   const pieces = table(config, 'DualCombinePieceCfg'), byId = new Map(pieces.map(row => [row.pieceId, row]));
@@ -147,7 +144,7 @@ function planProducerChain(config, state, pref, missing, usedStamina, traversal)
     // Retain excluded warehouse occupancy; such pieces cannot be consumed or
     // fetched as part of the synthetic goal.
     if (positive(plannedState.warehouseCapacity)) plannedState.warehouseCapacity -= state.warehouse.length - plannedState.warehouse.length;
-    const plans = planHomelandMerges(modelConfig, plannedState, { ...pref, targetSlot: slot, searchLimits: { maxExpanded: 1500, maxStates: 5000, maxMilliseconds: 15 } });
+    const plans = planHomelandMerges(modelConfig, plannedState, { takeWarehouse: true, warehouseBuffer: true, targetSlot: slot, searchLimits: { maxExpanded: 1500, maxStates: 5000, maxMilliseconds: 15 } });
     const plan = plans.find(row => row.slot === slot);
     if (plan?.next) candidates.push({ next: plan.next, steps: plan.steps ?? Infinity, reason: `先备好${target.name}，再生产订单原料` });
     else if (plan?.status === 'unreachable') deferred.push({ modelConfig, plannedState, plans, slot, target });
@@ -156,10 +153,10 @@ function planProducerChain(config, state, pref, missing, usedStamina, traversal)
   let blockedReason = '';
   for (const item of deferred) {
     if (budget.left <= 0) break;
-    const next = planHomelandProduction(config, item.plannedState, pref, item.plans, usedStamina,
+    const next = planHomelandProduction(config, item.plannedState, item.plans,
       { modelConfig: item.modelConfig, slot: item.slot, path: [...path, item.target.pieceId], budget })[0];
     if (next?.next) return { next: next.next, reason: `先为${item.target.name}备料，再衔接订单生产` };
-    if (/体力|预算|冷却/.test(next?.reason)) blockedReason ||= next.reason;
+    if (/体力|冷却/.test(next?.reason)) blockedReason ||= next.reason;
   }
   return sources.length ? { reason: blockedReason || (budget.left <= 0 ? '生产器依赖规划达到搜索上限，等待下次检查' : '缺少合成所需生产器的材料或可用空间') } : null;
 }

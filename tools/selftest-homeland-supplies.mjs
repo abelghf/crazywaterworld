@@ -45,8 +45,7 @@ const setup = (ids, goals = []) => {
     produceLeft: tables.DualCombineProduceCfg.find(row => row.produceid === id)?.count || -1, produceCdTs: 0 } } : {}) }));
   f.state.warehouse = []; f.state.chest = []; f.state.stamina = 50;
   f.state.orders = goals.length ? [{ slot: 0, orderId: 1, reqs: goals.map(pieceCfgId => ({ pieceCfgId, count: 1 })) }] : [];
-  Object.assign(f.settings.homeland, { enabled: true, submitOrders: true, mergeOrders: true, produceOrders: true, buildProducers: true,
-    useSupplies: true, takeWarehouse: true, warehouseBuffer: true });
+  Object.assign(f.settings.homeland, { enabled: true, submitOrders: true, useSupplies: true });
   return f;
 };
 const read = f => readHomeland(f.client, config, f.options);
@@ -69,16 +68,20 @@ const drain = async f => {
 let passed = 0;
 async function test(name, work) { await work(); console.log('通过：' + name); passed++; }
 try {
-  await test('旧配置保留原有生产权限，新补给和生产器合成默认关闭', async () => {
-    const old = defaultSettings(); delete old.homeland.buildProducers; delete old.homeland.useSupplies; old.homeland.produceOrders = true;
-    const migrated = importAutomationSettings({ format: SETTINGS_FORMAT, version: 75, settings: old });
-    assert.equal(migrated.homeland.buildProducers, false); assert.equal(migrated.homeland.useSupplies, false);
-    assert.equal(migrated.homeland.produceOrders, true);
+  await test('旧配置保留订单与补给选择，清理废弃子开关和体力限制', async () => {
+    for (const version of [72, 74, 75, 76, 77, 78]) {
+      const old = defaultSettings(); Object.assign(old.homeland, { submitOrders: true, produceOrders: false, buildProducers: false, keepStamina: 9999, dailyStaminaLimit: 0 });
+      const before = structuredClone(old);
+      const migrated = importAutomationSettings({ format: SETTINGS_FORMAT, version, settings: old });
+      assert.equal(migrated.homeland.submitOrders, true); assert.equal(migrated.homeland.useSupplies, false);
+      for (const key of ['mergeOrders','produceOrders','buildProducers','takeWarehouse','warehouseBuffer','keepStamina','dailyStaminaLimit']) assert(!Object.hasOwn(migrated.homeland, key));
+      assert.deepEqual(old, before);
+    }
   });
-  await test('先合成生产器，再产料合成交单，默认关闭时不擅自制造', async () => {
-    const f = setup(['滤材1', '滤材1', null, null], ['水2']); f.settings.homeland.buildProducers = false;
+  await test('先合成生产器，再产料合成交单，订单关闭时不擅自制造', async () => {
+    const f = setup(['滤材1', '滤材1', null, null], ['水2']); f.settings.homeland.submitOrders = false;
     await run(f); assert.equal(f.state.writes.length, 0);
-    f.settings.homeland.buildProducers = true; await drain(f);
+    f.settings.homeland.submitOrders = true; await drain(f);
     assert.equal(f.state.orders.length, 0);
     assert.deepEqual(f.state.writes.map(row => row.name), ['DualCombineMoveRequest', 'DualCombineProduceRequest', 'DualCombineProduceRequest', 'DualCombineMoveRequest', 'DualCombineSubmitOrderRequest']);
     assert.equal(f.state.stamina, 48); assert.equal(f.ledger.snapshot().uncertain, 0);
@@ -100,7 +103,7 @@ try {
     const f = setup([null, null, null], ['滤材1']);
     const view = await readHomeland(f.client, c, f.options);
     assert(!view.actions.some(row => row.forProduction && !row.reason)); assert.equal(f.state.writes.length, 0);
-    for (const gate of ['buildProducers', 'produceOrders', 'mergeOrders', 'submitOrders', 'enabled']) {
+    for (const gate of ['submitOrders', 'enabled']) {
       const g = setup(['滤材1', '滤材1', null], ['水1']);
       const next = await action(g, 'mergeOrders'); assert(next.forProducer);
       g.state.beforeWrite = () => { g.settings.homeland[gate] = false; };
@@ -124,9 +127,6 @@ try {
       assert.equal(full.state.writes[0].name, 'DualCombineMoveRequest');
       const stored = setup(['滤材2', '鱼3', '鱼4'], ['鱼2']);
       stored.state.warehouse = [{ uid: 990, pieceCfgId: '滤材2', produceLeft: 2, produceCdTs: 0 }];
-      stored.settings.homeland.warehouseBuffer = false;
-      assert(!(await read(stored)).actions.some(row => row.forProducer && !row.reason));
-      stored.settings.homeland.warehouseBuffer = true;
       const park = await action(stored, 'warehouseBuffer'); assert(park.forProducer);
       assert.equal((await send(stored, park)).status, 'confirmed');
       const fetch = await action(stored, 'takeWarehouse'); assert(fetch.forProducer);
@@ -146,12 +146,12 @@ try {
     const chain = setup(['打捞1', '体力瓶3', null, null, null], ['水2']); chain.state.stamina = 0;
     await drain(chain); assert.equal(chain.state.orders.length, 0); assert.equal(chain.state.stamina, 11);
     const capped = setup(['钩1', '体力瓶1', null, null], ['鱼2']); capped.state.stamina = 0;
-    capped.settings.homeland.dailyStaminaLimit = 0; await run(capped);
-    assert.equal(capped.state.writes.length, 0, '预算用尽时不为无法继续的生产提前领取低级体力瓶');
+    capped.settings.homeland.submitOrders = false; await run(capped);
+    assert.equal(capped.state.writes.length, 0, '订单关闭时不提前领取低级体力瓶');
   });
   await test('领取奖励区资源箱，免费产出五次并合并，空间不足不盲目取物', async () => {
     const f = setup([null, null, null, null, null, null]); f.state.chest = ['体力箱1'];
-    f.settings.homeland.dailyStaminaLimit = 0; await drain(f);
+    await drain(f);
     assert.equal(f.state.chest.length, 0); assert.equal(f.state.stamina, 50);
     assert.equal(f.state.writes.filter(row => row.name === 'DualCombineProduceRequest').length, 5);
     assert(!f.state.cells.some(row => row.piece?.pieceCfgId === '体力箱1'));
@@ -162,13 +162,13 @@ try {
   await test('补给独立于交单开关；可取仓库配对，家园币不足时领取后升级科技', async () => {
     const f = setup(['体力瓶1', null, null]); f.state.warehouse = [{ uid: 990, pieceCfgId: '体力瓶1' }];
     f.settings.homeland.submitOrders = false; await drain(f);
-    assert.deepEqual(automationControlView(f.settings).find(row => row.key === 'homeland.takeWarehouse').blockedBy, []);
+    assert.deepEqual(automationControlView(f.settings).find(row => row.key === 'homeland.useSupplies').blockedBy, []);
     assert.deepEqual(f.state.writes.map(row => row.name), ['DualCombineTakeFromWarehouseRequest', 'DualCombineMoveRequest']);
     const g = setup(['金币5', null, null]); g.state.coins = 0; g.settings.homeland.tech = true; g.settings.homeland.targetTech = 1;
     await drain(g); assert.equal(g.state.home.techLevel, 1); assert.equal(g.state.coins, 12);
     assert.equal(g.ledger.snapshot().counters.homelandCoins, 50);
   });
-  await test('补给发送前关闭、暂停及陈旧棋子均不消耗，仓库权限独立生效', async () => {
+  await test('补给发送前关闭、暂停及陈旧棋子均不消耗，仓库取用跟随补给开关', async () => {
     for (const gate of ['useSupplies', 'enabled', 'pause']) {
       const f = setup(['体力瓶5', null]); const next = await action(f, 'useSupplies');
       f.state.beforeWrite = () => { if (gate === 'pause') f.enabled = false; else f.settings.homeland[gate] = false; };
@@ -176,7 +176,7 @@ try {
     }
     const f = setup(['体力瓶5', null]); const next = await action(f, 'useSupplies'); f.state.cells[0].piece.uid++;
     assert.equal((await send(f, next)).status, 'rejected'); assert.equal(f.state.writes.length, 0);
-    const g = setup([null, null]); g.state.warehouse = [{ uid: 99, pieceCfgId: '体力瓶5' }]; g.settings.homeland.takeWarehouse = false;
+    const g = setup([null, null]); g.state.warehouse = [{ uid: 99, pieceCfgId: '体力瓶5' }]; g.settings.homeland.useSupplies = false;
     await run(g); assert.equal(g.state.writes.length, 0);
   });
   await test('领取响应丢失可用棋子消耗与库存共同确认，只有余额变化不能确认', async () => {

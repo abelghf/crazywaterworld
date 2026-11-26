@@ -13,7 +13,7 @@ function setup(board, orders, warehouse = []) {
   f.state.cells = board.map((row, id) => cell(id, Array.isArray(row) ? row[0] : row, Array.isArray(row) ? row[1] : 2));
   f.state.orders = orders;
   f.state.warehouse = warehouse.map((pieceCfgId, index) => ({ pieceCfgId, uid: index + 100 }));
-  Object.assign(f.settings.homeland, { enabled: true, submitOrders: true, mergeOrders: true });
+  Object.assign(f.settings.homeland, { enabled: true, submitOrders: true });
   return f;
 }
 const read = f => readHomeland(f.client, h.config, f.options);
@@ -24,15 +24,12 @@ const mergeAction = async f => (await read(f)).actions.find(row => row.kind === 
 let passed = 0;
 const test = async (name, fn) => { await fn(); passed++; console.log('通过：' + name); };
 try {
-  await test('72 版配置保留已开启交单，自动合成默认关闭且可独立往返保存', async () => {
-    const f = setup(['鱼1', '鱼1'], [order('鱼2')]);
-    delete f.settings.homeland.mergeOrders;
+  await test('72 版保留订单总开关，移除旧合成开关后默认完成合成', async () => {
+    const f = setup(['鱼1', '鱼1'], [order('鱼2')]); f.settings.homeland.mergeOrders = false;
     const migrated = importAutomationSettings({ format: SETTINGS_FORMAT, version: 72, settings: f.settings });
-    assert.equal(migrated.homeland.submitOrders, true); assert.equal(migrated.homeland.mergeOrders, false);
-    migrated.homeland.mergeOrders = true;
-    assert.equal(importAutomationSettings(exportAutomationSettings(migrated)).homeland.mergeOrders, true);
-    migrated.homeland.mergeOrders = 'true'; assert.throws(() => importAutomationSettings(exportAutomationSettings(migrated)));
-    await run(f); assert.equal(f.state.writes.length, 0);
+    assert.equal(migrated.homeland.submitOrders, true); assert(!Object.hasOwn(migrated.homeland, 'mergeOrders'));
+    assert.deepEqual(importAutomationSettings(exportAutomationSettings(migrated)), migrated);
+    await run(f); assert.equal(f.state.orders.length, 0);
   });
   await test('真实协议多级合成后自动交单，兼容保留源 UID、目标 UID 和新 UID', async () => {
     for (const uid of ['source', 'target', 'new']) {
@@ -68,28 +65,26 @@ try {
       await run(f); assert.equal(f.state.writes.length, 0); assert.deepEqual(f.state.cells, before);
     }
   });
-  await test('仓库合成原料沿用取料开关，关闭合成不取料，完整链路逐步确认', async () => {
+  await test('订单关闭时不取料，开启后默认从仓库取料并合成交单', async () => {
     const f = setup([null, null], [order('鱼2')], ['鱼1', '鱼1']);
-    await run(f); assert.equal(f.state.writes.length, 0);
-    f.settings.homeland.takeWarehouse = true; f.settings.homeland.mergeOrders = false;
-    await run(f); assert.equal(f.state.writes.length, 0);
-    f.settings.homeland.mergeOrders = true; await run(f);
+    f.settings.homeland.submitOrders = false; await run(f); assert.equal(f.state.writes.length, 0);
+    f.settings.homeland.submitOrders = true; await run(f);
     assert.deepEqual(f.state.writes.map(row => row.name), ['DualCombineTakeFromWarehouseRequest', 'DualCombineTakeFromWarehouseRequest', 'DualCombineMoveRequest', 'DualCombineSubmitOrderRequest']);
   });
   await test('先在满棋盘合成腾位，仓库所需空位不足时不取一半材料堵盘', async () => {
-    const f = setup(['鱼1', '鱼1'], [order('鱼3')], ['鱼2']); f.settings.homeland.takeWarehouse = true;
+    const f = setup(['鱼1', '鱼1'], [order('鱼3')], ['鱼2']);
     await run(f); assert.equal(f.state.writes[0].name, 'DualCombineMoveRequest'); assert.equal(f.state.orders.length, 0);
-    const g = setup(['钩1', null], [order('鱼2')], ['鱼1', '鱼1']); g.settings.homeland.takeWarehouse = true;
-    assert.match((await read(g)).orders[0].synthesis.reason, /需要 2 个空位/);
+    const g = setup(['钩1', null], [order('鱼2')], ['鱼1', '鱼1']);
+    assert.match((await read(g)).orders[0].synthesis.reason, /没有可暂存的普通棋子/);
     await run(g); assert.equal(g.state.writes.length, 0);
   });
-  await test('陈旧棋子 UID、发送前关闭合成、订单到期均取消且不占用账本', async () => {
+  await test('陈旧棋子 UID、发送前关闭订单或总开关、订单到期均取消且不占用账本', async () => {
     const f = setup(['鱼1', '鱼1'], [order('鱼2')]); const stale = await mergeAction(f);
     f.state.cells[0].piece.uid = 90; assert.equal((await send(f, stale)).status, 'rejected');
-    for (const gate of ['merge', 'order', 'expired']) {
+    for (const gate of ['module', 'order', 'expired']) {
       const g = setup(['鱼1', '鱼1'], [order('鱼2', 0, 1, { expireTs: Math.floor(Date.now() / 1000) + 10 })]);
       g.state.beforeWrite = () => { if (gate === 'expired') g.client.serverClockOffsetMs += 20000;
-        else g.settings.homeland[gate === 'merge' ? 'mergeOrders' : 'submitOrders'] = false; };
+        else g.settings.homeland[gate === 'module' ? 'enabled' : 'submitOrders'] = false; };
       assert.equal((await send(g, await mergeAction(g), { automatic: true })).status, 'cancelled');
       assert.equal(g.state.writes.length, 0); assert.equal(g.ledger.snapshot().uncertain, 0);
     }

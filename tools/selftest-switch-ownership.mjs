@@ -130,7 +130,7 @@ try {
     const details = ['building.collect', 'building.upgrade', 'factory.produce', 'factory.demandFirst',
       'farm.harvest', 'farm.autoPlant', 'farm.customPlant', 'gather.fishing', 'gather.keyOpen',
       'museum.enabled', 'museum.unlockCases', 'museum.upgrade', 'museum.revenue', 'museum.achievements', 'museum.display', 'radar.enabled', 'radar.repairIdle',
-      'homeland.freeStamina', 'homeland.freeBox', 'homeland.submitOrders', 'homeland.takeWarehouse', 'homeland.unlockFloors', 'homeland.clean', 'homeland.tech', 'homeland.upgrade',
+      'homeland.freeStamina', 'homeland.freeBox', 'homeland.submitOrders', 'homeland.useSupplies', 'homeland.unlockFloors', 'homeland.clean', 'homeland.tech', 'homeland.upgrade',
       'heroes.level', 'heroes.star', 'heroes.skill', 'heroes.universal', 'resources.allowDiamonds',
       'alliance.autoHelp', 'silicon.fleets.0.enabled', 'silicon.fleets.1.huntEnabled'];
     const idleFields = new Set(idleAutomationControls.flatMap(control => control.fields));

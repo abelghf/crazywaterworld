@@ -13,7 +13,7 @@ function setup(board = ['钩1', null, null, null], goals = ['鱼3']) {
       ...(pieceCfgId === '钩2' ? { produceLeft: 2 } : pieceCfgId === '钩1' ? { produceLeft: -1 } : {}) } } : {}) }));
   f.state.warehouse = []; f.state.stamina = 50;
   f.state.orders = [{ slot: 0, orderId: 1, reqs: goals.map(pieceCfgId => ({ pieceCfgId, count: 1 })) }];
-  Object.assign(f.settings.homeland, { enabled: true, submitOrders: true, mergeOrders: true, produceOrders: true, takeWarehouse: true, warehouseBuffer: true });
+  Object.assign(f.settings.homeland, { enabled: true, submitOrders: true });
   return f;
 }
 const read = (f, config = h.config) => readHomeland(f.client, config, f.options);
@@ -48,16 +48,14 @@ try {
     for (const cell of ordinary.state.cells) cell.piece.produceLeft = -1;
     await run(ordinary); assert.deepEqual(ordinary.state.writes.map(row => row.name), [merge, submit]);
   });
-  await test('旧配置不自动启用体力消费，开启后从生产器连续生产、合成并交单', async () => {
-    const old = defaultSettings(); delete old.homeland.produceOrders; delete old.homeland.keepStamina; delete old.homeland.dailyStaminaLimit;
-    old.homeland.mergeOrders = true;
+  await test('只需开启订单，默认从生产器连续生产、合成并交单', async () => {
+    const old = defaultSettings(); Object.assign(old.homeland, { submitOrders: true, produceOrders: false, keepStamina: 9999, dailyStaminaLimit: 0 });
     const migrated = importAutomationSettings({ format: SETTINGS_FORMAT, version: 74, settings: old });
-    assert.equal(migrated.homeland.produceOrders, false); assert.equal(migrated.homeland.mergeOrders, true);
-    const f = setup(); f.settings.homeland.produceOrders = false;
+    assert.equal(migrated.homeland.submitOrders, true); assert(!Object.hasOwn(migrated.homeland, 'produceOrders'));
+    const f = setup(); f.settings.homeland.submitOrders = false;
     const preview = await read(f); assert.equal(preview.orders[0].synthesis.status, 'production');
-    assert.match(preview.orders[0].synthesis.reason, /开启/); assert.equal(f.state.writes.length, 0);
-    await run(f); assert.equal(f.state.writes.length, 0);
-    f.settings.homeland.produceOrders = true; await run(f);
+    assert.equal(f.state.writes.length, 0); await run(f); assert.equal(f.state.writes.length, 0);
+    f.settings.homeland.submitOrders = true; await run(f);
     assert.equal(f.state.orders.length, 0); assert.equal(f.state.stamina, 46);
     assert.deepEqual(f.state.writes.map(row => row.name), [produce, produce, merge, produce, produce, merge, merge, submit]);
     assert.equal(f.state.cells[0].piece.pieceCfgId, '钩1');
@@ -116,13 +114,14 @@ try {
       const x = setup(); x.state.cells[0].state = lock; await run(x); assert.equal(x.state.writes.length, 0);
     }
   });
-  await test('体力保留、每日预算、冷却与仓库容量限制均在生产前生效', async () => {
-    const f = setup(); f.settings.homeland.keepStamina = 49; await run(f);
-    assert.equal(f.state.writes.filter(row => row.name === produce).length, 1);
-    assert.match((await read(f)).orders[0].synthesis.reason, /体力不足|保留/);
-    const g = setup(); g.settings.homeland.dailyStaminaLimit = 1; await run(g);
-    assert.equal(g.state.writes.filter(row => row.name === produce).length, 1);
-    assert.match((await read(g)).orders[0].synthesis.reason, /预算/);
+  await test('体力按余额消耗，旧上限不再阻断；冷却和仓库容量继续生效', async () => {
+    const f = setup(); f.state.stamina = 1; await run(f);
+    assert.equal(f.state.writes.filter(row => row.name === produce).length, 1); assert.equal(f.state.stamina, 0);
+    assert.match((await read(f)).orders[0].synthesis.reason, /体力不足/);
+    const g = setup(); Object.assign(g.settings.homeland, { dailyStaminaLimit: 0, keepStamina: 99999 });
+    const hold = g.ledger.reserve({ homelandStamina: 600 }); g.ledger.confirm(hold);
+    await run(g); assert.equal(g.state.orders.length, 0); assert.equal(g.state.stamina, 46);
+    assert.equal(g.ledger.confirmedCounters().homelandStamina, 604);
     const cd = setup(); cd.state.cells[0].piece.produceCdTs = Math.floor(Date.now() / 1000) + 600;
     await run(cd); assert.equal(cd.state.writes.length, 0); assert.match((await read(cd)).orders[0].synthesis.reason, /冷却/);
     cd.client.serverClockOffsetMs += 601000; await run(cd); assert.equal(cd.state.orders.length, 0);
@@ -132,15 +131,13 @@ try {
     await run(impossible); assert.equal(impossible.state.writes.length, 0);
     assert.match((await read(impossible)).orders[0].synthesis.reason, /同时放下订单成品/);
   });
-  await test('陈旧生产计划、发送前关闭开关、调低预算、订单到期或断线均不发送', async () => {
+  await test('陈旧生产计划、发送前关闭开关、订单到期或断线均不发送', async () => {
     const stale = setup(), old = await nextProduction(stale); stale.state.cells[0].piece.uid++;
     assert.equal((await send(stale, old)).status, 'rejected'); assert.equal(stale.state.writes.length, 0);
-    for (const gate of ['produceOrders', 'mergeOrders', 'submitOrders', 'enabled', 'budget', 'reserve', 'expiry', 'connection', 'day']) {
+    for (const gate of ['submitOrders', 'enabled', 'expiry', 'connection', 'day']) {
       const f = setup(); f.state.orders[0].expireTs = Math.floor(Date.now() / 1000) + 60;
       f.state.beforeWrite = () => {
-        if (gate === 'budget') f.settings.homeland.dailyStaminaLimit = 0;
-        else if (gate === 'reserve') f.settings.homeland.keepStamina = 50;
-        else if (gate === 'expiry') f.client.serverClockOffsetMs += 61000;
+        if (gate === 'expiry') f.client.serverClockOffsetMs += 61000;
         else if (gate === 'connection') f.client.connectionEpoch++;
         else if (gate === 'day') f.client.serverClockOffsetMs += 86400000;
         else f.settings.homeland[gate] = false;
@@ -172,7 +169,7 @@ try {
     const f = setup(); f.client.protocol = { ...h.protocol }; delete f.client.protocol[produce];
     await run(f); assert.equal(f.state.writes.length, 0);
     const g = setup(['钩2', null, null], ['鱼1']); await run(g); assert.equal(g.state.writes.length, 0);
-    assert.match((await read(g)).orders[0].synthesis.reason, /没有能补齐/);
+    assert.match((await read(g)).orders[0].synthesis.reason, /缺少合成所需生产器的材料或可用空间/);
   });
   await test('生产回执持久保存，后续读取失败不撤销体力占用，错误产物不能确认', async () => {
     const f = setup();

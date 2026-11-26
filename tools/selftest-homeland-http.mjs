@@ -40,10 +40,10 @@ try {
   a.state.warehouse = [];
   a.state.orders = [{ slot: 0, orderId: 12, kind: 2, orderType: 0, expireTs: 0, reqs: [{ pieceCfgId: '鱼2', count: 1 }] }];
   const draft = (await h.api('settings')).data.settings;
-  draft.homeland.submitOrders = true;
+  draft.homeland.submitOrders = false;
   let mergePreview = ok(await h.api('settings/preview', { category: 'homeland', settings: draft }));
   assert(!mergePreview.actions.some(row => /×2 →/.test(row.label)));
-  draft.homeland.mergeOrders = true;
+  draft.homeland.submitOrders = true;
   mergePreview = ok(await h.api('settings/preview', { category: 'homeland', settings: draft }));
   assert(mergePreview.actions.some(row => /鱼 ×2 → 生鱼片/.test(row.label)));
   assert(mergePreview.notes.some(row => /备料最少 1 步/.test(row)));
@@ -63,13 +63,13 @@ try {
   a.state.orders.pop();
   a.state.orders[0].reqs[0].pieceCfgId = '鱼4';
   const waiting = ok(await h.api('settings/preview', { category: 'homeland', settings: draft }));
-  assert(waiting.notes.some(note => /没有已解锁的生产器/.test(note)));
+  assert(waiting.notes.some(note => /缺少合成所需生产器的材料或可用空间/.test(note)));
   console.log('通过：合成草稿开关与等待原因、预览只读、跨账号拒绝、合成并发防重及交单状态刷新');
 
   a.state.cells = ['鱼4', '鱼1'].map((pieceCfgId, cellId) => ({ cellId, state: 2, piece: { uid: 600 + cellId, pieceCfgId } }));
   a.state.warehouse = [{ uid: 602, pieceCfgId: '鱼1' }];
   a.state.orders = [{ slot: 0, orderId: 14, kind: 2, orderType: 0, expireTs: 0, reqs: [{ pieceCfgId: '鱼2', count: 1 }] }];
-  const prefs = ok(await h.api('settings')); Object.assign(prefs.settings.homeland, { submitOrders: true, mergeOrders: true, takeWarehouse: true, warehouseBuffer: true });
+  const prefs = ok(await h.api('settings')); Object.assign(prefs.settings.homeland, { submitOrders: true });
   const beforeBuffer = a.state.writes.length;
   const transitPreview = ok(await h.api('settings/preview', { category: 'homeland', settings: prefs.settings }));
   assert(transitPreview.actions.some(row => /暂存鱼丸到仓库/.test(row.label)));
@@ -89,10 +89,10 @@ try {
   a.state.warehouse = [];
   a.state.orders = [{ slot: 0, orderId: 15, reqs: [{ pieceCfgId: '鱼2', count: 1 }] }];
   const productionSettings = ok(await h.api('settings')), beforeProduction = a.state.writes.length;
+  productionSettings.settings.homeland.submitOrders = false;
   const off = ok(await h.api('settings/preview', { category: 'homeland', settings: productionSettings.settings }));
   assert(!off.actions.some(row => /生产原料/.test(row.label)));
-  assert(off.notes.some(note => /开启「按订单生产原料」/.test(note)));
-  productionSettings.settings.homeland.produceOrders = true;
+  productionSettings.settings.homeland.submitOrders = true;
   const productionPreview = ok(await h.api('settings/preview', { category: 'homeland', settings: productionSettings.settings }));
   assert.deepEqual(productionPreview.actions.find(row => /生产原料/.test(row.label)).costs, [{ name: '工坊体力', num: 1 }]);
   assert.equal(a.state.writes.length, beforeProduction);
@@ -103,14 +103,13 @@ try {
   const produced = await Promise.all([h.api('homeland/action', body(production)), h.api('homeland/action', body(production))]);
   assert.equal(produced.filter(row => row.data.status === 'confirmed').length, 1);
   assert.equal(a.state.writes.length, beforeProduction + 1);
-  assert.equal((await read()).staminaBudget.used, 1);
-  console.log('通过：生产草稿与体力成本预览只读、旧配置不生产、生产账号隔离及重复点击仅消耗一次体力');
+  assert.equal((await read()).staminaUsed, 1);
+  console.log('通过：生产草稿与体力成本预览只读、订单关闭不生产、生产账号隔离及重复点击仅消耗一次体力');
   a.state.cells = [{ cellId: 0, state: 2, piece: { uid: 800, pieceCfgId: '体力瓶5' } }, { cellId: 1, state: 2 }];
   a.state.orders = []; a.state.stamina = 0;
   const supplies = ok(await h.api('settings')), beforeSupplies = a.state.writes.length;
   assert(!ok(await h.api('settings/preview', { category: 'homeland', settings: supplies.settings })).actions.some(row => /领取5级体力瓶/.test(row.label)));
   supplies.settings.homeland.useSupplies = true;
-  supplies.settings.homeland.buildProducers = true;
   supplies.settings.homeland.submitOrders = false;
   assert(ok(await h.api('settings/preview', { category: 'homeland', settings: supplies.settings })).actions.some(row => /领取5级体力瓶/.test(row.label)));
   assert.equal(a.state.writes.length, beforeSupplies);

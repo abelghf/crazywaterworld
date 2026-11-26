@@ -19,8 +19,7 @@ const setup = () => {
   f.state.warehouse = [];
   f.state.stamina = 50;
   f.state.orders = [{ slot: 0, orderId: 1, reqs: [{ pieceCfgId: '鱼3', count: 1 }] }];
-  Object.assign(f.settings.homeland, { enabled: true, submitOrders: true, mergeOrders: true, produceOrders: true,
-    takeWarehouse: true, warehouseBuffer: true });
+  Object.assign(f.settings.homeland, { enabled: true, submitOrders: true });
   return f;
 };
 let passed = 0;
@@ -201,7 +200,7 @@ try {
             changed = true;
             if (mode === 'pause') controller.abort();
             if (mode === 'disconnect') { f.client.connected = false; f.client.emit('close'); }
-            if (mode === 'disable') { f.settings.homeland.produceOrders = false; f.client.emit('automationSettingsChanged'); }
+            if (mode === 'disable') { f.settings.homeland.submitOrders = false; f.client.emit('automationSettingsChanged'); }
           } });
         assert(changed);
         assert.equal(f.state.writes.length, 4, mode);

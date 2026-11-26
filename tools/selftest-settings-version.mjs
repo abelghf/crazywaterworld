@@ -167,6 +167,37 @@ try {
     }
   });
 
+  test('家园订单子开关与体力限制从旧文件、导入、旧页面保存和导出中移除', () => {
+    const retired = { mergeOrders: false, produceOrders: false, buildProducers: false, takeWarehouse: false,
+      warehouseBuffer: false, keepStamina: 999999, dailyStaminaLimit: 0 };
+    for (const submitOrders of [false, true]) for (const version of [72, 75, 76, 77, SETTINGS_SCHEMA_VERSION]) {
+      const expected = defaultSettings();
+      Object.assign(expected.homeland, { enabled: true, submitOrders, useSupplies: true, keepCoins: 123, dailyCoinLimit: 456 });
+      const legacy = structuredClone(expected); Object.assign(legacy.homeland, retired);
+      fs.writeFileSync(file, JSON.stringify({ version, accounts: {
+        home: { settingsVersion: version, revision: 8, settings: legacy },
+        other: { settingsVersion: version, revision: 3, settings: legacy },
+      } }));
+      const bytes = fs.readFileSync(file), loaded = loadAutomationSettings('home', { file });
+      assert.deepEqual(loaded.settings, expected);
+      assert.deepEqual(importAutomationSettings({ format: SETTINGS_FORMAT, version, settings: legacy }), expected);
+      assert.deepEqual(validateSettings(legacy), expected);
+      assert.deepEqual(fs.readFileSync(file), bytes, '读取只在内存迁移');
+      const saved = saveAutomationSettings('home', legacy, { file, revision: loaded.revision });
+      assert.equal(saved.revision, 9);
+      assert.deepEqual(loadAutomationSettings('home', { file }).settings, expected);
+      assert.deepEqual(importAutomationSettings(exportAutomationSettings(legacy)), expected);
+      assert.deepEqual(JSON.parse(fs.readFileSync(file)).accounts.other.settings, legacy, '不改写其他账号');
+    }
+    for (const key of Object.keys(retired)) {
+      assert(!Object.hasOwn(defaultSettings().homeland, key));
+      assert(!Object.hasOwn(settingsUiRules().numbers, 'homeland.' + key));
+      assert(!automationControls.some(control => control.key === 'homeland.' + key));
+    }
+    const unknown = defaultSettings(); unknown.homeland.unknownLimit = 1;
+    assert.throws(() => validateSettings(unknown), error => !!error.fields?.['homeland.unknownLimit']);
+  });
+
   test('汽油限制和城战接续次数上限从旧文件、导入和旧页面保存中移除', () => {
     const expected = defaultSettings();
     Object.assign(expected.resources, { allowDiamonds: true, diamondDailyLimit: 1234, diamondThreshold: 50 });
@@ -833,10 +864,10 @@ try {
       expected.guildShip.checkEverySeconds = 60;
       expected.afk = { claimIntervalHours: 0 };
       expected.seasonMerit = { enabled: false, targetRank: 0, leadMinutes: 0 };
-      expected.homeland = { enabled: false, freeStamina: false, freeBox: false, submitOrders: false, mergeOrders: false, warehouseBuffer: false, produceOrders: false,
-        buildProducers: false, useSupplies: false,
-        takeWarehouse: false, unlockFloors: false, clean: false, tech: false, upgrade: false,
-        keepCoins: 0, dailyCoinLimit: 500, targetLevel: 30, targetTech: 180, checkEverySeconds: 300, keepStamina: 0, dailyStaminaLimit: 500 };
+      expected.homeland = { enabled: false, freeStamina: false, freeBox: false, submitOrders: false,
+        useSupplies: false,
+        unlockFloors: false, clean: false, tech: false, upgrade: false,
+        keepCoins: 0, dailyCoinLimit: 500, targetLevel: 30, targetTech: 180, checkEverySeconds: 300 };
       expected.schedule.afkUpgrade = false;
       Object.assign(expected.weeklyActivity, { antiqueRecruitTickets: false, antiqueTicketLimit: 0 });
       expected.museum.targetFragments = [];
@@ -973,7 +1004,7 @@ try {
     assert.equal(from70().schedule.seasonCardDaily, true);
   });
   test('版本1升级后重复迁移保持一致，保留有效的用户值', () => {
-    assert.equal(SETTINGS_SCHEMA_VERSION, 77);
+    assert.equal(SETTINGS_SCHEMA_VERSION, 78);
     const settings = legacySettings();
     settings.factory.checkEverySeconds = 270;
     settings.resources.diamondDailyLimit = 1234;
