@@ -2334,7 +2334,7 @@ function refreshManualWorld(force = false) {
   nextWorldRefresh = Date.now() + 3000;
   const read = worldRead = { account, again: false };
   const isCurrent = () => version === worldVersion && current === account;
-  $('world-view').textContent = '正在读取海面数据…';
+  $('world-view').textContent = '';
   read.job = (async () => {
     while (isCurrent()) {
       read.again = false;
