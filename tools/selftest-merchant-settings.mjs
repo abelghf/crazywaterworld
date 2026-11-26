@@ -16,7 +16,7 @@ const defaults = {
   knownPortChains: true, minPurchaseReturnPercent: 0,
   autoShareIntel: false,
   quoteMaxAgeSeconds: 300, estimateDiscountPercent: 0, refreshWaitSeconds: 120, liquidationMinutes: 120,
-  maxLossPercent: 0, minExpectedProfit: 1, autoSpeedUp: false, keepPointers: 0,
+  maxLossPercent: 0, minExpectedProfit: 1, autoSpeedUp: false, closeBeforeRest: true, keepPointers: 0,
   speedUpMode: 'deadline', guardLastPointer: false, speedUpMaxPerLeg: 4, monitorSeconds: 10,
   refreshWindowMinutes: 8, dailyPointerLimit: 28, periodPointerLimit: -1, speedUpIntelPorts: 0, autoBuyPointers: false, pointerDailyDiamondLimit: 0,
   profitLimit: 0, firstDepartureMode: 'smart', firstDepartureTime: '10:00', firstDepartureWaitMinutes: 29,
@@ -146,7 +146,7 @@ test('拒绝错误类型、越界参数、未知字段，合法边界与零值�
       assert.equal(validateSettings(settings).merchant[key], value);
     }
   }
-  for (const key of ['autoSpeedUp', 'autoShareIntel', 'guardLastPointer']) {
+  for (const key of ['autoSpeedUp', 'autoShareIntel', 'guardLastPointer', 'closeBeforeRest']) {
     for (const value of ['false', 0, null]) {
       const settings = defaultSettings();
       settings.merchant[key] = value;
@@ -170,6 +170,20 @@ test('每日收市独立模式可保存和导入导出，既有账号策略不�
   assert.equal(defaultSettings().merchant.speedUpMode, 'deadline');
 });
 
+test('收市共用开关补齐旧配置，保留显式关闭与原有策略、针数额度', () => {
+  const settings = defaultSettings();
+  Object.assign(settings.merchant, { speedUpMode: 'eventFree', dailyPointerLimit: 7, periodPointerLimit: 19 });
+  const document = exportAutomationSettings(settings); document.version = 75;
+  delete document.settings.merchant.closeBeforeRest;
+  const restored = importAutomationSettings(document);
+  assert.equal(restored.merchant.closeBeforeRest, true);
+  assert.equal(restored.merchant.autoSpeedUp, false, '新增开关不打开用针总开关');
+  restored.merchant.closeBeforeRest = false;
+  const again = importAutomationSettings(exportAutomationSettings(restored));
+  assert.deepEqual([again.merchant.closeBeforeRest, again.merchant.speedUpMode,
+    again.merchant.dailyPointerLimit, again.merchant.periodPointerLimit], [false, 'eventFree', 7, 19]);
+});
+
 test('海商王活动配置完整接线，并说明估算、默认不亏卖和独立指针开关', () => {
   const script = fs.readFileSync(new URL('../src/settings-ui.js', import.meta.url), 'utf8');
   const definitions = script.slice(0, script.indexOf('function configGet('));
@@ -184,6 +198,9 @@ test('海商王活动配置完整接线，并说明估算、默认不亏卖和�
   assert.match(byKey.get('merchant.estimateDiscountPercent').help, /估算/);
   assert.match(byKey.get('merchant.maxLossPercent').help, /不自动亏损/);
   assert.equal(byKey.get('merchant.autoSpeedUp').kind, 'switch');
+  assert.equal(byKey.get('merchant.closeBeforeRest').kind, 'switch');
+  assert.equal(byKey.get('merchant.closeBeforeRest').when(defaultSettings()), false);
+  assert.equal(byKey.get('merchant.closeBeforeRest').when({ merchant: { autoSpeedUp: true } }), true);
   assert.equal(byKey.get('merchant.autoShareIntel').kind, 'switch');
   assert.match(byKey.get('merchant.autoShareIntel').help, /默认关闭.*随已开启的走商/);
   assert.match(byKey.get('merchant.autoShareIntel').help, /已有共享直接跳过/);
