@@ -56,6 +56,7 @@ ${chrome()}
     <button type="button" data-resource-tab="giftcodes">礼包兑换</button>
     <button type="button" data-resource-tab="dailies">日常任务</button>
     <button type="button" data-resource-tab="shops">商店</button>
+    <button type="button" data-resource-tab="homeland">家园</button>
     <button type="button" data-resource-tab="season-preview">赛季预览</button>
     <button type="button" data-resource-tab="chat">聊天</button>
   </nav>
@@ -94,6 +95,7 @@ ${chrome()}
   <section id="tab-guild" class="hidden">${guildPage()}</section>
   <section id="tab-dailies" class="hidden" aria-label="日常任务"><div id="daily-tasks-root"></div></section>
   <section id="tab-shops" class="hidden" aria-label="商店"><div id="shops-root"></div></section>
+  <section id="tab-homeland" class="hidden" aria-label="家园"><div id="homeland-root"></div></section>
   <section id="tab-chat" class="hidden" aria-label="聊天"><div id="chat-root"></div></section>
 
   <section id="tab-giftcodes" class="hidden">
@@ -3199,7 +3201,7 @@ async function boot() {
   try {
     // 恢复账号页时先显示保存的角色资料，由该页按连接状态决定是否读取资源。
     await loadAccounts(true, initialTab !== 'account'
-      && !(initialTab === 'resources' && ['shops', 'season-preview', 'chat', 'heroes'].includes(savedResource)));
+      && !(initialTab === 'resources' && ['shops', 'homeland', 'season-preview', 'chat', 'heroes'].includes(savedResource)));
   } catch (error) {
     reportError(error);
     return;
