@@ -1076,6 +1076,7 @@ await test('买入回包丢失后玩家已换港出清，重启后从空船恢�
   assert.equal(journal.buys + journal.sells + journal.realizedProfit, 0);
   f.state.markets[20].goods[0].price = 30;
   f.state.radar.radar[0].rareGoodsId = 1001;
+  f.state.radar.radar[0].specGoodsId = 1002; // 恢复采购要有合适销港，不能把同货同时标成特产和紧缺。
   assert.doesNotMatch(await progress(), /前次操作|等待自动走商复核/);
   await run();
   assert.equal(f.state.writes.length, 2);
@@ -1130,6 +1131,27 @@ await test('发单复核时本港价格或库存有推送，本轮停止，下�
   assert.equal(f.state.trade.player.goods[0].buyPrice, 30);
   assert.equal(f.client.listenerCount('message'), 0);
 });
+await test('采购复核发现销港特产冲突则取消，确认买入后换港仍受现有货物约束', async () => {
+  const f = setup();
+  let radarReads = 0;
+  f.state.onRead = name => {
+    if (name !== 'TradeGuildRadar' || ++radarReads !== 2) return;
+    Object.assign(f.state.radar.radar[1], { specGoodsId: 1001, rareGoodsId: 1002 });
+  };
+  await f.run(merchantActivity, 'merchantTrade');
+  assert.deepEqual(f.state.writes, []);
+  assert.match(f.reports.at(-1).reason, /目的港已变化/);
+  f.state.onRead = null;
+  Object.assign(f.state.radar.radar[1], { specGoodsId: 1002, rareGoodsId: 1001 });
+  await f.run(merchantActivity, 'merchantTrade');
+  assert.equal(f.sent('TradeBuyRequest').length, 1);
+  assert(f.state.trade.player.goods.length > 0);
+  Object.assign(f.state.radar.radar[1], { specGoodsId: 1001, rareGoodsId: 1002 });
+  f.state.radar.radar.push({ cityId: 30, specGoodsId: 1003, rareGoodsId: 1001 });
+  await f.run(merchantActivity, 'merchantTrade');
+  assert.equal(f.sent('TradeMoveRequest').length, 1);
+  assert.equal(f.sent('TradeMoveRequest')[0].body.mvToCityId, 30);
+});
 await test('买入瞬间变价，按回包、批次数量与实际扣款核账', async () => {
   for (const price of [30, 43]) {
     const f = setup();
@@ -1166,7 +1188,8 @@ await test('预设走商在途遵守零针或库存加速，冲刺达标后仍�
     f.state.trade.cargo.cargoLv = 5;
     await run();
     assert.equal(f.sent('TradeSellRequest').length, 1);
-    f.state.markets[20].goods[0].price = 30;
+    f.state.markets[20] = { isReport: true, specGoodsId: 1002, rareGoodsId: 1001,
+      goods: [{ goodsId: 1002, price: 30, stock: 100 }] }; // 返程买20港特产，销往紧缺它的10港。
     await run();
     await run();
     assert.equal(f.sent('TradeMoveRequest').length, 2);
