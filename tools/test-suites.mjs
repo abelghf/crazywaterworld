@@ -245,6 +245,7 @@ const extra = [
   'tools/selftest-remediation.mjs',
   'tools/selftest-rewards-follow.mjs',
   'tools/selftest-merchant-planner.mjs',
+  'tools/selftest-merchant-competition.mjs',
   'tools/selftest-merchant-speed.mjs',
   'tools/selftest-merchant-report.mjs',
   'tools/selftest-merchant-settings.mjs',

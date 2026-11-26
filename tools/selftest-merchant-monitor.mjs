@@ -57,6 +57,29 @@ function integration({ mainEveryMs = 3600000 } = {}) {
 }
 
 try {
+  await test('独立节奏采样包含请求和排队，确认交易可一秒接续，重连清除旧耗时', () => {
+    const client = new EventEmitter(), monitor = watchMerchant(client), off = monitor.subscribe(() => {});
+    const settings = { merchant: { monitorSeconds: 10 }, loop: { everySeconds: 3600 } };
+    assert.equal(monitor.actionSeconds(settings), 10);
+    monitor.defer(wall / 1000 + 10);
+    wall += 13000; monitor.startRun(); wall += 4000; monitor.finishRun();
+    assert.equal(monitor.actionSeconds(settings), 8, '4秒执行+3秒排队+1秒接续');
+    monitor.observe({ time: wall / 1000, continuedTrade: true, settings });
+    assert.equal(monitor.nextCheckAt, wall / 1000 + 1);
+    client.emit('close');
+    assert.equal(monitor.actionSeconds(settings), 10);
+    off();
+  });
+  await test('停港选路线时其他候选港的航线更新也会失效，推送不直接交易', () => {
+    const client = new EventEmitter(), monitor = watchMerchant(client), off = monitor.subscribe(() => {});
+    monitor.observe({ state: { cargo: { cityId: 10, moveEndTime: 0 } }, time: wall / 1000,
+      radar: { radar: [{ cityId: 10 }, { cityId: 20 }] } });
+    const version = monitor.fleetRevision;
+    client.emit('message', { name: 'SCTradeCargoMove', body: { cargo: { playerId: '12',
+      cargo: { cityId: 30, moveToCityId: 20 } } } });
+    assert.equal(monitor.fleetRevision, version + 1);
+    assert(monitor.due()); off();
+  });
   await test('满舱卡点与刷新前采购均能在长监控间隔内准时唤醒', () => {
     const monitor = watchMerchant(new EventEmitter()), time = wall / 1000;
     for (const plan of [{ kind: 'wait', mode: 'WAIT_DEPARTURE' }, { kind: 'wait', mode: 'WAIT_REFRESH' }, { kind: 'buy' }]) {
@@ -128,12 +151,12 @@ try {
     assert.equal(merchantMonitorSeconds({ merchant: { monitorSeconds: 999 } }), 300);
     off();
   });
-  await test('一小时主循环之间按60秒监控串行推进购货和出航', async () => {
+  await test('一小时主循环和60秒监控下，已确认采购下一秒串行接续出航', async () => {
     const f = integration();
     f.reportHook(() => { if (f.state.writes.length >= 2) f.stop.aborted = true; });
     await f.run();
     assert.deepEqual(f.state.writes.map(row => row.name), ['TradeBuyRequest', 'TradeMoveRequest']);
-    assert.equal(f.sleeps[0], 60000);
+    assert.equal(f.sleeps[0], 1000);
     assert(wall - base < 3600000);
     assert(f.scheduled() >= 2);
   });
@@ -158,7 +181,7 @@ try {
   await test('较快主循环仍遵守海商王due，读取失败按监控间隔重试', async () => {
     const fast = integration({ mainEveryMs: 10000 });
     await fast.run();
-    assert.equal(fast.state.writes.length, 1, '第二个十秒主轮不重复未到期的海商王检查');
+    assert.equal(fast.state.writes.length, 2, '采购确认后接续出航，后续十秒主轮不重复发送');
     assert.equal(fast.state.writes[0].name, 'TradeBuyRequest');
     wall = base;
     const failed = integration();
@@ -172,6 +195,15 @@ try {
     assert.equal(checked, 3);
     assert.deepEqual(failed.sleeps, [60000, 60000]);
     assert.equal(failed.state.writes.length, 0);
+  });
+  await test('交易结果未知不进入连续购买，后续检查只恢复原票据', async () => {
+    const f = integration();
+    f.settings.merchant.monitorSeconds = 10; f.state.mode = 'unknown';
+    f.reportHook(row => { if (row.reason?.includes('前次操作结果待确认')) f.stop.aborted = true; });
+    await f.run();
+    assert.equal(f.state.writes.length, 1);
+    assert.equal(f.state.writes[0].name, 'TradeBuyRequest');
+    assert(Object.values(f.ledger.keyRecords()).some(record => !record.confirmed && record.details?.expected?.request === 'TradeBuyRequest'));
   });
   await test('本港库存推送提前唤醒且合并风暴，所有操作仍在串行任务中', async () => {
     const f = integration();
@@ -188,7 +220,7 @@ try {
     f.reportHook(() => { if (f.state.writes.length >= 2) f.stop.aborted = true; });
     await f.run();
     assert.deepEqual(f.state.writes.map(row => row.name), ['TradeBuyRequest', 'TradeMoveRequest']);
-    assert.equal(wall - base, 10000, '推送提前检查，同时保留10秒节流');
+    assert.equal(wall - base, 1000, '已确认交易允许一秒接续，推送不另开并发');
     assert(f.sleeps.length <= 3);
   });
   await test('主循环在防抢边界用一根到港，接着按新港口库存采购', async () => {
@@ -308,7 +340,7 @@ try {
     });
     f.reportHook(() => { if (f.state.writes.length) f.stop.aborted = true; });
     await f.run();
-    assert.deepEqual(f.sleeps, [25000]);
+    assert.equal(f.sleeps.reduce((sum, ms) => sum + ms, 0), 25000);
     assert.equal(f.state.writes[0].name, 'TradeBuyRequest');
     assert.deepEqual(f.settings, saved);
   });
@@ -325,7 +357,7 @@ try {
     });
     f.reportHook(() => { if (wall >= base + 25000) f.stop.aborted = true; });
     await f.run();
-    assert.deepEqual(f.sleeps, [25000]);
+    assert.deepEqual(f.sleeps, [1000, 24000]);
     assert.deepEqual(f.state.writes.map(row => row.name), ['TradeSellRequest']);
     assert.equal(f.state.reads.length, readsBeforeEnd, '结束边界不再读取已关闭活动');
     assert.deepEqual(f.settings, saved);

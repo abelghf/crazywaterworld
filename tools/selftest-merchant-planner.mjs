@@ -29,7 +29,7 @@ function fixture() {
     { cityId: 30, specGoodsId: 3, rareGoodsId: 0 }] };
   const f = { config, event, state, market, radar, now, visited: [], settings: { estimateDiscountPercent: 10 }, markets: [] };
   f.plan = () => planMerchant(config, event, state, f.market, f.radar, f.now, f.visited,
-    { settings: f.settings, markets: f.markets, actionSeconds: f.actionSeconds, preferredPort: f.preferredPort });
+    { settings: f.settings, markets: f.markets, actionSeconds: f.actionSeconds, preferredPort: f.preferredPort, actor: f.actor });
   f.batch = (extra = {}) => ({ pid: 1, goodsId: 1, cityId: 10, buyPrice: 50, num: 10, ...extra });
   f.history = (cityId, price, extra = {}) => ({ cityId, observedAt: f.now, period: event.period, startTime: event.startTime,
     goods: [{ goodsId: 1, price, stock: 0 }], ...extra });
@@ -75,6 +75,39 @@ test('接力选港只动用可回款的本金，当日无下一程时按本船�
   assert.equal(f.plan().destination,20);
 });
 
+test('下一程采购按同港先到船容量下调，去其他港和后到船不影响本港排序', () => {
+  const f = fixture();
+  f.settings = { knownPortChains: true, estimateDiscountPercent: 0 };
+  f.actor = { playerId: '1', guildId: '1001' };
+  f.radar.radar = [{ cityId: 10, specGoodsId: 1, rareGoodsId: 3 }, { cityId: 20, specGoodsId: 2 },
+    { cityId: 30, specGoodsId: 3 }];
+  f.market.rareGoodsId = 3;
+  f.market.goods.push({ goodsId: 3, price: 380, stock: 20 });
+  f.state.player = { profit: 0, coins: 0, goods: [f.batch({ buyPrice: 90 })] };
+  assert.equal(f.plan().destination, 30);
+  f.state.worldCargo = ['2', '3'].map(playerId => ({ playerId, guildIdx: 1,
+    cargo: { cityId: 20, cargoLv: 1, moveToCityId: 30, moveStartTime: f.now - 60, moveEndTime: f.now + 6900 } }));
+  assert.equal(f.plan().destination, 20, '次程特产可能被买空时回到同收益低压力港');
+  for (const boat of f.state.worldCargo) boat.cargo.moveEndTime = f.now + 120;
+  assert.equal(f.plan().destination, 30, '上一轮库存的采购不能扣到本船到港后的新一轮');
+  for (const boat of f.state.worldCargo) boat.cargo.moveEndTime = f.now + 10000;
+  assert.equal(f.plan().destination, 30);
+  for (const boat of f.state.worldCargo) { boat.cargo.moveToCityId = 10; boat.cargo.moveEndTime = f.now + 120; }
+  assert.equal(f.plan().destination, 30);
+});
+
+test('冲刺空船临近刷新且特产售罄时留港，正常现货与远处刷新不强制等待', () => {
+  const f = fixture();
+  f.settings = { speedUpMode: 'targetFirst', refreshWaitSeconds: 120 };
+  f.market.goods[0].stock = 20;
+  f.now = merchantTiming(f.config, f.event, f.now).nextRefreshAt - 60;
+  assert.equal(f.plan().mode, 'WAIT_REFRESH');
+  f.market.goods[0].stock = 0;
+  assert.equal(f.plan().kind, 'buy');
+  f.market.goods[0].stock = 20; f.now -= 300;
+  assert.notEqual(f.plan().mode, 'WAIT_REFRESH');
+});
+
 test('默认零折扣按原价差买货，无利可图时仍可空船寻价', () => {
   const f = fixture();
   f.settings = {};
@@ -100,15 +133,17 @@ test('配置归一化与北京时间交易、刷新边界使用真实配置', ()
   assert.equal(merchantSettings({ autoSpeedUp: 'true' }).autoSpeedUp, false);
 });
 
-test('每动作余量取配置和真实间隔较大值，非法输入安全回落', () => {
+test('实测交易节奏优先于主轮配置，不再强制一分钟，非法输入安全回落', () => {
   assert.equal(merchantActionSeconds(), 60);
-  assert.equal(merchantActionSeconds({ loop: { everySeconds: 1 } }, 10), 60);
+  assert.equal(merchantActionSeconds({ loop: { everySeconds: 1 } }, 10), 10);
   assert.equal(merchantActionSeconds({ loop: { everySeconds: 180 } }, 300), 300);
-  assert.equal(merchantActionSeconds({ loop: { everySeconds: 300 } }, 180), 300);
+  assert.equal(merchantActionSeconds({ loop: { everySeconds: 300 } }, 180), 180);
+  assert.equal(merchantActionSeconds({ loop: { everySeconds: 300 }, merchant: { monitorSeconds: 10 } }), 10);
+  assert.equal(merchantActionSeconds({}, 2), 2);
   assert.equal(merchantActionSeconds({ loop: { everySeconds: -1 } }, NaN), 60);
   assert.equal(merchantActionSeconds({ loop: { everySeconds: '300' } }, Infinity), 60);
   const f = fixture(), before = f.plan();
-  for (const value of [undefined, 0, -1, 1, 59, 60, 60.5, NaN, Infinity, '180']) {
+  for (const value of [undefined, 0, -1, 60, 60.5, NaN, Infinity, '180']) {
     f.actionSeconds = value;
     assert.deepEqual(f.plan(), before);
   }

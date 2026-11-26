@@ -1,24 +1,7 @@
-import { exactAutomationId } from './automation-policy.mjs';
 import { merchantTiming, planMerchant } from './merchant-planner.mjs';
+import { visibleGuildVoyages, merchantStockPressure } from './merchant-competition.mjs';
 
 // worldCargo 只描述航程。停港者以及对方的货舱、资金和采购意图均不可见。
-function visibleGuildVoyages(state, actor, time) {
-  const voyages = new Map();
-  const self = exactAutomationId(actor?.playerId), guild = exactAutomationId(actor?.guildId);
-  if (!self || !guild || !Array.isArray(state.worldCargo)) return [];
-  const guildIdx = Number(BigInt(guild) % 1000n);
-  if (!guildIdx) return [];
-  for (const other of state.worldCargo) {
-    const id = exactAutomationId(other?.playerId), voyage = other?.cargo;
-    if (!id || id === self || other.guildIdx !== guildIdx || !Number.isSafeInteger(voyage?.moveToCityId) || voyage.moveToCityId <= 0 ||
-      !Number.isSafeInteger(voyage.cityId) || voyage.cityId <= 0 || voyage.cityId === voyage.moveToCityId ||
-      !Number.isSafeInteger(voyage.moveStartTime) || voyage.moveStartTime <= 0 || voyage.moveStartTime > time ||
-      !Number.isSafeInteger(voyage.moveEndTime) || voyage.moveEndTime <= time) continue;
-    if (!voyages.has(id) || voyage.moveStartTime > voyages.get(id).moveStartTime) voyages.set(id, voyage);
-  }
-  return [...voyages.values()];
-}
-
 export function merchantCompetitorArrivals(state, actor, time, refreshAt) {
   return visibleGuildVoyages(state, actor, time).filter(v => v.moveToCityId === state.cargo.moveToCityId && v.moveEndTime >= refreshAt)
     .map(v => v.moveEndTime).sort((a, b) => a - b);
@@ -43,7 +26,10 @@ function modelPurchase(config, event, state, radar, sample, arrival, settings, a
   const epoch = merchantTiming(config, event, arrival).marketEpoch;
   let time = arrival;
   for (;;) {
-    const plan = planMerchant(config, event, docked, sample, radar, time, [], { settings, actionSeconds });
+    // 这是同一报价条件下的早/晚到港反事实比较，原采集时效在入口验证；不能让晚到分支
+    // 仅因 observedAt 过期返回零利润，否则库存充足也会被误报为抢货增益。
+    const plan = planMerchant(config, event, docked, { goods: sample.goods,
+      specGoodsId: sample.specGoodsId, rareGoodsId: sample.rareGoodsId }, radar, time, [], { settings, actionSeconds });
     if (plan.kind === 'buy') {
       const readyAt = time + actionSeconds * plan.purchases.length;
       const window = merchantTiming(config, event, readyAt);
@@ -71,6 +57,17 @@ export function estimateMerchantRace(config, event, state, radar, time, settings
   const port = radar?.radar?.find(row => row?.cityId === city);
   if (!port || !epoch || !rival || rival < epoch || rival > natural)
     return () => null;
+  const definition = config.tables.TradeGoodsCfg?.data?.find(g => g.goodsId === port.specGoodsId);
+  const maxAge = settings.quoteMaxAgeSeconds ?? 300;
+  const sample = [...(options.markets ?? []), ...(options.marketHistory ?? [])].filter(m =>
+    m?.cityId === city && m.period === event.period && m.startTime === event.startTime &&
+    Number.isSafeInteger(m.observedAt) && m.observedAt >= epoch && m.observedAt <= time && time - m.observedAt <= maxAge &&
+    m.specGoodsId === port.specGoodsId && (!port.rareGoodsId || m.rareGoodsId === port.rareGoodsId) && Array.isArray(m.goods) &&
+    new Set(m.goods.map(g => g?.goodsId)).size === m.goods.length && m.goods.every(g =>
+      Number.isSafeInteger(g?.goodsId) && Number.isSafeInteger(g.price) && g.price > 0 &&
+      Number.isSafeInteger(g.stock) && g.stock >= 0))
+    .sort((a, b) => b.observedAt - a.observedAt)[0];
+  const voyages = visibleGuildVoyages(state, options.actor, time);
   const cycles = new Map();
   for (const market of options.marketHistory ?? []) {
     if (market?.cityId !== city || market.period !== event.period || market.startTime !== event.startTime ||
@@ -87,6 +84,25 @@ export function estimateMerchantRace(config, event, state, radar, time, settings
   return early => {
     // 提前跨到上一轮会触发实际到港交易。等刷新唤醒后重算，避免把下一轮库存计入上一轮。
     if (early < epoch || early + actionSeconds >= rival || early >= natural) return null;
+    const quote = sample?.goods.find(g => g.goodsId === definition?.goodsId);
+    if (quote && Number.isSafeInteger(definition.maxCount) && definition.maxCount >= quote.stock) {
+      const initial = modelPurchase(config, event, state, radar, sample, early, settings, actionSeconds);
+      // 同一轮有效报价，只预测特产被先到船采购的影响，不把每种货都各扣一整船。
+      // 全部计划采购完成在对手到港之前才计入抢先收益；无货舱信息时按到港即可买处理。
+      if (initial.profit > 0 && initial.readyAt < rival && initial.readyAt <= sample.observedAt + maxAge) {
+        const pressure = merchantStockPressure(config, voyages, city, definition, natural,
+          definition.maxCount - quote.stock, sample.observedAt);
+        const laterSample = { ...sample, goods: sample.goods.map(g => g.goodsId === definition.goodsId
+          ? { ...g, stock: definition.maxCount - pressure.potentialRemaining } : g) };
+        const later = modelPurchase(config, event, state, radar, laterSample, natural, settings, actionSeconds);
+        const uncontested = modelPurchase(config, event, state, radar, sample, natural, settings, actionSeconds);
+        const gain = later.profit !== null && uncontested.profit !== null
+          ? Math.min(initial.profit, uncontested.profit) - later.profit : 0;
+        if (gain > 0) return { gain,
+          baseline: later.profit, source: 'visible-capacity',
+          expiresAt: Math.min(sample.observedAt + maxAge, rival - (initial.readyAt - early) - 1) };
+      }
+    }
     for (const rows of histories) {
       // 同一实际刷新周期内两次观测，落入抢先到港和自然到港之间的时间范围。
       const before = rows.find(row => row.offset >= early - epoch);
@@ -110,7 +126,7 @@ export function estimateMerchantRace(config, event, state, radar, time, settings
       const later = modelPurchase(config, event, state, radar, { goods: laterGoods, rareGoodsId }, natural, settings, actionSeconds);
       if (later.profit === null) return null;
       const gain = initial.profit - later.profit;
-      return gain > 0 ? { gain, baseline: later.profit,
+      return gain > 0 ? { gain, baseline: later.profit, source: 'observed-depletion',
         expiresAt: Math.min(epoch + before.offset, rival - (initial.readyAt - early) - 1) } : null;
     }
     return null;

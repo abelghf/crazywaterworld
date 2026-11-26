@@ -501,9 +501,10 @@ await test('同批货无利润寻价跨刷新与重载后不往返，换新货�
   assert.notEqual(legs[0].details.expected.cargoSignature, legs[1].details.expected.cargoSignature);
 });
 await test('动作预留后跨过整船采购或多批出售截止，取消发送且不遗留待确认记录', async () => {
-  for (const kind of ['buy', 'move']) {
+  for (const cadence of [10, 60]) for (const kind of ['buy', 'move']) {
     const f = setup();
-    f.client.tradeWindow.endTime = f.now + 7200 + (kind === 'buy' ? 190 : 130);
+    f.settings.merchant.monitorSeconds = cadence;
+    f.client.tradeWindow.endTime = f.now + 7200 + (kind === 'buy' ? 3 : 2) * cadence + 10;
     if (kind === 'move') {
       f.state.trade.player.coins = 0;
       f.state.trade.player.goods = [
@@ -535,7 +536,7 @@ await test('每轮间隔五分钟时停止来不及完成的采购，展示预�
   f.client.tradeWindow.endTime = f.now + 7200 + 190;
   const preview = () => merchantProgress(f.config, f.client.tradeWindow, f.state.trade, f.player, f.now,
     async name => name === 'TradeGuildRadar' ? f.state.radar : f.state.markets[f.state.trade.cargo.cityId], f.ledger, f.settings);
-  assert.match(await preview(), /计划买入：/, '一分钟轮询下此窗口足够采购、航行和出售');
+  assert.match(await preview(), /计划买入：/, '默认10秒估计下此窗口足够采购、航行和出售');
   f.settings.loop.everySeconds = 300;
   f.settings.merchant.monitorSeconds = 300;
   assert.doesNotMatch(await preview(), /计划买入：/, '五分钟轮询不能继续使用每步一分钟估计');
@@ -851,6 +852,7 @@ await test('贸易入口在采购或出售前先用实际余额升满，下一�
 });
 await test('自然航程仅够处理一批时按可实现高收益子集选港并到港售出', async () => {
   const f = setup();
+  f.settings.merchant.monitorSeconds = 60;
   f.settings.merchant.liquidationMinutes = 0;
   f.client.tradeWindow.endTime = f.now + 7200 + 90;
   f.state.trade.player.coins = 0;
@@ -876,6 +878,7 @@ await test('自然航程仅够处理一批时按可实现高收益子集选港�
 });
 await test('收盘前仅够买卖一种货时，按自然航行完成最高收益批次', async () => {
   const f = setup();
+  f.settings.merchant.monitorSeconds = 60;
   f.client.serverClockOffsetMs += (7 * 3600 + 56 * 60 + 45) * 1000;
   f.state.radar.radar[1].specGoodsId = 1008;
   f.state.markets[10].goods = [{ goodsId: 1001, price: 40, stock: 59900 }, { goodsId: 1004, price: 30, stock: 59700 }];

@@ -348,7 +348,16 @@ async function runMerchantActivity(client, config, ctx, quoteRevision) {
     }
     return;
   }
-  const onOutcome = data => recordMerchantTrade(ctx.ledger, { event, ...data, time: data.time ?? clock(client) });
+  const onOutcome = data => {
+    const now = clock(client), after = data.after;
+    if (!data.replay && data.status === 'confirmed' && allowed() &&
+      ['TradeBuyRequest', 'TradeSellRequest', 'TradeCargoUpgradeRequest'].includes(data.expected?.request) &&
+      after?.cargo?.moveEndTime <= now && (!after.cargo.moveToCityId || after.cargo.moveToCityId === after.cargo.cityId))
+      watchMerchant(client).observe({ event, state: { cargo: after.cargo,
+        player: { coins: after.coins, profit: after.profit, goods: after.goods } }, time: now, config,
+        settings: ctx.settings?.(), continuedTrade: true });
+    return recordMerchantTrade(ctx.ledger, { event, ...data, time: data.time ?? now });
+  };
   ctx = Object.assign(Object.create(ctx), { onMerchantOutcome: onOutcome });
   watchMerchant(client).observe({ event, state: info, time: clock(client), config, settings: ctx.settings?.() });
   // 已确认业务证据先持久化；统计写入失败或崩溃后仅补录，不重发游戏请求。
@@ -357,7 +366,7 @@ async function runMerchantActivity(client, config, ctx, quoteRevision) {
       record.details.journalRecorded || !record.details.before || !record.details.after) continue;
     try {
       onOutcome({ actionKey: key, expected: record.details.expected, before: record.details.before, after: record.details.after,
-        attemptedAt: record.details.attemptedAt, time: record.details.confirmedAt, actualDiamondSpent: record.details.actualDiamondSpent, status: 'confirmed' });
+        attemptedAt: record.details.attemptedAt, time: record.details.confirmedAt, actualDiamondSpent: record.details.actualDiamondSpent, status: 'confirmed', replay: true });
       ctx.ledger.resolveKey(key, true, { ...record.details, journalRecorded: true });
     } catch (error) { waiting(ctx, '已确认成交的统计暂未补录：' + error.message); }
   }
@@ -389,7 +398,7 @@ async function runMerchantActivity(client, config, ctx, quoteRevision) {
   if (!profitReached && !unloading && await upgrade()) return;
   const policyStamp = JSON.stringify(policy);
   const actionSeconds = () => positive(ctx.merchantCadenceSeconds)
-    ? Math.max(60, ctx.merchantCadenceSeconds)
+    ? ctx.merchantCadenceSeconds
     : merchantActionSeconds(ctx.settings?.(), Math.ceil((ctx.everyMs ?? 0) / 1000));
   const actionInterval = actionSeconds();
   const snapshot = (state, history = voyage(state)) => readMerchantPlan(config, event, state, clock(client),
@@ -408,6 +417,7 @@ async function runMerchantActivity(client, config, ctx, quoteRevision) {
   if (!allowed()) return waiting(ctx, '开关、账号或活动状态已变化');
   if (profitReached && !openingCargo) return waiting(ctx, '已达本期累计利润上限，本港共享已检查，领奖仍按独立开关执行');
   if (plan.kind === 'wait') return waiting(ctx, plan.reason);
+  const fleetRevision = watchMerchant(client).fleetRevision;
   const fresh = await getState();
   if (fresh.period !== event.period || !allowed()) return waiting(ctx, '期数或活动状态已变化');
   const verified = await snapshot(fresh);
@@ -426,6 +436,7 @@ async function runMerchantActivity(client, config, ctx, quoteRevision) {
     scope, before: state, label: verified.label, retainEvidence: true, attemptedAt: clock(client), onOutcome, now: () => clock(client),
     allowed: () => allowed() && (plan.kind === 'move' || tradingHours(config, clock(client))) &&
       epoch() === currentEpoch && quoteRevision?.() === verified.quoteRevision &&
+      (plan.kind === 'sell' || watchMerchant(client).fleetRevision === fleetRevision) &&
       JSON.stringify(merchantSettings(ctx.settings?.()?.merchant)) === policyStamp &&
       digest(ctx.ledger?.merchantEdits?.(verified.intelScope) ?? {}) === verified.intelVersion &&
       actionSeconds() === actionInterval &&

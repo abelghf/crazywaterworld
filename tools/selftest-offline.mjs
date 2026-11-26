@@ -71,6 +71,7 @@ const cases = [
   ['selftest-order-reservations.mjs'],
   ['selftest-week-order-auto.mjs'],
   ['selftest-merchant-activity-ui.mjs'],
+  ['selftest-merchant-competition.mjs'],
   ['selftest-hero-raid-settings-http.mjs'],
   ['selftest-merchant-settings-http.mjs'],
   ['selftest-guild-ship-settings-http.mjs'],

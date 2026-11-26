@@ -63,7 +63,7 @@ export const DEFAULT_SETTINGS = {
   weekOrder: { enabled: false, allowDiamonds: false },
   merchant: { enabled: false, fullCargoRoutes: false, autoShareIntel: false, quoteMaxAgeSeconds: 300, estimateDiscountPercent: 0, refreshWaitSeconds: 120, liquidationMinutes: 120,
     maxLossPercent: 0, minExpectedProfit: 1, knownPortChains: true, minPurchaseReturnPercent: 0, autoSpeedUp: false, keepPointers: 0,
-    speedUpMode: 'deadline', guardLastPointer: false, speedUpMaxPerLeg: 4, monitorSeconds: 60,
+    speedUpMode: 'deadline', guardLastPointer: false, speedUpMaxPerLeg: 4, monitorSeconds: 10,
     refreshWindowMinutes: 8, dailyPointerLimit: 28, periodPointerLimit: -1, speedUpIntelPorts: 0, autoBuyPointers: false, pointerDailyDiamondLimit: 0,
     profitLimit: 0, firstDepartureMode: 'smart', firstDepartureTime: '10:00', firstDepartureWaitMinutes: 29,
     autoUpgrade: false },

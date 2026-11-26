@@ -1,5 +1,6 @@
 // 海商王的纯决策层。异地卖价依据已知商情估算，成交使用到港实价。
 import { fillRankedMerchantLoad, fullMerchantLoad } from './merchant-loading.mjs';
+import { visibleGuildVoyages, merchantStockPressure } from './merchant-competition.mjs';
 const natural = value => Number.isSafeInteger(value) && value >= 0;
 const positive = value => natural(value) && value > 0;
 const rows = (config, name) => config?.tables?.[name]?.data ?? [];
@@ -23,7 +24,7 @@ export const MERCHANT_DEFAULTS = Object.freeze({
   minExpectedProfit: 1,
   autoSpeedUp: false,
   keepPointers: 0,
-  speedUpMode: 'deadline', guardLastPointer: false, speedUpMaxPerLeg: 4, monitorSeconds: 60,
+  speedUpMode: 'deadline', guardLastPointer: false, speedUpMaxPerLeg: 4, monitorSeconds: 10,
   refreshWindowMinutes: 8, dailyPointerLimit: 28, periodPointerLimit: -1, speedUpIntelPorts: 0, autoBuyPointers: false, pointerDailyDiamondLimit: 0,
   profitLimit: 0, firstDepartureMode: 'smart', firstDepartureTime: '10:00', firstDepartureWaitMinutes: 29,
   autoUpgrade: false
@@ -51,10 +52,12 @@ export function merchantSettings(input = {}) {
   return output;
 }
 
-// 周期动作每轮只执行一笔，使用配置与实际轮询间隔中较慢者，并保留最低一分钟余量。
+// 显式传入的实测节奏优先；未采样时用独立监控周期估算，不把主循环等待或一分钟当作交易冷却。
 export function merchantActionSeconds(settings = {}, intervalSeconds = 0) {
-  const configured = settings?.loop?.everySeconds;
-  return Math.max(60, positive(configured) ? configured : 0, positive(intervalSeconds) ? intervalSeconds : 0);
+  if (positive(intervalSeconds)) return intervalSeconds;
+  const configured = settings?.merchant?.monitorSeconds ?? settings?.monitorSeconds;
+  if (positive(configured)) return Math.max(10, Math.min(300, configured));
+  return positive(settings?.loop?.everySeconds) ? settings.loop.everySeconds : 60;
 }
 
 export function merchantPointerSeconds(config) {
@@ -690,6 +693,7 @@ export function planMerchant(config, event, state, market, radar, time, visited 
   const byOutcome = (a, b) => b.score - a.score || b.net - a.net;
   // 仅预看一次次程交易。预计售价、库存和销路仍在实际抵港时重读。
   const connections = new Map();
+  const voyages = visibleGuildVoyages(state, options.actor ?? options.player, time);
   if (settings.knownPortChains && !strict && !advance && !closing && !liquidation &&
     saleAt + travel + 3 * actionSeconds < saleEnd && saleAt + actionSeconds < buyEnd) {
     const samples = [...new Map(history).set(cargo.cityId, market).values(),
@@ -716,7 +720,8 @@ export function planMerchant(config, event, state, market, radar, time, visited 
           port.cityId, false, settings.estimateDiscountPercent);
         if (sale?.price > buy && (sale.referencePrice - buy) * 100 >= settings.minPurchaseReturnPercent * buy &&
           sale.price - buy > (connections.get(port.cityId)?.spread ?? 0))
-          connections.set(port.cityId, { next: next.cityId, buy, spread: sale.price - buy, available, space: def.capacity });
+          connections.set(port.cityId, { next: next.cityId, buy, spread: sale.price - buy, available, space: def.capacity,
+            definition: def, observedAt: live ? sampled.observedAt : 0 });
       }
     }
   }
@@ -724,7 +729,10 @@ export function planMerchant(config, event, state, market, radar, time, visited 
     const link = connections.get(port.cityId);
     if (!link || saleAt + (actions + 1) * actionSeconds >= buyEnd ||
       saleAt + travel + (actions + 3) * actionSeconds >= saleEnd) return 0;
-    const units = Math.min(link.available, Math.floor(cash / link.buy), Math.floor(space / link.space));
+    const pressure = merchantStockPressure(config, voyages, port.cityId, link.definition,
+      saleAt + actions * actionSeconds, link.available,
+      Math.max(link.observedAt, merchantTiming(config, event, saleAt + actions * actionSeconds).previousRefreshAt ?? 0));
+    const units = Math.min(pressure.potentialRemaining, Math.floor(cash / link.buy), Math.floor(space / link.space));
     return Math.max(0, units) * link.spread;
   };
   const cargoRoutesFor = (ports, reference = false) => ports.map(port => {
@@ -990,6 +998,13 @@ export function planMerchant(config, event, state, market, radar, time, visited 
     if (!destinations.length) reason = '等待双向特产与紧缺情报匹配，商船留港';
     return wait('舱位 ' + occupied + '/' + ship.capacity + ' 格，' + reason, { nextCheckAt: timing.nextRefreshAt });
   }
+
+  // 空船已无盈利现货且补货临近时留港；已有钱和舱位无需先清空其他货物。
+  if (!occupied && timing.tradingOpen && settings.speedUpMode === 'targetFirst' &&
+    refreshIn > 0 && refreshIn <= settings.refreshWaitSeconds && timing.nextRefreshAt < buyEnd &&
+    market.goods.some(q => q.goodsId === specialty && q.stock >= definitions.get(q.goodsId)?.maxCount))
+    return wait('本港特产已售罄，临近补货，留港等刷新后立即核价',
+      { mode: 'WAIT_REFRESH', nextCheckAt: timing.nextRefreshAt });
 
   // 在没有已知盈利路线时，有限寻价仍可帮助没有联盟共享的账号取得本港报价。
   // 不回访执行层标记的已访问港口；空船须留出到港采购后再航行出售的时间。
