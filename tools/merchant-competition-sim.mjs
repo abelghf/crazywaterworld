@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { loadConfig } from '../src/config.mjs';
+import { experimentalClearance } from './merchant-clearance-policy.mjs';
 const engineRoot = process.env.MC_ENGINE_ROOT ?? path.resolve(import.meta.dirname, '..');
 const engine = name => import(pathToFileURL(path.join(engineRoot, 'src', name + '.mjs')).href);
 const { merchantPresets } = await engine('merchant-presets');
@@ -316,6 +317,8 @@ function simulate(world, settings, variant, seed) {
   let time = event.startTime + 8 * 3600, priorDay = -1, pid = 0, pins = 0, moves = 0, voyage = {}, openingCargo = [];
   let decisions = 0, refreshPins = 0, prepPins = 0, boughtCells = 0, emptyDepartures = 0, shortageVisits = 0, visits = 0;
   let visitKey = '', waitSeconds = 0, netGain = 0, optimisticWaitSeconds = 0, refreshBoughtCells = 0;
+  let grossLoss = 0, lossSales = 0, experimentSales = 0, experimentLoss = 0, experimentLossSales = 0;
+  let minCapital = 10000, peakCapital = 10000, maxDrawdown = 0, maxDrawdownPercent = 0, goalAt = null;
   const speedReasons = {};
   while (time < event.endTime) {
     if (++decisions > 100_000) throw Error('本人事件循环未前进');
@@ -393,6 +396,7 @@ function simulate(world, settings, variant, seed) {
     if (!openingCargo.length && timing.tradingOpen && (plan.kind === 'wait' || plan.exploration || plan.mode === 'OVERNIGHT') &&
       time + timing.travelSeconds + (1 + 2 * market.goods.length + player.goods.length) * selfStep >= timing.tradeEndTime)
       plan = merchantClosingRoute(config, event, state, market, radar, radar, time, [...itinerary], options, budget) ?? plan;
+    plan = experimentalClearance(config, event, state, market, radar, time, [...itinerary], options, plan, variant, planMerchant);
     plan = merchantStrategyPlan(plan, config, event, state, settings, time, { keyRecords: () => departures });
     if (['sync20', 'preclear20'].includes(variant) && timing.tradingOpen && !player.goods.length &&
       ['move', 'wait'].includes(plan.kind) && timing.nextRefreshAt < timing.tradeEndTime && timing.nextRefreshAt - time <= 1200) {
@@ -404,9 +408,8 @@ function simulate(world, settings, variant, seed) {
       takeStock(quote, plan.count); player.coins -= quote.price * plan.count;
       boughtCells += plan.count * defs.get(quote.goodsId).capacity;
       if (sinceRefresh < 1200) refreshBoughtCells += plan.count * defs.get(quote.goodsId).capacity;
-      const batch = player.goods.find(g => g.cityId === cargo.cityId && g.goodsId === quote.goodsId && g.buyPrice === quote.price);
-      if (batch) batch.num += plan.count;
-      else player.goods.push({ pid: ++pid, goodsId: quote.goodsId, num: plan.count, cityId: cargo.cityId, buyPrice: quote.price });
+      // 每笔采购保留独立批次，不能合并后少算清仓操作时间。
+      player.goods.push({ pid: ++pid, goodsId: quote.goodsId, num: plan.count, cityId: cargo.cityId, buyPrice: quote.price });
       itinerary.clear();
     } else if (plan.kind === 'sell') {
       const batch = player.goods.find(g => g.pid === plan.pid);
@@ -414,6 +417,12 @@ function simulate(world, settings, variant, seed) {
       const expected = gainFor(batch, market.goods.find(g => g.goodsId === batch.goodsId).price, cargo.cargoLv);
       if (plan.gain !== expected) throw Error('成交记账公式不一致');
       player.coins += batch.buyPrice * batch.num + plan.gain; player.profit += Math.max(0, plan.gain); dayProfit[d] += Math.max(0, plan.gain); netGain += plan.gain;
+      if (plan.gain < 0) { grossLoss -= plan.gain; lossSales++; }
+      if (plan.experiment) {
+        experimentSales++;
+        if (plan.gain < 0) { experimentLoss -= plan.gain; experimentLossSales++; }
+      }
+      if (player.profit >= goal && goalAt === null) goalAt = time - event.startTime;
       for (const target of [1_000_000, 5_000_000, goal]) if (player.profit >= target && milestones[target] === undefined) milestones[target] = pins;
       player.goods = player.goods.filter(g => g.pid !== batch.pid); openingCargo = openingCargo.filter(p => p !== batch.pid); itinerary.clear();
     } else if (plan.kind === 'move') {
@@ -430,9 +439,14 @@ function simulate(world, settings, variant, seed) {
       time = nextTime; continue;
     }
     if (trace) logs.push({ type: plan.kind, t: time - event.startTime, city: cargo.cityId, profit: player.profit, coins: player.coins,
-      count: plan.count, goodsId: plan.goodsId, destination: plan.destination, gain: plan.gain });
+      count: plan.count, goodsId: plan.goodsId, destination: plan.destination, gain: plan.gain,
+      experiment: plan.experiment, clearance: plan.clearance });
     const used = player.goods.reduce((sum, g) => sum + g.num * defs.get(g.goodsId).capacity, 0);
     if (used > config.tables.TradeShipCfg.data.find(s => s.lv === cargo.cargoLv).capacity || player.coins < 0) throw Error('本人资金或舱位越界');
+    const capital = 10000 + netGain;
+    minCapital = Math.min(minCapital, capital); peakCapital = Math.max(peakCapital, capital);
+    maxDrawdown = Math.max(maxDrawdown, peakCapital - capital);
+    maxDrawdownPercent = Math.max(maxDrawdownPercent, (peakCapital - capital) / peakCapital * 100);
     time += selfStep;
   }
   rivals.advance(event.endTime - 1);
@@ -445,6 +459,8 @@ function simulate(world, settings, variant, seed) {
   if (player.coins + cost(player.goods) !== 10000 + netGain) throw Error('本人资金不守恒');
   for (const b of rivals.bots) if (b.coins + cost(b.goods) !== 10000 + b.netGain) throw Error('对手资金不守恒');
   return { profit: player.profit, pins, moves, milestones, dailyPins: daily, dayProfit, levels,
+    cash: player.coins, heldCost: cost(player.goods), netGain, grossLoss, lossSales, experimentSales, experimentLoss, experimentLossSales,
+    minCapital, maxDrawdown, maxDrawdownPercent, goalAt,
     refreshPins, prepPins, boughtCells, refreshBoughtCells, emptyDepartures, shortageVisits, visits, waitHours: waitSeconds / 3600,
     optimisticWaitHours: optimisticWaitSeconds / 3600, speedReasons,
     distribution: rivals.distribution(),
@@ -455,6 +471,6 @@ const settings = { ...merchantPresets.find(p => p.id === 'sprint').settings.merc
 for (let seed = firstSeed; seed < firstSeed + seeds; seed++) for (const variant of variants) {
   const started = performance.now();
   const result = simulate(makeWorld(seed), settings, variant, seed);
-  console.log(JSON.stringify({ seed, variant, engine: process.env.MC_ENGINE_LABEL ?? 'current', rivalCount, rivalStep, rivalWindow, rivalDailyLimit, rivalDistribution, actionSeconds: selfStep, pollSeconds,
+  console.log(JSON.stringify({ seed, variant, modelRevision: 'clearance-v1-separated-batches', engine: process.env.MC_ENGINE_LABEL ?? 'current', rivalCount, rivalStep, rivalWindow, rivalDailyLimit, rivalDistribution, actionSeconds: selfStep, pollSeconds,
     cap, sprintStock, intel: process.env.MC_INTEL ?? 'normal', elapsedMs: Math.round(performance.now() - started), ...result }));
 }
