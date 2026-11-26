@@ -106,7 +106,7 @@ function withWarehouseBuffer(plan, products, state, byId) {
   return { ...plan, steps, stores: moves };
 }
 
-export function planHomelandMerges(config, state, { takeWarehouse = false, warehouseBuffer = false, searchLimits } = {}) {
+export function homelandMergeModel(config, state, takeWarehouse = false, warehouseBuffer = false) {
   const configs = table(config, 'DualCombinePieceCfg'), byId = new Map(), previous = new Map();
   for (const row of configs) {
     if (!row.pieceId || byId.has(row.pieceId)) throw Error('工坊棋子配置编号重复或缺失');
@@ -151,6 +151,11 @@ export function planHomelandMerges(config, state, { takeWarehouse = false, wareh
     }
   }
   for (const rows of stock.values()) rows.sort((a, b) => Number(a.location === 'warehouse') - Number(b.location === 'warehouse'));
+  return { byId, previous, stock, halves, requests };
+}
+
+export function planHomelandMerges(config, state, { takeWarehouse = false, warehouseBuffer = false, searchLimits } = {}) {
+  const { byId, previous, stock, halves, requests } = homelandMergeModel(config, state, takeWarehouse, warehouseBuffer);
   const estimates = requests.map(({ order, reserved, missing }) => {
     const result = { slot: order.slot, order, merges: 0, stores: 0, next: null, reason: '' };
     const total = [...stock.values(), ...halves.values()].reduce((sum, rows) => sum + rows.length, 0);

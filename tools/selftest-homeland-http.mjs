@@ -63,7 +63,7 @@ try {
   a.state.orders.pop();
   a.state.orders[0].reqs[0].pieceCfgId = '鱼4';
   const waiting = ok(await h.api('settings/preview', { category: 'homeland', settings: draft }));
-  assert(waiting.notes.some(note => /现有棋子无法补齐订单/.test(note)));
+  assert(waiting.notes.some(note => /没有已解锁的生产器/.test(note)));
   console.log('通过：合成草稿开关与等待原因、预览只读、跨账号拒绝、合成并发防重及交单状态刷新');
 
   a.state.cells = ['鱼4', '鱼1'].map((pieceCfgId, cellId) => ({ cellId, state: 2, piece: { uid: 600 + cellId, pieceCfgId } }));
@@ -84,4 +84,25 @@ try {
   assert.equal(a.state.writes.length, beforeBuffer + 1);
   assert.equal((await read()).warehouse.used, 2);
   console.log('通过：仓库中转草稿预览只读、开关保存、账号隔离与并发存入只执行一次');
+
+  a.state.cells = [{ cellId: 0, state: 2, piece: { uid: 700, pieceCfgId: '钩1' } }, { cellId: 1, state: 2 }, { cellId: 2, state: 2 }];
+  a.state.warehouse = [];
+  a.state.orders = [{ slot: 0, orderId: 15, reqs: [{ pieceCfgId: '鱼2', count: 1 }] }];
+  const productionSettings = ok(await h.api('settings')), beforeProduction = a.state.writes.length;
+  const off = ok(await h.api('settings/preview', { category: 'homeland', settings: productionSettings.settings }));
+  assert(!off.actions.some(row => /生产原料/.test(row.label)));
+  assert(off.notes.some(note => /开启「按订单生产原料」/.test(note)));
+  productionSettings.settings.homeland.produceOrders = true;
+  const productionPreview = ok(await h.api('settings/preview', { category: 'homeland', settings: productionSettings.settings }));
+  assert.deepEqual(productionPreview.actions.find(row => /生产原料/.test(row.label)).costs, [{ name: '工坊体力', num: 1 }]);
+  assert.equal(a.state.writes.length, beforeProduction);
+  ok(await h.api('settings', { settings: productionSettings.settings, revision: productionSettings.revision, baseRevision: productionSettings.baseRevision }));
+  const production = (await read()).actions.find(row => row.kind === 'produceOrders'); assert(production);
+  assert.equal((await read()).orders[0].synthesis.status, 'production');
+  denied(await h.api('homeland/action', body(production), 'b'));
+  const produced = await Promise.all([h.api('homeland/action', body(production)), h.api('homeland/action', body(production))]);
+  assert.equal(produced.filter(row => row.data.status === 'confirmed').length, 1);
+  assert.equal(a.state.writes.length, beforeProduction + 1);
+  assert.equal((await read()).staminaBudget.used, 1);
+  console.log('通过：生产草稿与体力成本预览只读、旧配置不生产、生产账号隔离及重复点击仅消耗一次体力');
 } finally { await h.close(); }

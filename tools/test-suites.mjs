@@ -152,6 +152,7 @@ const progression = [
   'tools/selftest-homeland-merge.mjs',
   'tools/selftest-homeland-buffer.mjs',
   'tools/selftest-homeland-search.mjs',
+  'tools/selftest-homeland-production.mjs',
   'tools/selftest-homeland-http.mjs',
   'tools/selftest-equipment-automation.mjs',
   'tools/selftest-items.mjs',
@@ -335,7 +336,7 @@ const regression = [
 ];
 
 export const suites = {
-  homeland: ['tools/selftest-homeland.mjs', 'tools/selftest-homeland-merge.mjs', 'tools/selftest-homeland-buffer.mjs', 'tools/selftest-homeland-search.mjs', 'tools/selftest-homeland-http.mjs'],
+  homeland: ['tools/selftest-homeland.mjs', 'tools/selftest-homeland-merge.mjs', 'tools/selftest-homeland-buffer.mjs', 'tools/selftest-homeland-search.mjs', 'tools/selftest-homeland-production.mjs', 'tools/selftest-homeland-http.mjs'],
   accounts,
   macos,
   'world-boss': worldBoss,

@@ -25,6 +25,7 @@ for (const [key,label] of [
 add('forge.enabled','装备自动锻造','装备');
 add('homeland.enabled','家园总开关','基地',{gates:['loop.world'],configuredFields:['freeStamina','freeBox','submitOrders','unlockFloors','clean','tech','upgrade'].map(key=>'homeland.'+key)});
 add('homeland.mergeOrders','按订单需求自动合成','基地',{gates:['loop.world','homeland.enabled','homeland.submitOrders']});
+add('homeland.produceOrders','按订单生产原料','基地',{gates:['loop.world','homeland.enabled','homeland.submitOrders','homeland.mergeOrders']});
 add('homeland.warehouseBuffer','使用仓库中转腾位','基地',{gates:['loop.world','homeland.enabled','homeland.submitOrders','homeland.mergeOrders','homeland.takeWarehouse']});
 for (const [key,label] of [['freeStamina','每日免费工坊体力'],['freeBox','工坊免费宝箱'],['submitOrders','工坊订单交单'],['takeWarehouse','取出订单所需仓库物品'],['unlockFloors','开放家园楼层'],['clean','打扫家园'],['tech','家园科技升级'],['upgrade','家园升级']])
  add('homeland.'+key,label,'基地',{gates:['loop.world','homeland.enabled',...(key==='takeWarehouse'?['homeland.submitOrders']:[])]});

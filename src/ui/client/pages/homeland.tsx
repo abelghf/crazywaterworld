@@ -152,6 +152,7 @@ function Homeland({ account }: { account: string }) {
         >
           {label || action.title}
           {action.coinCost ? ` · ${action.coinCost} 币` : ""}
+          {action.staminaCost ? ` · ${action.staminaCost} 体力` : ""}
         </Button>
         {action.reason && <small>{action.reason}</small>}
       </div>
@@ -231,7 +232,7 @@ function Homeland({ account }: { account: string }) {
                 <div>
                   <dt>工坊体力</dt>
                   <dd>{data.stamina.toLocaleString()}</dd>
-                  <small>用于游戏内生产</small>
+                  <small>用于按订单生产原料</small>
                 </div>
               </dl>
             </CardContent>
@@ -334,7 +335,7 @@ function Homeland({ account }: { account: string }) {
             <div className={styles.sectionHeading}>
               <div>
                 <h3 id="homeland-workshop-title">工坊</h3>
-                <p>领取每日补给，按订单合成与交单。</p>
+                <p>领取每日补给，按订单生产、合成与交单。</p>
               </div>
               <Badge variant="outline">
                 {data.orders.filter((row) => row.ready).length} /{" "}
@@ -422,6 +423,7 @@ function Homeland({ account }: { account: string }) {
                                 "takeWarehouse",
                                 "mergeOrders",
                                 "warehouseBuffer",
+                                "produceOrders",
                               ].includes(row.kind) &&
                               row.orderSlot === order.slot,
                           )
@@ -437,6 +439,9 @@ function Homeland({ account }: { account: string }) {
               {data.warehouse.capacity ?? "容量待同步"}。
               宝箱领取后进入游戏工坊奖励区。暂存物品按后续订单需要取回。
               备料步数按当前订单、仓库权限与成品保留规则计算。
+              生产产物可能随机，每次生产后重新规划。 今日生产体力{" "}
+              {data.staminaBudget.used} / {data.staminaBudget.limit}，保留{" "}
+              {data.staminaBudget.keep}。
             </p>
           </section>
 

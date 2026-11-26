@@ -122,7 +122,7 @@ try {
     assert.equal((await h.api('settings')).data.settings.homeland[key], true);
   }
   assert.equal((await h.api('settings')).data.settings.homeland.takeWarehouse, false);
-  for (const key of ['takeWarehouse', 'warehouseBuffer']) {
+  for (const key of ['takeWarehouse', 'warehouseBuffer', 'produceOrders']) {
     await page.locator('#config-state').filter({ hasText: '配置已同步' }).waitFor();
     const toggle = settings.locator('#config-field-homeland-' + key);
     if (!await toggle.isVisible()) await settings.getByRole('button', { name: '按订单需求自动合成，展开下级设置' }).click();
@@ -171,6 +171,28 @@ try {
   assert.equal(posts.length, 4);
   assert.equal(state.writes.filter(row => row.name === 'DualCombinePutToWarehouseRequest').length, 1);
   console.log('通过：仓库中转开关保存、手机计划与容量展示、单步暂存和回读刷新');
+  state.cells = [{ cellId: 0, state: 2, piece: { uid: 900, pieceCfgId: '钩1' } }, { cellId: 1, state: 2 }, { cellId: 2, state: 2 }];
+  state.warehouse = []; state.stamina = 10;
+  state.orders = [{ slot: 0, orderId: 15, reqs: [{ pieceCfgId: '鱼2', count: 1 }] }];
+  await panel.getByRole('button', { name: '刷新家园', exact: true }).click();
+  const produceButton = panel.getByRole('button', { name: '使用生产器生产原料，用于订单 1 · 1 体力', exact: true });
+  await produceButton.waitFor();
+  assert.match(await panel.textContent(), /按订单逐件生产并继续合成/);
+  assert.doesNotMatch(await panel.textContent(), /备料最少/);
+  assert(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1));
+  await page.screenshot({ path: path.join(output, 'production-320.png'), fullPage: true });
+  const produced = page.waitForResponse(response => new URL(response.url()).pathname === '/api/homeland/action');
+  await produceButton.evaluate(button => { button.click(); button.click(); });
+  assert.equal((await produced).status(), 200);
+  await panel.getByText(/今日生产体力 1 \/ 500/).waitFor();
+  assert.equal(posts.length, 5); assert.equal(state.stamina, 9);
+  assert.equal(state.writes.filter(row => row.name === 'DualCombineProduceRequest').length, 1);
+  await produceButton.click();
+  await panel.getByRole('button', { name: '鱼 ×2 → 生鱼片，用于订单 1', exact: true }).click();
+  await panel.getByRole('button', { name: '提交订单', exact: true }).click();
+  await panel.getByText('当前没有工坊订单，稍后刷新查看。').waitFor();
+  assert.equal(state.stamina, 8); assert.equal(posts.length, 8);
+  console.log('通过：生产开关保存、手机端体力费用与非最优状态、双击防重、生产后合成并交单');
   assert.equal(errors.length, 0, errors.join('\n'));
   console.log('通过：360/320 像素布局、家园配置保存且不连带开启细项、无页面脚本错误');
 } finally { if (browser) await browser.close(); await h.close(); }

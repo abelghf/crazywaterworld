@@ -25,7 +25,7 @@ export const settingsFile = () => path.join(dataDirectory(), 'automation-setting
 export const SETTINGS_FORMAT = 'crazywaterworld-automation';
 // 文件 version / 账号 settingsVersion 是格式编号，只随结构迁移调整；
 // revision 是每次保存递增的修订号，仅用于并发冲突检查，不能用作格式版本。
-export const SETTINGS_SCHEMA_VERSION = 74;
+export const SETTINGS_SCHEMA_VERSION = 75;
 const LEGACY_SETTINGS_FORMAT = 'crazywaterword-automation';
 const treasureQualityLabels = { ORANGE: '万吨货轮', PURPLE: '中型货轮', BLUE: '小型货轮' };
 const treasureChaseDefaults = {
@@ -174,6 +174,7 @@ const constraints = {
   'forge.decomposeQualities': { ...strings(5), values: ['GREEN','BLUE','PURPLE','ORANGE','RED'] },
   'cargo.dailyLoadLimit': int(), 'pet.species': strings(), 'pet.quality': { kind: 'choice', values: ['BLUE', 'PURPLE', 'ORANGE', 'RED'] },
   'homeland.keepCoins': int(), 'homeland.dailyCoinLimit': int(),
+  'homeland.keepStamina': int(), 'homeland.dailyStaminaLimit': int(),
   'homeland.targetLevel': int(1000, 1), 'homeland.targetTech': int(10000), 'homeland.checkEverySeconds': int(86400, 30),
   'museum.factorMode': { kind: 'choice', values: ['materials', 'recommended'] },
   'museum.fullRecommendedFactor': int(3, 1), 'museum.partialRecommendedFactor': int(3, 1), 'museum.noRecommendedFactor': int(3, 1),
@@ -360,6 +361,7 @@ function validateCurrentSettings(input, { partial = false, catalog = null } = {}
   if (plain(input) && !Object.hasOwn(input, 'homeland')) input = { ...input, homeland: { ...HOMELAND_DEFAULTS } };
   if (plain(input?.homeland) && !Object.hasOwn(input.homeland, 'mergeOrders')) input = { ...input, homeland: { ...input.homeland, mergeOrders: false } };
   if (plain(input?.homeland) && !Object.hasOwn(input.homeland, 'warehouseBuffer')) input = { ...input, homeland: { ...input.homeland, warehouseBuffer: false } };
+  if (plain(input?.homeland)) input = { ...input, homeland: { produceOrders: false, keepStamina: 0, dailyStaminaLimit: 500, ...input.homeland } };
   // An already-open settings page can still submit the retired fields.
   // Ignore only these known fields; every other setting remains strict.
   input = migrateVersion10Settings(migrateVersion9Settings(migrateVersion8Settings(migrateVersion7Settings(migrateVersion6Settings(migrateVersion5Settings(migrateVersion4Settings(migrateVersion3Settings(migrateVersion2Settings(input)))))))));
@@ -823,6 +825,8 @@ settingsMigrations.set(72, settings => plain(settings?.homeland) && !Object.hasO
   ? { ...settings, homeland: { ...settings.homeland, mergeOrders: false } } : settings);
 settingsMigrations.set(73, settings => plain(settings?.homeland) && !Object.hasOwn(settings.homeland, 'warehouseBuffer')
   ? { ...settings, homeland: { ...settings.homeland, warehouseBuffer: false } } : settings);
+settingsMigrations.set(74, settings => plain(settings?.homeland)
+  ? { ...settings, homeland: { produceOrders: false, keepStamina: 0, dailyStaminaLimit: 500, ...settings.homeland } } : settings);
 const supportedSettingsVersion = version => Number.isSafeInteger(version) && version >= 1;
 const entrySettingsVersion = entry => Object.hasOwn(entry, 'settingsVersion') ? entry.settingsVersion : 1;
 function newestSettingsVersion(store) {

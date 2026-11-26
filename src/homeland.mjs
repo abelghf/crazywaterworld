@@ -4,6 +4,7 @@ import { toNumber } from './client.mjs';
 import { gameplayOpenDay, worldOpenDays } from './extra-rewards.mjs';
 import { HOMELAND_ACTIONS, HOMELAND_DEFAULTS, homelandEnabled } from './homeland-settings.mjs';
 import { planHomelandMerges, sortHomelandOrders } from './homeland-merge.mjs';
+import { planHomelandProduction } from './homeland-production.mjs';
 
 const COIN = '家园币', SHOP = 15;
 const requests = {
@@ -11,6 +12,7 @@ const requests = {
   freeBox: ['BuyShopProductRequest'], submitOrders: ['DualCombineSubmitOrderRequest'],
   takeWarehouse: ['DualCombineTakeFromWarehouseRequest', 'DualCombineTakeFromWarehouseResponse'],
   mergeOrders: ['DualCombineMoveRequest', 'DualCombineMoveResponse'],
+  produceOrders: ['DualCombineProduceRequest', 'DualCombineProduceResponse'],
   warehouseBuffer: ['DualCombinePutToWarehouseRequest', 'DualCombinePutToWarehouseResponse'],
   unlockFloors: ['HomelandUnlockRequest'], clean: ['HomelandFinishTaskRequest'],
   tech: ['HomelandTechUpRequest'], upgrade: ['HomelandLevelUpRequest'],
@@ -53,7 +55,8 @@ const pieceName = (config, id) => table(config, 'DualCombinePieceCfg').find(row 
 const assets = (config, value) => (value ?? []).map(([id, num]) => ({ id, num,
   name: config.materialName?.(id) && config.materialName(id) !== '未知材料' ? config.materialName(id) : pieceName(config, id) }));
 function pieces(value, label) {
-  const rows = list(value, label).map(row => ({ uid: count(row.uid, label + '编号'), id: row.pieceCfgId }));
+  const rows = list(value, label).map(row => ({ uid: count(row.uid, label + '编号'), id: row.pieceCfgId,
+    produceLeft: count(row.produceLeft ?? 0, '生产器剩余次数'), produceCdTs: count(row.produceCdTs ?? 0, '生产器冷却时间') }));
   if (rows.some(row => !positive(row.uid) || typeof row.id !== 'string' || !row.id) || new Set(rows.map(row => row.uid)).size !== rows.length) throw Error(label + '编号无效');
   return rows;
 }
@@ -121,6 +124,35 @@ function businessConfirmed(expected, state) {
     case 'freeStamina': return state.freeStaminaTime > 0 && dayOf(state.freeStaminaTime) === expected.day;
     case 'freeBox': return state.day === expected.day && state.products.some(row => row.id === expected.target && row.buyTimes >= expected.bought + 1);
     case 'takeWarehouse': return !state.warehouse.some(row => row.uid === expected.target) && state.board.some(row => row.uid === expected.target);
+    case 'produceOrders': {
+      const before = expected.boardBefore, producer = expected.producer;
+      if (!Array.isArray(before) || !producer) return false;
+      const source = state.cells.find(cell => cell.cellId === producer.cellId);
+      if (!source || source.state !== 2) return false;
+      if (source.piece) {
+        if (source.piece.uid !== producer.uid || source.piece.id !== producer.id) return false;
+      } else if (!(expected.count > 0 && producer.produceLeft === 1 && expected.cd === 0)) return false;
+      if (digest(state.warehouse) !== expected.warehouseBefore) return false;
+      // A balance change or an expired order cannot prove production. Exactly
+      // one new, permitted drop must appear in a formerly empty unlocked cell;
+      // every pre-existing ingredient must remain in place.
+      if (before.length !== state.cells.length) return false;
+      const newPieces = [];
+      for (const old of before) {
+        if (old.cellId === producer.cellId) continue;
+        const cell = state.cells.find(row => row.cellId === old.cellId);
+        if (!cell || cell.state !== old.state) return false;
+        if (old.piece) { if (cell.piece?.uid !== old.piece.uid || cell.piece?.id !== old.piece.id) return false; }
+        else if (cell.piece) {
+          if (old.state !== 2 || !expected.outputs.includes(cell.piece.id) || expected.uidsBefore.includes(cell.piece.uid)) return false;
+          newPieces.push(cell);
+        }
+      }
+      if (newPieces.length !== 1) return false;
+      const receipt = expected.receipt;
+      return !receipt || receipt.cellId === newPieces[0].cellId
+        && receipt.uid === newPieces[0].piece.uid && receipt.id === newPieces[0].piece.id;
+    }
     case 'warehouseBuffer': {
       const source = state.cells.find(cell => cell.cellId === expected.cellId);
       return source?.state === 2 && !source.piece
@@ -152,9 +184,16 @@ function recordsFor(options) {
 }
 const oldFreeClaim = (expected, state) => ['freeStamina', 'freeBox'].includes(expected?.kind)
   && natural(expected.day) && state.day > expected.day && !expected.coinCost;
+// A pending production needs the complete board baseline. Retain only the
+// receipt and cost after confirmation, rather than a full board per click.
+const confirmedDetails = details => {
+  if (details?.expected?.kind !== 'produceOrders') return details;
+  const { kind, target, producer, staminaCost, receipt } = details.expected;
+  return { ...details, expected: { kind, target, producer, staminaCost, ...(receipt ? { receipt } : {}) } };
+};
 function reconcile(options, state) {
   for (const [key, record] of recordsFor(options)) {
-    if (fullyConfirmed(record.details?.expected ?? {}, state)) options.ledger.resolveKey(key, true);
+    if (fullyConfirmed(record.details?.expected ?? {}, state)) options.ledger.resolveKey(key, true, confirmedDetails(record.details));
     // A new daily entitlement is independent of yesterday's free claim. Keep the
     // old attempt as expired, never rewrite its unknown outcome as success.
     else if (oldFreeClaim(record.details?.expected, state)) options.ledger.retireUnknownKey(key, record);
@@ -163,7 +202,8 @@ function reconcile(options, state) {
 function plan(config, state, options) {
   const pref = settingsOf(options), actions = [], scope = scopeOf(options.player);
   const pending = recordsFor(options).filter(([, row]) => !fullyConfirmed(row.details?.expected ?? {}, state) && !oldFreeClaim(row.details?.expected, state));
-  const used = options.ledger?.snapshot().counters.homelandCoins ?? 0;
+  const counters = options.ledger?.snapshot().counters ?? {};
+  const used = counters.homelandCoins ?? 0, usedStamina = counters.homelandStamina ?? 0;
   const add = (kind, target, body, detail, coinCost = 0, reason = '', evidence = {}) => {
     if (kind === 'takeWarehouse') evidence = { ...evidence, transferState: digest([state.cells, state.warehouse]) };
     const expected = { kind, target, ...evidence, ...(coinCost ? { coinCost, coinsBefore: state.coins } : {}) };
@@ -177,12 +217,18 @@ function plan(config, state, options) {
       if (state.coins - coinCost < pref.keepCoins) reason ||= '家园币不足或低于保留量';
       if (used + coinCost > pref.dailyCoinLimit) reason ||= '今日家园币预算不足';
     }
+    if (evidence.staminaCost) {
+      if (state.stamina - evidence.staminaCost < pref.keepStamina) reason ||= '工坊体力不足或低于保留量';
+      if (usedStamina + evidence.staminaCost > pref.dailyStaminaLimit) reason ||= '今日工坊生产体力预算不足';
+    }
     if (requests[kind].some(name => !options.protocol?.[name] && !options.clientProtocol?.[name])) reason ||= '当前协议缺少此操作';
     if (kind === 'warehouseBuffer' && [...requests.takeWarehouse, ...requests.mergeOrders].some(name => !options.protocol?.[name] && !options.clientProtocol?.[name]))
       reason ||= '当前协议缺少后续取料或合成操作';
+    if (evidence.forProduction && requests.produceOrders.some(name => !options.protocol?.[name] && !options.clientProtocol?.[name]))
+      reason ||= '当前协议缺少生产原料操作';
     const id = `${kind}:${target}` + (['takeWarehouse', 'mergeOrders', 'warehouseBuffer'].includes(kind) ? `:${evidence.order}` : '');
-    actions.push({ id, kind, title: HOMELAND_ACTIONS[kind], detail, coinCost, reason, token, body, expected, key,
-      forMerge: evidence.forMerge === true, orderSlot: evidence.orderSlot ?? null });
+    actions.push({ id, kind, title: HOMELAND_ACTIONS[kind], detail, coinCost, staminaCost: evidence.staminaCost ?? 0, reason, token, body, expected, key,
+      forMerge: evidence.forMerge === true, forProduction: evidence.forProduction === true, orderSlot: evidence.orderSlot ?? null });
   };
   const current = table(config, 'HomelandLevelCfg').find(row => row.level === state.level);
   const next = table(config, 'HomelandLevelCfg').find(row => row.level === state.level + 1);
@@ -232,15 +278,21 @@ function plan(config, state, options) {
     }
     return { slot: order.slot, limited: order.orderType === 1, expiresAt, requirements: needs, ready: ready && !expired, synthesis: null };
   });
-  for (const recipe of planHomelandMerges(config, state, { takeWarehouse: pref.takeWarehouse, warehouseBuffer: pref.warehouseBuffer })) {
+  const mergePlans = planHomelandMerges(config, state, { takeWarehouse: pref.takeWarehouse, warehouseBuffer: pref.warehouseBuffer });
+  const productionPlans = planHomelandProduction(config, state, pref, mergePlans, usedStamina);
+  for (const recipe of mergePlans.map(merge => {
+    const production = productionPlans.find(row => row.slot === merge.slot);
+    return production ? { ...merge, ...production, status: 'production', steps: null, lowerBound: null, forProduction: true } : merge;
+  })) {
     const order = orders.find(row => row.slot === recipe.slot), next = recipe.next;
     order.synthesis = { merges: recipe.merges, stores: recipe.stores, takes: recipe.takes, steps: recipe.steps,
-      status: recipe.status, lowerBound: recipe.lowerBound, reason: recipe.reason };
+      status: recipe.status, lowerBound: recipe.lowerBound, reason: recipe.reason || (recipe.forProduction
+        ? `原料不足，${pref.produceOrders ? '按订单逐件生产并继续合成' : '可手动补料，自动执行需开启「按订单生产原料」'}` : '') };
     if (!next) continue;
-    const evidence = { order: orderIdentity(recipe.order), orderSlot: recipe.slot, forMerge: true };
+    const evidence = { order: orderIdentity(recipe.order), orderSlot: recipe.slot, forMerge: true, forProduction: recipe.forProduction === true };
     if (next.kind === 'takeWarehouse') {
       const existing = actions.find(action => action.kind === 'takeWarehouse' && action.expected.target === next.piece.uid && action.orderSlot === recipe.slot);
-      if (existing) existing.recipeStep = true;
+      if (existing) { existing.recipeStep = true; if (recipe.forProduction) existing.forProduction = true; }
       else
         add('takeWarehouse', next.piece.uid, { pieceUid: next.piece.uid }, `取出${pieceName(config, next.piece.id)}，用于合成订单 ${recipe.slot + 1}`, 0, '', evidence);
     } else if (next.kind === 'warehouseBuffer') {
@@ -248,6 +300,15 @@ function plan(config, state, options) {
       const target = digest([piece.uid, evidence.order, state.cells, state.warehouse]);
       add('warehouseBuffer', target, { cellId: piece.cellId }, `暂存${pieceName(config, piece.id)}到仓库，为订单 ${recipe.slot + 1} 腾位`, 0, '',
         { ...evidence, pieceUid: piece.uid, pieceId: piece.id, cellId: piece.cellId, warehouseCapacity: state.warehouseCapacity });
+    } else if (next.kind === 'produceOrders') {
+      const { producer, staminaCost, outputs, count, cd } = next;
+      const boardBefore = state.cells.map(cell => ({ cellId: cell.cellId, state: cell.state,
+        piece: cell.piece ? { uid: cell.piece.uid, id: cell.piece.id } : null }));
+      const target = digest([producer, boardBefore, state.warehouse, evidence.order, state.day, counters.homelandProductions ?? 0]);
+      add('produceOrders', target, { cellId: producer.cellId },
+        `使用${pieceName(config, producer.id)}生产原料，用于订单 ${recipe.slot + 1}`, 0, '',
+        { ...evidence, day: state.day, producer, staminaCost, outputs, count, cd, boardBefore, warehouseBefore: digest(state.warehouse),
+          uidsBefore: [...state.cells.flatMap(cell => cell.piece ? [cell.piece.uid] : []), ...state.warehouse.map(piece => piece.uid)] });
     } else {
       const { from, to, nextId } = next;
       if (from.location !== 'board' || !['board', 'half'].includes(to.location) || from.id !== to.id || from.uid === to.uid) throw Error('合成首步依赖尚未就绪');
@@ -286,6 +347,7 @@ function plan(config, state, options) {
     freeBoxClaimed: freeProducts.length > 0 && freeProducts.every(row => row.limit > 0 && row.bought >= row.limit),
     pending: pending.map(([, row]) => row.details?.label ?? '家园操作'),
     budget: { used, limit: pref.dailyCoinLimit, keep: pref.keepCoins }, checkedAt: new Date().toISOString(),
+    staminaBudget: { used: usedStamina, limit: pref.dailyStaminaLimit, keep: pref.keepStamina },
   };
 }
 const publicView = view => ({ ...view, actions: view.actions.map(({ body, expected, key, ...action }) => action) });
@@ -319,12 +381,14 @@ export async function executeHomeland(client, config, options) {
     && (action.kind !== 'takeWarehouse' || settingsOf(options).submitOrders === true)
     && (action.kind !== 'mergeOrders' || settingsOf(options).submitOrders === true)
     && (action.kind !== 'warehouseBuffer' || settingsOf(options).submitOrders === true)
-    && (!action.forMerge || settingsOf(options).mergeOrders === true)
+    && (!action.forMerge || settingsOf(options).mergeOrders === true && settingsOf(options).submitOrders === true)
+    && (!action.forProduction || settingsOf(options).produceOrders === true)
     && (action.kind !== 'upgrade' || action.expected.target <= settingsOf(options).targetLevel)
     && (action.kind !== 'tech' || action.expected.target <= settingsOf(options).targetTech));
   const [request, response] = requests[action.kind];
   const step = { kind: 'homeland', request, body: action.body, label: action.detail,
-    costs: action.coinCost ? [{ id: COIN, num: action.coinCost }] : [],
+    costs: action.coinCost ? [{ id: COIN, num: action.coinCost }]
+      : action.staminaCost ? [{ id: 'DUAL_COMBINE_STAMINA', num: action.staminaCost }] : [],
     verifyGrowth: async connection => businessConfirmed(action.expected, await snapshot(connection, config,
       { ...options, enabled: () => connection.connected !== false && scopeOf(options.player) === scope })) };
   let hold, ticket, attempted = false, writeRejected = false;
@@ -334,21 +398,32 @@ export async function executeHomeland(client, config, options) {
     const final = await snapshot(client, config, { ...options, enabled: active });
     const fresh = plan(config, final, { ...options, clientProtocol: client.protocol }).actions.find(row => row.id === id);
     if (!fresh || fresh.token !== token || fresh.reason) throw Object.assign(Error(fresh?.reason || '发送前家园状态已变化'), { notSent: true });
-    hold = ledger.reserve(action.coinCost ? { homelandCoins: action.coinCost } : {},
-      { homelandCoins: settingsOf(options).dailyCoinLimit }, {}, { uniqueKey: action.key, details: { expected: action.expected, label: action.detail } });
+    hold = ledger.reserve(action.coinCost ? { homelandCoins: action.coinCost }
+      : action.kind === 'produceOrders' ? { homelandStamina: action.staminaCost, homelandProductions: 1 } : {},
+      { homelandCoins: settingsOf(options).dailyCoinLimit, homelandStamina: settingsOf(options).dailyStaminaLimit }, {},
+      { uniqueKey: action.key, details: { expected: action.expected, label: action.detail } });
     const beforeSend = () => {
       const latest = settingsOf(options);
       if (!permitted() || (action.expected.day !== undefined && dayOf(clock(client)) !== action.expected.day)
         || (action.coinCost && (final.coins - action.coinCost < latest.keepCoins
-          || ledger.snapshot().counters.homelandCoins > latest.dailyCoinLimit))) throw Object.assign(Error('开关、预算、日期或连接已变化'), { notSent: true });
-      if (['submitOrders', 'mergeOrders', 'takeWarehouse', 'warehouseBuffer'].includes(action.kind)) {
+          || ledger.snapshot().counters.homelandCoins > latest.dailyCoinLimit))
+        || (action.staminaCost && (final.stamina - action.staminaCost < latest.keepStamina
+          || ledger.snapshot().counters.homelandStamina > latest.dailyStaminaLimit))) throw Object.assign(Error('开关、预算、日期或连接已变化'), { notSent: true });
+      if (['submitOrders', 'mergeOrders', 'takeWarehouse', 'warehouseBuffer', 'produceOrders'].includes(action.kind)) {
         const order = final.orders.find(row => row.slot === action.orderSlot);
         if (!order || (count(order.expireTs ?? 0, '订单到期时间') > 0 && count(order.expireTs, '订单到期时间') <= clock(client))) throw Object.assign(Error('订单已到期'), { notSent: true });
       }
     };
     try {
       attempted = true;
-      if (response) await client.request(request, action.body, response, 15000, beforeSend);
+      if (response) {
+        const reply = await client.request(request, action.body, response, 15000, beforeSend);
+        if (action.kind === 'produceOrders' && reply?.cellId === action.body.cellId && reply.newPiece?.piece) {
+          const piece = pieces([reply.newPiece.piece], '生产回执')[0];
+          action.expected.receipt = { cellId: count(reply.newPiece.cellId, '产物格子'), uid: piece.uid, id: piece.id };
+          ledger.updateKeyDetails(action.key, { expected: action.expected, label: action.detail });
+        }
+      }
       else await client.sendWatch(request, action.body, { beforeSend });
     } catch (error) {
       writeRejected = error.notSent === true || !!(error.prompt && error.request === request);
@@ -357,7 +432,8 @@ export async function executeHomeland(client, config, options) {
     }
     const after = await snapshot(client, config, { ...options, enabled: active });
     if (!fullyConfirmed(action.expected, after)) throw Error('等待游戏回读确认进度与库存');
-    ledger.confirm(hold);
+    if (action.kind === 'produceOrders') ledger.resolveKey(action.key, true, confirmedDetails({ expected: action.expected, label: action.detail }));
+    else ledger.confirm(hold);
     const result = { status: 'confirmed', ok: true, message: action.detail + '，已确认', label: action.detail };
     try { await options.guard.after(step, ticket, result); } catch { /* A failed observer cannot undo confirmed business and inventory evidence. */ }
     return result;
@@ -388,15 +464,17 @@ export async function runHomeland(client, config, options) {
       reconcile(options, state);
       const view = plan(config, state, { ...options, clientProtocol: client.protocol });
       const current = settingsOf(options);
-      const priority = ['freeStamina', 'freeBox', 'submitOrders', 'mergeOrders', 'warehouseBuffer', 'takeWarehouse', 'upgrade', 'unlockFloors', 'clean', 'tech'];
+      const priority = ['freeStamina', 'freeBox', 'submitOrders', 'mergeOrders', 'warehouseBuffer', 'takeWarehouse', 'produceOrders', 'upgrade', 'unlockFloors', 'clean', 'tech'];
       const candidates = view.actions.filter(action => current[action.kind] === true
         && (action.kind !== 'takeWarehouse' || current.submitOrders)
         && (action.kind !== 'mergeOrders' || current.submitOrders)
         && (action.kind !== 'warehouseBuffer' || current.submitOrders && current.takeWarehouse)
-        && (!action.forMerge || current.mergeOrders)
+        && (!action.forMerge || current.mergeOrders && current.submitOrders)
+        && (!action.forProduction || current.produceOrders)
         && (action.kind !== 'upgrade' || action.expected.target <= current.targetLevel)
         && (action.kind !== 'tech' || action.expected.target <= current.targetTech));
-      const action = candidates.filter(action => !action.reason).sort((a, b) => priority.indexOf(a.kind) - priority.indexOf(b.kind)
+      const action = candidates.filter(action => !action.reason).sort((a, b) => Number(a.forProduction) - Number(b.forProduction)
+        || priority.indexOf(a.kind) - priority.indexOf(b.kind)
         || Number(b.recipeStep || b.forMerge) - Number(a.recipeStep || a.forMerge))[0];
       if (!action) {
         const waiting = candidates.map(row => row.reason);

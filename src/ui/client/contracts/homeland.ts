@@ -22,6 +22,7 @@ const planningStatus = (value: unknown) => {
     value === "optimal" ||
     value === "feasible" ||
     value === "limited" ||
+    value === "production" ||
     value === "unreachable"
   )
     return value;
@@ -36,6 +37,7 @@ export function parseHomeland(value: unknown) {
   if (!flag(data.available))
     return { available: false as const, reason: text(data.reason) };
   const budget = record(data.budget);
+  const staminaBudget = record(data.staminaBudget);
   const warehouse = record(data.warehouse);
   const tech = data.tech === null ? null : record(data.tech);
   return {
@@ -57,6 +59,11 @@ export function parseHomeland(value: unknown) {
       used: count(budget.used),
       limit: count(budget.limit),
       keep: count(budget.keep),
+    },
+    staminaBudget: {
+      used: count(staminaBudget.used),
+      limit: count(staminaBudget.limit),
+      keep: count(staminaBudget.keep),
     },
     warehouse: {
       used: count(warehouse.used),
@@ -88,6 +95,7 @@ export function parseHomeland(value: unknown) {
         title: text(row.title),
         detail: text(row.detail),
         coinCost: count(row.coinCost),
+        staminaCost: count(row.staminaCost),
         reason: text(row.reason),
         token: text(row.token),
         orderSlot: row.orderSlot === null ? null : count(row.orderSlot),

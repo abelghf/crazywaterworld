@@ -121,6 +121,7 @@ export function productionDemandConsumes(order, settings) {
 
 export function resourceReserve(settings, id, step = null) {
   if (id === '家园币') return settings?.homeland?.keepCoins ?? 0;
+  if (id === 'DUAL_COMBINE_STAMINA') return settings?.homeland?.keepStamina ?? 0;
   if (!settings) return 0;
   if (id === '建筑蓝图') return settings.building.keepBlueprints;
   if (id === '加速器') return settings.resources.keepAccelerators;
@@ -281,7 +282,7 @@ export function createActionGuard(client, getSettings, ledger, { enabled = () =>
       const account = player && (costs.size || step.factoryBatch || producing) ? goldAccountKey(player) : null;
       let actualGold, materialStock, museumDetails;
       const nextBalances = new Map();
-      const itemIds = [...costs.keys()].filter(id => !['GOLD', 'RUBY', 'EXP', 'ARENA_POINT', 'LEAGUE_POINT'].includes(id));
+      const itemIds = [...costs.keys()].filter(id => !['GOLD', 'RUBY', 'EXP', 'ARENA_POINT', 'LEAGUE_POINT', 'DUAL_COMBINE_STAMINA'].includes(id));
       if (costs.size) {
         if (planting && itemIds.length !== costs.size) throw new AutomationSkip('播种成本必须是种子道具');
         const resourceIds = [...costs.keys()].filter(id => !itemIds.includes(id));
@@ -326,7 +327,7 @@ export function createActionGuard(client, getSettings, ledger, { enabled = () =>
           if (!enabled() || (account && goldAccountKey(player) !== account)) throw new AutomationSkip('操作已暂停或账号已切换');
           if (!Array.isArray(resources.list) || new Set(resources.list.map(row => row.res)).size !== resources.list.length
             || resources.list.some(row => !Number.isSafeInteger(row.res) || !Number.isSafeInteger(row.amount) || row.amount < 0)) throw new AutomationSkip('无法完整确认当前资源余额');
-          const ids = { EXP: 1, GOLD: 3, RUBY: 4, ARENA_POINT: 5, LEAGUE_POINT: 6 };
+          const ids = { EXP: 1, GOLD: 3, RUBY: 4, ARENA_POINT: 5, LEAGUE_POINT: 6, DUAL_COMBINE_STAMINA: 8 };
           for (const id of resourceIds) {
             const row = resources.list?.find(r => r.res === ids[id]);
             if (!row || !Number.isSafeInteger(row.amount)) throw new AutomationSkip('无法确认当前资源余额');

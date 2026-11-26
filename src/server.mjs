@@ -2809,11 +2809,13 @@ export function createConsole({ host = '127.0.0.1', port = 17321, onLog, recover
             if (!settings.loop.world || !settings.homeland.enabled) notes.push('基地执行总开关或家园总开关未开启');
             else for (const action of view.actions) {
               if (!settings.homeland[action.kind] || action.kind === 'takeWarehouse' && !settings.homeland.submitOrders) continue;
-              if (action.kind === 'mergeOrders' && !settings.homeland.submitOrders || action.forMerge && !settings.homeland.mergeOrders) continue;
+              if (action.kind === 'mergeOrders' && !settings.homeland.submitOrders || action.forMerge && (!settings.homeland.mergeOrders || !settings.homeland.submitOrders)) continue;
+              if (action.forProduction && !settings.homeland.produceOrders) continue;
               if (action.kind === 'warehouseBuffer' && (!settings.homeland.submitOrders || !settings.homeland.takeWarehouse)) continue;
               if (action.kind === 'tech' && view.techLevel >= settings.homeland.targetTech || action.kind === 'upgrade' && view.level >= settings.homeland.targetLevel) continue;
               if (action.reason) notes.push(action.detail + '：' + action.reason);
-              else actions.push({ label: action.detail, kind: 'homeland', costs: action.coinCost ? [{ name: '家园币', num: action.coinCost }] : [] });
+              else actions.push({ label: action.detail, kind: 'homeland', costs: action.coinCost ? [{ name: '家园币', num: action.coinCost }]
+                : action.staminaCost ? [{ name: '工坊体力', num: action.staminaCost }] : [] });
             }
             if (settings.loop.world && settings.homeland.enabled && settings.homeland.submitOrders && settings.homeland.mergeOrders)
               for (const order of view.orders) {

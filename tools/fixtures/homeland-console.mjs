@@ -28,6 +28,14 @@ export const homelandTables = {
     ...[1, 2].map(level => ({ pieceId: '钩' + level, pieceGroup: '钩', type: '生产器', name: '生产器', level, nextId: level === 1 ? '钩2' : '' })),
     ...[1, 2].map(level => ({ pieceId: '体力瓶' + level, pieceGroup: '体力', type: '可使用', name: '体力瓶', level, nextId: level === 1 ? '体力瓶2' : '' })),
   ],
+  DualCombineProduceCfg: [
+    { produceid: '钩1', libId: '钩1', cost: 1, count: 0, cd: 0 },
+    { produceid: '钩2', libId: '钩2', cost: 1, count: 2, cd: 0 },
+  ],
+  DualCombineProduceLibCfg: [
+    { libId: '钩1', pieceId: '鱼1', weight: 90 }, { libId: '钩1', pieceId: '鱼2', weight: 10 },
+    { libId: '钩2', pieceId: '鱼2', weight: 100 },
+  ],
 };
 const configPack = () => Object.entries(homelandTables).map(([name, data], i) => [i, name, { data }]);
 
@@ -78,6 +86,19 @@ export function createHomelandClient(protocol, id = 1, shared) {
       delete from.piece; to.state = 2; to.piece = { uid, pieceCfgId: cfg.nextId };
       return { cells: [from, to] };
     }
+    if (name === 'DualCombineProduceRequest') {
+      const produceCell = state.cells.find(row => row.cellId === body.cellId);
+      assert(produceCell?.piece && produceCell.state === 2);
+      const cfg = homelandTables.DualCombineProduceCfg.find(row => row.produceid === produceCell.piece.pieceCfgId); assert(cfg);
+      assert((produceCell.piece.produceCdTs ?? 0) <= Math.floor((Date.now() + client.serverClockOffsetMs) / 1000));
+      assert(state.stamina >= cfg.cost);
+      const newPiece = state.cells.find(row => row.state === 2 && !row.piece); assert(newPiece);
+      const pieceCfgId = state.drops?.shift() ?? (cfg.produceid === '钩2' ? '鱼2' : '鱼1');
+      newPiece.piece = { pieceCfgId, uid: (state.nextUid = (state.nextUid ?? 10000) + 1) };
+      state.stamina -= cfg.cost;
+      if (cfg.count) { assert(produceCell.piece.produceLeft > 0); if (--produceCell.piece.produceLeft === 0) delete produceCell.piece; }
+      return { cellId: body.cellId, produceCell, newPiece };
+    }
     if (name === 'DualCombineSubmitOrderRequest') {
       const order = state.orders.find(row => row.slot === body.slot); assert(order);
       for (const req of order.reqs) for (let i = 0; i < req.count; i++) {
@@ -101,7 +122,7 @@ export function createHomelandClient(protocol, id = 1, shared) {
   };
   client.request = async (name, body, response, timeout, beforeSend) => {
     state.calls.push(name); round(name, body);
-    if (['DualCombineBuyStaminaRequest', 'DualCombineTakeFromWarehouseRequest', 'DualCombinePutToWarehouseRequest', 'DualCombineMoveRequest'].includes(name)) return round(response, await write(name, body, beforeSend));
+    if (['DualCombineBuyStaminaRequest', 'DualCombineTakeFromWarehouseRequest', 'DualCombinePutToWarehouseRequest', 'DualCombineMoveRequest', 'DualCombineProduceRequest'].includes(name)) return round(response, await write(name, body, beforeSend));
     await state.beforeRead?.(name);
     let value;
     if (name === 'HomelandRequest') value = state.home;
