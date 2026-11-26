@@ -65,7 +65,8 @@ export function planHomelandProduction(config, state, pref, mergePlans, usedStam
         ? row.weight * 2 ** (byId.get(row.pieceId).level - 1) : 0), 0) / weight;
       if (!(gain > 0) || !Number.isFinite(gain)) continue;
       let reason = '';
-      if (!natural(cell.piece.produceCdTs) || !natural(cell.piece.produceLeft)) reason = '生产器次数或冷却状态未同步';
+      const remainingKnown = natural(cell.piece.produceLeft) || cfg.count === 0 && cell.piece.produceLeft === -1;
+      if (!natural(cell.piece.produceCdTs) || !remainingKnown) reason = '生产器次数或冷却状态未同步';
       else if (cell.piece.produceCdTs > state.now) reason = `生产器冷却中，剩余 ${Math.ceil(cell.piece.produceCdTs - state.now)} 秒`;
       else if (cfg.count > 0 && cell.piece.produceLeft === 0) reason = '生产器次数已用完，等待游戏同步';
       else if (state.stamina - cfg.cost < pref.keepStamina) reason = '工坊体力不足或低于保留量';

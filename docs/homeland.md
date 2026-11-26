@@ -40,6 +40,8 @@
 
 生产接口依据 v77 客户端与协议：`DualCombineProduceRequest { cellId }` 返回 `cellId`、`newPiece` 和 `produceCell`；单次体力费用、次数和冷却来自 `DualCombineProduceCfg`，产物权重来自 `DualCombineProduceLibCfg`。有限次数的生产器用完可能消失，执行前读取服务端的 `produceLeft` 与 `produceCdTs`；不会为补料自动合成或升级生产器。
 
+`produceLeft` 按协议的有符号整数读取；配置 `count = 0` 的不限次数生产器兼容 `produceLeft = -1`，不会误判为同步失败。有限次数生产器仍要求非负余量，余量为 0 时等待，不因 `-1` 放宽限制。
+
 ## 家园币与升级条件
 
 **累计消费家园币 = 家具购买 + 科技升级。** 该计数来自游戏，升级后不清零，不等于当前余额。打扫费用不计入游戏升级条件，但计入本工具的每日家园币用量。

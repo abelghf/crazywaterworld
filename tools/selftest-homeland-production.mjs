@@ -9,7 +9,8 @@ const produce = 'DualCombineProduceRequest', merge = 'DualCombineMoveRequest', s
 function setup(board = ['钩1', null, null, null], goals = ['鱼3']) {
   const f = h.fixture();
   f.state.cells = board.map((pieceCfgId, cellId) => ({ cellId, state: 2,
-    ...(pieceCfgId ? { piece: { uid: cellId + 100, pieceCfgId, ...(pieceCfgId === '钩2' ? { produceLeft: 2 } : {}) } } : {}) }));
+    ...(pieceCfgId ? { piece: { uid: cellId + 100, pieceCfgId,
+      ...(pieceCfgId === '钩2' ? { produceLeft: 2 } : pieceCfgId === '钩1' ? { produceLeft: -1 } : {}) } } : {}) }));
   f.state.warehouse = []; f.state.stamina = 50;
   f.state.orders = [{ slot: 0, orderId: 1, reqs: goals.map(pieceCfgId => ({ pieceCfgId, count: 1 })) }];
   Object.assign(f.settings.homeland, { enabled: true, submitOrders: true, mergeOrders: true, produceOrders: true, takeWarehouse: true, warehouseBuffer: true });
@@ -26,6 +27,27 @@ const send = (f, action, extra = {}) => executeHomeland(f.client, h.config, { ..
 let passed = 0;
 const test = async (name, body) => { await body(); console.log('通过：' + name); passed++; };
 try {
+  await test('有符号剩余次数不会阻断页面，无限次 -1 可连续生产且不放宽有限次数限制', async () => {
+    for (const left of [-1, 0, undefined]) {
+      const f = setup(); f.state.cells[0].piece.produceLeft = left;
+      f.state.warehouse = [{ uid: 500, pieceCfgId: '钩1', produceLeft: -1 }];
+      const view = await read(f); assert.equal(view.available, true);
+      assert(view.actions.some(row => row.kind === 'produceOrders' && !row.reason));
+      assert.equal(f.state.writes.length, 0);
+      await run(f); assert.equal(f.state.orders.length, 0);
+      assert.equal(f.state.writes.filter(row => row.name === produce).length, 4);
+      assert.equal(f.state.stamina, 46);
+      assert.equal(f.state.cells[0].piece.produceLeft, left);
+    }
+    for (const [id, left, reason] of [['钩2', -1, /次数或冷却状态未同步/], ['钩2', 0, /次数已用完/], ['钩1', -2, /次数或冷却状态未同步/]]) {
+      const f = setup([id, null, null]); f.state.cells[0].piece.produceLeft = left;
+      const view = await read(f); assert.equal(view.available, true); assert.match(view.orders[0].synthesis.reason, reason);
+      await run(f); assert.equal(f.state.writes.length, 0);
+    }
+    const ordinary = setup(['鱼2', '鱼2']);
+    for (const cell of ordinary.state.cells) cell.piece.produceLeft = -1;
+    await run(ordinary); assert.deepEqual(ordinary.state.writes.map(row => row.name), [merge, submit]);
+  });
   await test('旧配置不自动启用体力消费，开启后从生产器连续生产、合成并交单', async () => {
     const old = defaultSettings(); delete old.homeland.produceOrders; delete old.homeland.keepStamina; delete old.homeland.dailyStaminaLimit;
     old.homeland.mergeOrders = true;

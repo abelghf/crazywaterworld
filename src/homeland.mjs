@@ -28,6 +28,13 @@ const count = (value, label) => {
   if (!natural(n)) throw Error(`${label}未完整同步`);
   return n;
 };
+const productionCount = value => {
+  // DispDualCombinePiece.produceLeft is int32, not an unsigned quantity.
+  // Preserve -1 for unlimited producers; the planner checks it against count.
+  const n = toNumber(value ?? 0);
+  if (!Number.isInteger(n) || n < -2147483648 || n > 2147483647) throw Error('生产器剩余次数未完整同步');
+  return n;
+};
 const list = (value, label) => { if (!Array.isArray(value)) throw Error(`${label}未完整同步`); return value; };
 const check = options => { if (options.enabled && !options.enabled()) throw Object.assign(Error('家园操作已暂停或连接已更换'), { notSent: true }); };
 async function read(client, options, name, body = {}) {
@@ -56,7 +63,7 @@ const assets = (config, value) => (value ?? []).map(([id, num]) => ({ id, num,
   name: config.materialName?.(id) && config.materialName(id) !== '未知材料' ? config.materialName(id) : pieceName(config, id) }));
 function pieces(value, label) {
   const rows = list(value, label).map(row => ({ uid: count(row.uid, label + '编号'), id: row.pieceCfgId,
-    produceLeft: count(row.produceLeft ?? 0, '生产器剩余次数'), produceCdTs: count(row.produceCdTs ?? 0, '生产器冷却时间') }));
+    produceLeft: productionCount(row.produceLeft), produceCdTs: count(row.produceCdTs ?? 0, '生产器冷却时间') }));
   if (rows.some(row => !positive(row.uid) || typeof row.id !== 'string' || !row.id) || new Set(rows.map(row => row.uid)).size !== rows.length) throw Error(label + '编号无效');
   return rows;
 }
