@@ -28,7 +28,8 @@ function fixture(at = now) {
   const state = { period: event.period,
     cargo: { cargoLv: 1, cityId: 10, moveToCityId: 20, moveStartTime: at - 2700, moveEndTime: at + 4500 },
     player: { coins: 1000, profit: 2000, goods: [{ pid: 1, goodsId: 1001, num: 100, buyPrice: 10, cityId: 10 }] } };
-  const settings = { merchant: { fullCargoRoutes: false, autoSpeedUp: true, speedUpMode: 'refresh', keepPointers: 1, estimateDiscountPercent: 10 } };
+  // 原模式的独立语义在关闭附加规则时验证；共用开关另有全模式矩阵与执行用例。
+  const settings = { merchant: { fullCargoRoutes: false, autoSpeedUp: true, closeBeforeRest: false, speedUpMode: 'refresh', keepPointers: 1, estimateDiscountPercent: 10 } };
   const radar = { radar: [{ cityId: 10, specGoodsId: 1001 }, { cityId: 20, specGoodsId: 1002 }] };
   const stock = new Map([[pointer, 4]]), calls = [], reports = [];
   const player = { playerId: String(80000 + id), worldId: '2002001001', guildId: '1001', level: 37 };
@@ -97,7 +98,7 @@ try {
     for (const delay of [false, true]) {
       const f = fixture();
       f.event.endTime = now + 3 * 86400;
-      Object.assign(f.settings.merchant, { speedUpMode: 'dailyClose', keepPointers: 0 });
+      Object.assign(f.settings.merchant, { speedUpMode: 'dailyClose', closeBeforeRest: true, keepPointers: 0 });
       let reads = 0;
       if (delay) f.hook(name => {
         if (name === 'TradeInfoRequest' && ++reads === 1)
@@ -106,6 +107,16 @@ try {
       await f.run();
       assert.deepEqual(f.sent().map(r => r.body.useNum), delay ? [] : [2]);
       assert.equal(f.stock.get(pointer), delay ? 4 : 2);
+    }
+  });
+  await test('收市开关或升船流程在发送前变化时取消旧计划，不消耗针也不改原用针模式', async () => {
+    for (const key of ['closeBeforeRest', 'autoUpgrade']) {
+      const f = fixture(); f.event.endTime = now + 3 * 86400;
+      Object.assign(f.settings.merchant, { speedUpMode: 'race', closeBeforeRest: true, keepPointers: 0 });
+      f.hook(name => { if (name === 'TradeInfoRequest') f.settings.merchant[key] = !f.settings.merchant[key]; });
+      await f.run();
+      assert.equal(f.sent().length, 0); assert.equal(f.stock.get(pointer), 4);
+      assert.equal(f.settings.merchant.speedUpMode, 'race');
     }
   });
   await test('按情报用针，已知紧缺港不足时留针，首日和升船期间同样适用，收盘前七小时放开', async () => {

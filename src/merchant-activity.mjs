@@ -78,7 +78,8 @@ async function readMerchantPlan(config, event, state, time, ask, voyage, options
   let plan = planMerchant(config, event, state, marketSnapshot, effective, plannedAt, voyage.visited, inputs);
   // 当天来不及自然跑完一程时，试一程用针赶在收盘前成交的航次。库存或额度核对不过就照原计划隔夜或等待。
   if (!voyage.openingCargoPids?.length && (plan.kind === 'wait' || plan.exploration || plan.mode === 'OVERNIGHT') && policy.autoSpeedUp &&
-    (merchantSpeedMode(policy.speedUpMode) === 'goal' || merchantDailyCloseWindow(config, event, policy, plannedAt)?.active) && !policy.fullCargoRoutes &&
+    (merchantSpeedMode(policy.speedUpMode) === 'goal' && !policy.fullCargoRoutes ||
+      merchantDailyCloseWindow(config, event, policy, plannedAt)?.active) &&
     timing.tradingOpen && positive(timing.travelSeconds) && positive(per) &&
     state.player?.profit < Math.min(MERCHANT_PROFIT_GOAL, policy.profitLimit || Infinity) &&
     plannedAt + timing.travelSeconds + (1 + 2 * (marketSnapshot.goods?.length ?? 0) + (state.player.goods?.length ?? 0)) * step >= timing.tradeEndTime) {

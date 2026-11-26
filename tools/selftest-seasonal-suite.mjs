@@ -1288,12 +1288,19 @@ await test('手动选择省针追赶时，末日 21:15 从空船购货，用成�
   assert.equal(f.state.stock['海商王加速'], 7);
 });
 await test('次日仍开市的 20:30 改跑收盘前加速航次，当天成交，没有针时照常隔夜', async () => {
-  for (const speedUpMode of ['goal', 'dailyClose', 'targetFirst']) for (const pins of [10, 0]) {
+  for (const speedUpMode of ['goal', 'dailyClose', 'targetFirst', 'deadline', 'refresh', 'arrival', 'race', 'full', 'eventFree']) for (const pins of [10, 0]) {
     const f = setup(), at = f.now + 8.5 * 3600; // 北京时间 20:30，自然航行 22:30 才到。
     const run = () => f.run(merchantActivity, 'merchantTrade');
     Object.assign(f.settings.merchant, merchantPresets.find(p => p.id === 'sprint').settings.merchant, { speedUpMode });
     f.client.serverClockOffsetMs = at * 1000 - Date.now();
     f.state.stock['海商王加速'] = pins;
+    if (speedUpMode === 'eventFree') {
+      // 封存8根旧库存；只有新领任务针实际到账，收市航次才有可用免费额度。
+      f.state.stock['海商王加速'] = 8;
+      await observeFreePointers(f.client, f.config, f.client.tradeWindow, await read(f.client, 'TradeInfo'),
+        f.ledger, f.player.guildId, () => true);
+      if (pins) { f.state.tasks.gotTaskId = [1]; f.state.stock['海商王加速'] += 2; }
+    }
     await run();
     await run();
     assert.equal(f.sent('TradeBuyRequest').length, 1);
@@ -1304,6 +1311,7 @@ await test('次日仍开市的 20:30 改跑收盘前加速航次，当天成交�
       assert.equal(move.accelerationRequired, undefined);
       assert.ok(move.plannedOpening > at, '没有针时仍是隔夜航次');
       assert.equal(f.sent('TradeSpeedRequest').length, 0);
+      if (speedUpMode === 'eventFree') assert.equal(f.state.stock['海商王加速'], 8, '无免费额度时不动旧库存');
       continue;
     }
     assert.deepEqual([move.accelerationRequired, move.plannedOpening], [2, undefined]);

@@ -25,7 +25,7 @@ export const settingsFile = () => path.join(dataDirectory(), 'automation-setting
 export const SETTINGS_FORMAT = 'crazywaterworld-automation';
 // 文件 version / 账号 settingsVersion 是格式编号，只随结构迁移调整；
 // revision 是每次保存递增的修订号，仅用于并发冲突检查，不能用作格式版本。
-export const SETTINGS_SCHEMA_VERSION = 76;
+export const SETTINGS_SCHEMA_VERSION = 77;
 const LEGACY_SETTINGS_FORMAT = 'crazywaterword-automation';
 const treasureQualityLabels = { ORANGE: '万吨货轮', PURPLE: '中型货轮', BLUE: '小型货轮' };
 const treasureChaseDefaults = {
@@ -64,7 +64,7 @@ export const DEFAULT_SETTINGS = {
   weeklyActivity: WEEKLY_ACTIVITY_DEFAULTS,
   weekOrder: { enabled: false, allowDiamonds: false },
   merchant: { enabled: false, fullCargoRoutes: false, autoShareIntel: false, quoteMaxAgeSeconds: 300, estimateDiscountPercent: 0, refreshWaitSeconds: 120, liquidationMinutes: 120,
-    maxLossPercent: 0, minExpectedProfit: 1, knownPortChains: true, minPurchaseReturnPercent: 0, autoSpeedUp: false, keepPointers: 0,
+    maxLossPercent: 0, minExpectedProfit: 1, knownPortChains: true, minPurchaseReturnPercent: 0, autoSpeedUp: false, closeBeforeRest: true, keepPointers: 0,
     speedUpMode: 'deadline', guardLastPointer: false, speedUpMaxPerLeg: 4, monitorSeconds: 10,
     refreshWindowMinutes: 8, dailyPointerLimit: 28, periodPointerLimit: -1, speedUpIntelPorts: 0, autoBuyPointers: false, pointerDailyDiamondLimit: 0,
     profitLimit: 0, firstDepartureMode: 'smart', firstDepartureTime: '10:00', firstDepartureWaitMinutes: 29,
@@ -827,7 +827,9 @@ settingsMigrations.set(73, settings => plain(settings?.homeland) && !Object.hasO
   ? { ...settings, homeland: { ...settings.homeland, warehouseBuffer: false } } : settings);
 settingsMigrations.set(74, settings => plain(settings?.homeland)
   ? { ...settings, homeland: { produceOrders: false, keepStamina: 0, dailyStaminaLimit: 500, ...settings.homeland } } : settings);
-settingsMigrations.set(75, settings => plain(settings?.homeland)
+settingsMigrations.set(75, settings => plain(settings?.merchant) && !Object.hasOwn(settings.merchant, 'closeBeforeRest')
+  ? { ...settings, merchant: { ...settings.merchant, closeBeforeRest: true } } : settings);
+settingsMigrations.set(76, settings => plain(settings?.homeland)
   ? { ...settings, homeland: { buildProducers: false, useSupplies: false, ...settings.homeland } } : settings);
 const supportedSettingsVersion = version => Number.isSafeInteger(version) && version >= 1;
 const entrySettingsVersion = entry => Object.hasOwn(entry, 'settingsVersion') ? entry.settingsVersion : 1;

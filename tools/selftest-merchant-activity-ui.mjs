@@ -1116,12 +1116,23 @@ await test('海商王开关、整数、选择与时间逐项保存，非法输�
   await f.api.refresh(); f.api.selectSea();
   await f.setSea('merchant.profitLimit', 123456);
   await f.setSea('merchant.speedUpMode', 'dailyClose');
+  await f.setSea('merchant.autoSpeedUp');
+  assert.equal(f.seaInput('merchant.closeBeforeRest').getAttribute('aria-checked'), 'true');
+  await f.setSea('merchant.closeBeforeRest');
   await f.setSea('merchant.firstDepartureMode', 'time');
   await f.setSea('merchant.firstDepartureTime', '09:15');
   await f.setSea('schedule.merchantRewards');
   await f.setSea('schedule.tradeTasks');
-  const expected = f.seaSettings({ profitLimit: 123456, speedUpMode: 'dailyClose', firstDepartureMode: 'time', firstDepartureTime: '09:15' },
+  const expected = f.seaSettings({ profitLimit: 123456, speedUpMode: 'dailyClose', autoSpeedUp: true, closeBeforeRest: false, firstDepartureMode: 'time', firstDepartureTime: '09:15' },
     { merchantRewards: false, tradeTasks: false }).settings;
+  assert.deepEqual(f.seaSaved.get('merchant-a').settings, expected);
+  await f.api.refresh(); f.api.selectSea();
+  assert.equal(f.seaInput('merchant.closeBeforeRest').getAttribute('aria-checked'), 'false');
+  await f.setSea('merchant.autoSpeedUp');
+  assert(!f.seaInput('merchant.closeBeforeRest'));
+  assert.equal(f.seaSaved.get('merchant-a').settings.merchant.closeBeforeRest, false);
+  await f.setSea('merchant.autoSpeedUp');
+  assert.equal(f.seaInput('merchant.closeBeforeRest').getAttribute('aria-checked'), 'false');
   assert.deepEqual(f.seaSaved.get('merchant-a').settings, expected);
   const count = f.state.calls.filter(call => call.method === 'POST').length;
   for (const invalid of ['', -1, 0.5, 1000000001, 'oops']) await f.setSea('merchant.profitLimit', invalid);
